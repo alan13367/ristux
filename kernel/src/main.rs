@@ -14,6 +14,7 @@ mod arch;
 mod config;
 mod drivers;
 mod error;
+mod fs;
 mod initrd;
 mod log;
 mod memory;
@@ -50,7 +51,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     let initrd = initrd::Initrd::from_boot_info(&boot_info)
         .unwrap_or_else(|message| panic!("{}", message));
     initrd.print_summary();
-    userspace::init(&initrd);
+    fs::init(&initrd);
+    userspace::init();
     task::init();
     testing::run_kernel_self_tests();
 

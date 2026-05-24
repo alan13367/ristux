@@ -53,10 +53,6 @@ impl Initrd {
         Ok(Self { files })
     }
 
-    pub fn get(&self, path: &str) -> Option<&InitrdFile> {
-        self.files.iter().find(|file| file.path == path)
-    }
-
     #[allow(dead_code)]
     pub fn files(&self) -> &[InitrdFile] {
         &self.files

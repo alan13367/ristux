@@ -1,6 +1,6 @@
 pub mod elf;
 
-use crate::{initrd::Initrd, syscall};
+use crate::{fs, syscall};
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
@@ -30,7 +30,7 @@ pub struct UserProcess {
 }
 
 impl UserProcess {
-    pub fn load(pid: u64, name: &'static str, data: &'static [u8]) -> Result<Self, elf::ElfError> {
+    pub fn load(pid: u64, name: &'static str, data: &[u8]) -> Result<Self, elf::ElfError> {
         Ok(Self {
             pid,
             name,
@@ -68,14 +68,12 @@ impl UserProcess {
     }
 }
 
-pub fn init(initrd: &Initrd) {
+pub fn init() {
     crate::arch::x86_64::gdt::init_user_segments();
     crate::syscall::init();
 
-    let init = initrd
-        .get("/bin/init")
-        .unwrap_or_else(|| panic!("/bin/init missing from initrd"));
-    let mut process = UserProcess::load(1, "init", init.data)
+    let init = fs::read_file("/bin/init").unwrap_or_else(|| panic!("/bin/init missing from VFS"));
+    let mut process = UserProcess::load(1, "init", &init)
         .unwrap_or_else(|err| panic!("failed to load /bin/init ELF: {}", err));
 
     unsafe {
