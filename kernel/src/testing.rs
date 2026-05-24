@@ -1,6 +1,7 @@
 use crate::{
     drivers,
     error::{KernelError, KernelResult},
+    process,
     memory,
     task,
     userspace,
@@ -30,6 +31,8 @@ fn run() -> KernelResult<()> {
         userspace.last_exit_status == Some(0),
         "init process did not exit cleanly",
     )?;
+    let processes = process::stats();
+    ensure(processes.process_count >= 3, "process table did not fork children")?;
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
@@ -56,6 +59,13 @@ fn run() -> KernelResult<()> {
         userspace.processes_loaded,
         userspace.syscalls_handled,
         userspace.last_exit_status
+    );
+    crate::println!("Process table stats: {} process(es)", processes.process_count);
+    crate::println!(
+        "Process fd stats: {} descriptor(s), {} cwd(s), checksum {}",
+        processes.fd_count,
+        processes.cwd_count,
+        processes.fd_path_checksum
     );
 
     Ok(())

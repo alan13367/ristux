@@ -16,10 +16,13 @@ mod drivers;
 mod error;
 mod fs;
 mod initrd;
+mod ipc;
 mod log;
 mod memory;
 mod multiboot;
 mod panic;
+mod process;
+mod shell;
 mod sync;
 mod syscall;
 mod task;
@@ -53,6 +56,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     initrd.print_summary();
     fs::init(&initrd);
     userspace::init();
+    process::init();
+    ipc::init();
+    shell::init();
     task::init();
     testing::run_kernel_self_tests();
 

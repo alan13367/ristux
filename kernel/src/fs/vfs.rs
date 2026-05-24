@@ -253,6 +253,10 @@ pub fn read_file(path: &str) -> Option<Vec<u8>> {
     guard.as_ref().and_then(|vfs| vfs.read_file(path))
 }
 
+pub fn write_file(path: &str, data: &[u8]) {
+    with_vfs(|vfs| vfs.add_file(path, data));
+}
+
 pub fn list_paths(prefix: &str) -> Vec<String> {
     let guard = VFS.lock();
     guard

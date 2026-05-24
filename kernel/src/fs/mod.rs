@@ -10,4 +10,3 @@ pub fn init(initrd: &Initrd) {
 pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
     vfs::read_file(path)
 }
-

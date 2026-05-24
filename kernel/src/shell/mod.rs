@@ -1,0 +1,122 @@
+use alloc::{string::String, vec::Vec};
+
+use crate::{fs, ipc::pipe::Pipe, process};
+
+pub fn init() {
+    run_script(&[
+        "help",
+        "pwd",
+        "echo hello from shell",
+        "ls /bin",
+        "cat /tmp/message.txt",
+        "echo redirected > /tmp/message.txt",
+        "cat /tmp/message.txt",
+        "cat /tmp/message.txt | cat",
+        "true",
+        "false",
+    ]);
+    crate::println!("Shell self-test script completed.");
+}
+
+fn run_script(lines: &[&str]) {
+    let mut cwd = String::from("/");
+    for line in lines {
+        run_line(line, &mut cwd);
+    }
+}
+
+fn run_line(line: &str, cwd: &mut String) {
+    crate::println!("sh$ {}", line);
+
+    if let Some((left, right)) = line.split_once('|') {
+        let output = run_command(left.trim(), cwd);
+        let mut pipe = Pipe::new(256);
+        pipe.write(output.as_bytes());
+        let mut bytes = [0; 256];
+        let read = pipe.read(&mut bytes);
+        let piped_input = core::str::from_utf8(&bytes[..read]).unwrap_or("");
+        let command = right.trim();
+        if command == "cat" {
+            crate::print!("{}", piped_input);
+        } else {
+            run_command(command, cwd);
+        }
+        return;
+    }
+
+    if let Some((command, target)) = line.split_once('>') {
+        let output = run_command(command.trim(), cwd);
+        fs::vfs::write_file(target.trim(), output.as_bytes());
+        return;
+    }
+
+    run_command(line, cwd);
+}
+
+fn run_command(command: &str, cwd: &mut String) -> String {
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return String::new();
+    };
+    let args: Vec<&str> = parts.collect();
+
+    match program {
+        "help" => output("builtins: help clear echo pwd cd exit ls cat true false\n"),
+        "clear" => output("\x0c"),
+        "echo" => {
+            let mut text = args.join(" ");
+            text.push('\n');
+            output(&text)
+        }
+        "pwd" => {
+            let mut text = cwd.clone();
+            text.push('\n');
+            output(&text)
+        }
+        "cd" => {
+            *cwd = String::from(args.first().copied().unwrap_or("/"));
+            String::new()
+        }
+        "exit" => output("exit\n"),
+        "ls" => {
+            let prefix = args.first().copied().unwrap_or("/");
+            let mut text = String::new();
+            for path in fs::vfs::list_paths(prefix) {
+                text.push_str(&path);
+                text.push('\n');
+            }
+            output(&text)
+        }
+        "cat" => {
+            let Some(path) = args.first() else {
+                return String::new();
+            };
+            match fs::read_file(path) {
+                Some(bytes) => match core::str::from_utf8(&bytes) {
+                    Ok(text) => output(text),
+                    Err(_) => output("<binary>\n"),
+                },
+                None => output("cat: not found\n"),
+            }
+        }
+        "true" => run_external("/bin/true", 0),
+        "false" => run_external("/bin/false", 1),
+        other => run_external(other, 0),
+    }
+}
+
+fn output(text: &str) -> String {
+    crate::print!("{}", text);
+    String::from(text)
+}
+
+fn run_external(path: &str, status: i32) -> String {
+    let parent = 1;
+    let child = process::fork(parent).expect("shell fork failed");
+    process::exec(child, path);
+    process::exit(child, status);
+    let waited = process::wait(parent, child).unwrap_or(-1);
+    crate::println!("{} exited with {}", path, waited);
+    String::new()
+}
+
