@@ -3,6 +3,7 @@ use crate::{
     error::{KernelError, KernelResult},
     process,
     memory,
+    storage,
     task,
     userspace,
 };
@@ -33,6 +34,8 @@ fn run() -> KernelResult<()> {
     )?;
     let processes = process::stats();
     ensure(processes.process_count >= 3, "process table did not fork children")?;
+    let storage = storage::stats();
+    ensure(storage.files >= 1, "storage layer did not persist files")?;
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
@@ -66,6 +69,11 @@ fn run() -> KernelResult<()> {
         processes.fd_count,
         processes.cwd_count,
         processes.fd_path_checksum
+    );
+    crate::println!(
+        "Storage stats: {} byte RAM disk, {} persistent file(s)",
+        storage.bytes,
+        storage.files
     );
 
     Ok(())

@@ -23,6 +23,7 @@ mod multiboot;
 mod panic;
 mod process;
 mod shell;
+mod storage;
 mod sync;
 mod syscall;
 mod task;
@@ -58,6 +59,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     userspace::init();
     process::init();
     ipc::init();
+    storage::init();
     shell::init();
     task::init();
     testing::run_kernel_self_tests();
