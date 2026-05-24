@@ -1,3 +1,4 @@
+#![feature(abi_x86_interrupt)]
 #![no_std]
 #![no_main]
 
@@ -27,6 +28,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     }
 
     println!("Multiboot2 handoff validated.");
+    arch::x86_64::init();
+    arch::x86_64::idt::trigger_breakpoint();
 
     let boot_info = unsafe {
         multiboot::BootInfo::load(multiboot_info_addr as usize)
