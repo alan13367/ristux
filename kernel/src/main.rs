@@ -24,11 +24,13 @@ mod panic;
 mod process;
 mod security;
 mod shell;
+mod signal;
 mod storage;
 mod sync;
 mod syscall;
 mod task;
 mod testing;
+mod tty;
 mod userspace;
 
 #[unsafe(no_mangle)]
@@ -61,6 +63,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     process::init();
     ipc::init();
     security::init();
+    signal::init();
+    tty::init();
     storage::init();
     shell::init();
     task::init();

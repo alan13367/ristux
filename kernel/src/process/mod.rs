@@ -112,6 +112,14 @@ impl ProcessTable {
             })
     }
 
+    fn signal(&mut self, pid: Pid, status: i32) -> bool {
+        let Some(process) = self.processes.iter_mut().find(|process| process.pid == pid) else {
+            return false;
+        };
+        process.state = ProcessState::Exited(status);
+        true
+    }
+
     fn count(&self) -> usize {
         self.processes.len()
     }
@@ -158,6 +166,10 @@ pub fn exit(pid: Pid, status: i32) {
 
 pub fn wait(parent: Pid, child: Pid) -> Option<i32> {
     with_table(|table| table.wait(parent, child))
+}
+
+pub fn signal(pid: Pid, status: i32) -> bool {
+    with_table(|table| table.signal(pid, status))
 }
 
 pub fn stats() -> ProcessStats {
