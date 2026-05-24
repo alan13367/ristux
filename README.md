@@ -73,5 +73,22 @@ Equivalent QEMU command:
 qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -no-reboot -no-shutdown
 ```
 
-The Phase 1/2 kernel enters `kernel_main` and halts safely. It does not print
-anything yet; serial or screen output starts in a later roadmap phase.
+For a headless serial log:
+
+```sh
+qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -display none -no-reboot \
+  -serial file:/tmp/ristux-serial.log -monitor stdio
+```
+
+Inside the QEMU monitor, `sendkey a` injects a keyboard event and `quit` exits.
+
+## Current Kernel Milestones
+
+- Prints to COM1 serial and VGA text mode.
+- Parses Multiboot2 bootloader, command line, framebuffer, modules, and memory map tags.
+- Loads a GDT, TSS, IDT, and catches early CPU exceptions.
+- Handles PIT timer ticks and PS/2 keyboard scancodes through the remapped PIC.
+- Initializes a bitmap physical frame allocator from the Multiboot2 memory map.
+- Maps and unmaps pages through early x86_64 paging abstractions.
+- Enables a bump-allocated kernel heap with `Box` and `Vec` smoke tests.
+- Runs a boot-time kernel self-test harness for core APIs.
