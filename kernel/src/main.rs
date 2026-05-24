@@ -1,6 +1,9 @@
 #![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
 #![no_std]
 #![no_main]
+
+extern crate alloc;
 
 use core::arch::global_asm;
 
