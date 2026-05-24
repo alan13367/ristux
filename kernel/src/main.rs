@@ -13,11 +13,13 @@ global_asm!(include_str!("../boot/boot.asm"));
 mod arch;
 mod config;
 mod drivers;
+mod error;
 mod log;
 mod memory;
 mod multiboot;
 mod panic;
 mod sync;
+mod testing;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) -> ! {
@@ -41,6 +43,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     };
     boot_info.print_summary();
     memory::init(&boot_info);
+    testing::run_kernel_self_tests();
 
     arch::x86_64::interrupts::init();
     println!(

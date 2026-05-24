@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::config;
+
 use super::{instructions, port};
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -15,14 +17,13 @@ const PIC_EOI: u8 = 0x20;
 const PIT_COMMAND: u16 = 0x43;
 const PIT_CHANNEL_0: u16 = 0x40;
 const PIT_BASE_FREQUENCY: u32 = 1_193_182;
-const PIT_TARGET_HZ: u32 = 100;
 
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 pub fn init() {
     instructions::without_interrupts(|| unsafe {
         remap_pic();
-        init_pit(PIT_TARGET_HZ);
+        init_pit(config::PIT_TARGET_HZ);
         unmask_irq(0);
         unmask_irq(1);
     });
@@ -33,7 +34,7 @@ pub fn init() {
 
 pub fn timer_tick() {
     let tick = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-    if tick == 1 || tick % 100 == 0 {
+    if tick == 1 || tick % config::LOG_TIMER_EVERY_TICKS == 0 {
         crate::println!("timer tick {}", tick);
     }
     unsafe {
@@ -116,4 +117,3 @@ unsafe fn io_wait() {
         port::outb(0x80, 0);
     }
 }
-

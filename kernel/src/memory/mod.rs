@@ -4,10 +4,23 @@ pub mod paging;
 
 use crate::multiboot::BootInfo;
 
+#[derive(Clone, Copy)]
+pub struct MemoryStats {
+    pub frames: frame_allocator::Stats,
+    pub heap: heap::HeapStats,
+}
+
 pub fn init(boot_info: &BootInfo) {
     frame_allocator::init(boot_info);
     frame_allocator::self_test();
     paging::init();
     heap::init();
     heap::self_test();
+}
+
+pub fn stats() -> MemoryStats {
+    MemoryStats {
+        frames: frame_allocator::stats(),
+        heap: heap::stats(),
+    }
 }

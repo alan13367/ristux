@@ -1,0 +1,47 @@
+use crate::{
+    drivers,
+    error::{KernelError, KernelResult},
+    memory,
+};
+
+pub fn run_kernel_self_tests() {
+    run().unwrap_or_else(|err| panic!("kernel self-test failed: {}", err));
+    crate::println!("Kernel self-test harness passed.");
+}
+
+fn run() -> KernelResult<()> {
+    let stats = memory::stats();
+    ensure(
+        stats.frames.free_frames > 0,
+        "frame allocator reported no free frames",
+    )?;
+    ensure(stats.heap.used_bytes > 0, "heap self-test did not allocate")?;
+    ensure(
+        !drivers::registered_drivers().is_empty(),
+        "no kernel drivers registered",
+    )?;
+
+    crate::println!(
+        "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
+        stats.frames.free_frames,
+        stats.heap.start,
+        stats.heap.end,
+        stats.heap.used_bytes,
+        stats.heap.free_bytes
+    );
+
+    crate::println!("Registered drivers:");
+    for driver in drivers::registered_drivers() {
+        crate::println!("  {} ({})", driver.name, driver.kind);
+    }
+
+    Ok(())
+}
+
+fn ensure(condition: bool, message: &'static str) -> KernelResult<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(KernelError::SelfTestFailed(message))
+    }
+}

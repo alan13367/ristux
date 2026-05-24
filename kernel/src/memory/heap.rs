@@ -6,14 +6,14 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-const HEAP_SIZE: usize = 128 * 1024;
+use crate::config;
 
 #[repr(C, align(4096))]
-struct HeapSpace(UnsafeCell<[u8; HEAP_SIZE]>);
+struct HeapSpace(UnsafeCell<[u8; config::KERNEL_HEAP_SIZE]>);
 
 unsafe impl Sync for HeapSpace {}
 
-static HEAP_SPACE: HeapSpace = HeapSpace(UnsafeCell::new([0; HEAP_SIZE]));
+static HEAP_SPACE: HeapSpace = HeapSpace(UnsafeCell::new([0; config::KERNEL_HEAP_SIZE]));
 
 #[global_allocator]
 static ALLOCATOR: BumpAllocator = BumpAllocator::new();
@@ -70,7 +70,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
 
 pub fn init() {
     let start = HEAP_SPACE.0.get() as *mut u8 as usize;
-    let end = start + HEAP_SIZE;
+    let end = start + config::KERNEL_HEAP_SIZE;
 
     ALLOCATOR.start.store(start, Ordering::Relaxed);
     ALLOCATOR.next.store(start, Ordering::Relaxed);
@@ -78,6 +78,19 @@ pub fn init() {
     ALLOCATOR.initialized.store(true, Ordering::Release);
 
     crate::println!("Kernel heap: {:#x}..{:#x}", start, end);
+}
+
+pub fn stats() -> HeapStats {
+    let start = ALLOCATOR.start.load(Ordering::Relaxed);
+    let next = ALLOCATOR.next.load(Ordering::Relaxed);
+    let end = ALLOCATOR.end.load(Ordering::Relaxed);
+
+    HeapStats {
+        start,
+        end,
+        used_bytes: next.saturating_sub(start),
+        free_bytes: end.saturating_sub(next),
+    }
 }
 
 pub fn self_test() {
@@ -101,6 +114,14 @@ pub fn self_test() {
     crate::println!("Kernel heap self-test passed with Box and Vec.");
 }
 
+#[derive(Clone, Copy)]
+pub struct HeapStats {
+    pub start: usize,
+    pub end: usize,
+    pub used_bytes: usize,
+    pub free_bytes: usize,
+}
+
 #[alloc_error_handler]
 fn alloc_error(layout: Layout) -> ! {
     panic!(
@@ -113,4 +134,3 @@ fn alloc_error(layout: Layout) -> ! {
 const fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
-
