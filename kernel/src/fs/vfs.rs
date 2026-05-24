@@ -1,7 +1,12 @@
 use alloc::{string::String, vec::Vec};
 use core::{fmt, str};
 
-use crate::{drivers, initrd::Initrd, sync::spinlock::SpinLock};
+use crate::{
+    drivers,
+    initrd::Initrd,
+    security::{Access, Credentials, FileMetadata},
+    sync::spinlock::SpinLock,
+};
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
 
@@ -42,6 +47,7 @@ impl fmt::Display for VfsError {
 struct Node {
     path: String,
     kind: NodeKind,
+    metadata: FileMetadata,
     data: Vec<u8>,
 }
 
@@ -86,6 +92,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Directory,
+            metadata: FileMetadata::new(0, 0, 0o755),
             data: Vec::new(),
         });
     }
@@ -93,6 +100,7 @@ impl Vfs {
     fn add_file(&mut self, path: &str, data: &[u8]) {
         if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
             node.kind = NodeKind::File;
+            node.metadata = FileMetadata::new(0, 0, 0o644);
             node.data.clear();
             node.data.extend_from_slice(data);
             return;
@@ -101,6 +109,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::File,
+            metadata: FileMetadata::new(0, 0, 0o644),
             data: Vec::from(data),
         });
     }
@@ -109,6 +118,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Device(kind),
+            metadata: FileMetadata::new(0, 0, 0o666),
             data: Vec::new(),
         });
     }
@@ -207,6 +217,25 @@ impl Vfs {
         Ok(())
     }
 
+    fn chmod(&mut self, path: &str, mode: u16) -> Result<(), VfsError> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        node.metadata.mode = crate::security::FileMode::new(mode);
+        Ok(())
+    }
+
+    fn can_access(&self, path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
+        let node = self
+            .nodes
+            .iter()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        Ok(node.metadata.can_access(creds, access))
+    }
+
     fn read_file(&self, path: &str) -> Option<Vec<u8>> {
         let node = self.nodes.iter().find(|node| node.path == path)?;
         if node.kind == NodeKind::File {
@@ -246,6 +275,16 @@ pub fn write(fd: usize, input: &[u8]) -> Result<usize, VfsError> {
 
 pub fn close(fd: usize) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.close(fd))
+}
+
+pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.chmod(path, mode))
+}
+
+pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
+    let guard = VFS.lock();
+    let vfs = guard.as_ref().expect("VFS used before initialization");
+    vfs.can_access(path, creds, access)
 }
 
 pub fn read_file(path: &str) -> Option<Vec<u8>> {
@@ -290,6 +329,11 @@ pub fn self_test() {
     }
     if list_paths("/dev").len() < 4 {
         panic!("devfs mount self-test failed");
+    }
+    chmod("/tmp/message.txt", 0o600).expect("chmod self-test failed");
+    let user = Credentials::user(1000, 1000);
+    if can_access("/tmp/message.txt", user, Access::Read).expect("permission check failed") {
+        panic!("VFS permission self-test allowed private read");
     }
 
     crate::println!("VFS self-test passed.");
