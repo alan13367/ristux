@@ -12,8 +12,9 @@ Multiboot2.
   ```
 
 - GRUB tools: `grub-file` and `grub-mkrescue`
-  - Homebrew packages these as `x86_64-elf-grub-file` and
-    `x86_64-elf-grub-mkrescue`; the Makefile detects either naming scheme.
+  - Homebrew packages BIOS-capable GRUB as `i686-elf-grub-file` and
+    `i686-elf-grub-mkrescue`; the Makefile detects prefixed and unprefixed
+    naming schemes.
 - `xorriso`, usually required by `grub-mkrescue`
 - `mtools`, required by the Homebrew GRUB rescue image workflow
 - QEMU: `qemu-system-x86_64`
@@ -21,7 +22,7 @@ Multiboot2.
 On macOS with Homebrew, the non-Rust tools are typically installed with:
 
 ```sh
-brew install x86_64-elf-grub xorriso mtools qemu
+brew install i686-elf-grub xorriso mtools qemu
 ```
 
 ## Build
