@@ -10,6 +10,7 @@ mod arch;
 mod config;
 mod drivers;
 mod log;
+mod multiboot;
 mod panic;
 mod sync;
 
@@ -26,6 +27,13 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     }
 
     println!("Multiboot2 handoff validated.");
+
+    let boot_info = unsafe {
+        multiboot::BootInfo::load(multiboot_info_addr as usize)
+            .unwrap_or_else(|message| panic!("{}", message))
+    };
+    boot_info.print_summary();
+
     halt_loop()
 }
 
