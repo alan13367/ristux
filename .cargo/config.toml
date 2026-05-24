@@ -1,0 +1,14 @@
+[build]
+target = "targets/x86_64-ristux-kernel.json"
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "link-arg=-Tkernel/linker.ld",
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-z",
+    "-C", "link-arg=max-page-size=0x1000",
+]
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true
