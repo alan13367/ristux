@@ -58,10 +58,12 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     };
     boot_info.print_summary();
     memory::init(&boot_info);
-    let initrd = initrd::Initrd::from_boot_info(&boot_info)
-        .unwrap_or_else(|message| panic!("{}", message));
+    time::init();
+    let initrd =
+        initrd::Initrd::from_boot_info(&boot_info).unwrap_or_else(|message| panic!("{}", message));
     initrd.print_summary();
     fs::init(&initrd);
+    dynamic_linker::init();
     userspace::init();
     process::init();
     ipc::init();
@@ -69,8 +71,6 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     signal::init();
     tty::init();
     net::init();
-    time::init();
-    dynamic_linker::init();
     storage::init();
     shell::init();
     task::init();

@@ -8,6 +8,7 @@ pub const SYS_EXIT: u64 = 3;
 pub const SYS_YIELD: u64 = 4;
 pub const SYS_SLEEP: u64 = 5;
 pub const SYS_GETPID: u64 = 6;
+pub const SYS_TIME: u64 = 7;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
@@ -56,6 +57,11 @@ pub fn dispatch(process: &mut UserProcess, number: u64, args: [usize; 6]) -> Sys
             crate::println!("process {} getpid()", process.pid());
             Ok(process.pid())
         }
+        SYS_TIME => {
+            let now = crate::time::unix_time();
+            crate::println!("process {} time() -> {}", process.pid(), now);
+            Ok(now)
+        }
         _ => Err(SyscallError(ENOSYS)),
     }
 }
@@ -86,4 +92,3 @@ fn sys_read(_process: &mut UserProcess, fd: usize, _ptr: usize, _len: usize) -> 
 
     Ok(0)
 }
-

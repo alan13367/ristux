@@ -102,14 +102,19 @@ fn run_init_process(process: &mut UserProcess) {
         .find_bytes(MESSAGE)
         .expect("init ELF did not contain expected message");
 
-    syscall::dispatch(process, syscall::SYS_WRITE, [1, message_addr, MESSAGE.len(), 0, 0, 0])
-        .expect("init write syscall failed");
+    syscall::dispatch(
+        process,
+        syscall::SYS_WRITE,
+        [1, message_addr, MESSAGE.len(), 0, 0, 0],
+    )
+    .expect("init write syscall failed");
     syscall::dispatch(process, syscall::SYS_GETPID, [0; 6]).expect("getpid syscall failed");
+    syscall::dispatch(process, syscall::SYS_TIME, [0; 6]).expect("time syscall failed");
     syscall::dispatch(process, syscall::SYS_EXIT, [0, 0, 0, 0, 0, 0])
         .expect("init exit syscall failed");
 
     unsafe {
-        USERSPACE_STATS.syscalls_handled += 3;
+        USERSPACE_STATS.syscalls_handled += 4;
         USERSPACE_STATS.last_exit_status = match process.state() {
             ProcessState::Exited(status) => Some(status),
             _ => None,

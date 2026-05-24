@@ -1,11 +1,25 @@
 use alloc::vec::Vec;
 
+use crate::sync::spinlock::SpinLock;
+
+const ETHERTYPE_IPV4: u16 = 0x0800;
+const ETHERTYPE_ARP: u16 = 0x0806;
+const ARP_REQUEST: u16 = 1;
+const ARP_REPLY: u16 = 2;
+const IP_PROTO_ICMP: u8 = 1;
+const IP_PROTO_UDP: u8 = 17;
+const ICMP_ECHO_REPLY: u8 = 0;
+const ICMP_ECHO_REQUEST: u8 = 8;
+
+static NET_STATS: SpinLock<NetStats> = SpinLock::new(NetStats::empty());
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MacAddr(pub [u8; 6]);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Ipv4Addr(pub [u8; 4]);
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EthernetFrame {
     pub dst: MacAddr,
     pub src: MacAddr,
@@ -13,68 +27,435 @@ pub struct EthernetFrame {
     pub payload: Vec<u8>,
 }
 
-pub struct UdpPacket {
-    pub src_port: u16,
-    pub dst_port: u16,
-    pub payload: Vec<u8>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SocketId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetStats {
+    pub rx_frames: usize,
+    pub tx_frames: usize,
+    pub arp_entries: usize,
+    pub udp_sockets: usize,
+}
+
+impl NetStats {
+    const fn empty() -> Self {
+        Self {
+            rx_frames: 0,
+            tx_frames: 0,
+            arp_entries: 0,
+            udp_sockets: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ArpEntry {
+    ip: Ipv4Addr,
+    mac: MacAddr,
+}
+
+struct UdpSocket {
+    local_port: u16,
+    inbox: Vec<UdpDatagram>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UdpDatagram {
+    src: Ipv4Addr,
+    src_port: u16,
+    payload: Vec<u8>,
+}
+
+struct VirtioNetDevice {
+    link_up: bool,
+    rx_queue: Vec<EthernetFrame>,
+    tx_queue: Vec<EthernetFrame>,
+}
+
+impl VirtioNetDevice {
+    fn new() -> Self {
+        Self {
+            link_up: true,
+            rx_queue: Vec::new(),
+            tx_queue: Vec::new(),
+        }
+    }
+
+    fn receive(&mut self, frame: EthernetFrame) {
+        self.rx_queue.push(frame);
+    }
+
+    fn transmit(&mut self, frame: EthernetFrame) {
+        if self.link_up {
+            self.tx_queue.push(frame);
+        }
+    }
+
+    fn pop_rx(&mut self) -> Option<EthernetFrame> {
+        if self.rx_queue.is_empty() {
+            None
+        } else {
+            Some(self.rx_queue.remove(0))
+        }
+    }
+
+    fn pop_tx(&mut self) -> Option<EthernetFrame> {
+        if self.tx_queue.is_empty() {
+            None
+        } else {
+            Some(self.tx_queue.remove(0))
+        }
+    }
+}
+
+struct NetworkStack {
+    mac: MacAddr,
+    ip: Ipv4Addr,
+    device: VirtioNetDevice,
+    arp_cache: Vec<ArpEntry>,
+    udp_sockets: Vec<UdpSocket>,
+    rx_frames: usize,
+    tx_frames: usize,
+}
+
+impl NetworkStack {
+    fn new(mac: MacAddr, ip: Ipv4Addr) -> Self {
+        Self {
+            mac,
+            ip,
+            device: VirtioNetDevice::new(),
+            arp_cache: Vec::new(),
+            udp_sockets: Vec::new(),
+            rx_frames: 0,
+            tx_frames: 0,
+        }
+    }
+
+    fn bind_udp(&mut self, local_port: u16) -> SocketId {
+        self.udp_sockets.push(UdpSocket {
+            local_port,
+            inbox: Vec::new(),
+        });
+        SocketId(self.udp_sockets.len() - 1)
+    }
+
+    fn inject_rx(&mut self, frame: EthernetFrame) {
+        self.device.receive(frame);
+    }
+
+    fn poll(&mut self) {
+        while let Some(frame) = self.device.pop_rx() {
+            self.rx_frames += 1;
+            if frame.dst != self.mac && frame.dst != MacAddr([0xff; 6]) {
+                continue;
+            }
+
+            match frame.ethertype {
+                ETHERTYPE_ARP => self.handle_arp(frame),
+                ETHERTYPE_IPV4 => self.handle_ipv4(frame),
+                _ => {}
+            }
+        }
+    }
+
+    fn send_udp(
+        &mut self,
+        socket: SocketId,
+        dst_ip: Ipv4Addr,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> bool {
+        let Some(local_port) = self
+            .udp_sockets
+            .get(socket.0)
+            .map(|socket| socket.local_port)
+        else {
+            return false;
+        };
+        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
+            return false;
+        };
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&local_port.to_be_bytes());
+        body.extend_from_slice(&dst_port.to_be_bytes());
+        body.extend_from_slice(payload);
+        self.transmit_ipv4(dst_mac, dst_ip, IP_PROTO_UDP, &body);
+        true
+    }
+
+    fn recv_udp(&mut self, socket: SocketId) -> Option<UdpDatagram> {
+        let inbox = &mut self.udp_sockets.get_mut(socket.0)?.inbox;
+        if inbox.is_empty() {
+            None
+        } else {
+            Some(inbox.remove(0))
+        }
+    }
+
+    fn pop_tx(&mut self) -> Option<EthernetFrame> {
+        self.device.pop_tx()
+    }
+
+    fn handle_arp(&mut self, frame: EthernetFrame) {
+        let Some(packet) = parse_arp(&frame.payload) else {
+            return;
+        };
+        self.cache_arp(packet.sender_ip, packet.sender_mac);
+
+        if packet.opcode == ARP_REQUEST && packet.target_ip == self.ip {
+            let reply = build_arp(
+                ARP_REPLY,
+                self.mac,
+                self.ip,
+                packet.sender_mac,
+                packet.sender_ip,
+            );
+            self.transmit(EthernetFrame {
+                dst: packet.sender_mac,
+                src: self.mac,
+                ethertype: ETHERTYPE_ARP,
+                payload: reply,
+            });
+        }
+    }
+
+    fn handle_ipv4(&mut self, frame: EthernetFrame) {
+        let Some(packet) = parse_ipv4(&frame.payload) else {
+            return;
+        };
+        self.cache_arp(packet.src, frame.src);
+        if packet.dst != self.ip {
+            return;
+        }
+
+        match packet.protocol {
+            IP_PROTO_ICMP => self.handle_icmp(frame.src, packet),
+            IP_PROTO_UDP => self.handle_udp(packet),
+            _ => {}
+        }
+    }
+
+    fn handle_icmp(&mut self, dst_mac: MacAddr, packet: Ipv4Packet) {
+        if packet.payload.len() < 4 || packet.payload[0] != ICMP_ECHO_REQUEST {
+            return;
+        }
+
+        let mut reply = Vec::new();
+        reply.push(ICMP_ECHO_REPLY);
+        reply.push(0);
+        reply.extend_from_slice(&packet.payload[2..]);
+        self.transmit_ipv4(dst_mac, packet.src, IP_PROTO_ICMP, &reply);
+    }
+
+    fn handle_udp(&mut self, packet: Ipv4Packet) {
+        if packet.payload.len() < 4 {
+            return;
+        }
+        let src_port = u16::from_be_bytes([packet.payload[0], packet.payload[1]]);
+        let dst_port = u16::from_be_bytes([packet.payload[2], packet.payload[3]]);
+        let Some(socket) = self
+            .udp_sockets
+            .iter_mut()
+            .find(|socket| socket.local_port == dst_port)
+        else {
+            return;
+        };
+        socket.inbox.push(UdpDatagram {
+            src: packet.src,
+            src_port,
+            payload: Vec::from(&packet.payload[4..]),
+        });
+    }
+
+    fn transmit_ipv4(&mut self, dst_mac: MacAddr, dst_ip: Ipv4Addr, protocol: u8, body: &[u8]) {
+        let payload = build_ipv4(protocol, self.ip, dst_ip, body);
+        self.transmit(EthernetFrame {
+            dst: dst_mac,
+            src: self.mac,
+            ethertype: ETHERTYPE_IPV4,
+            payload,
+        });
+    }
+
+    fn transmit(&mut self, frame: EthernetFrame) {
+        self.tx_frames += 1;
+        self.device.transmit(frame);
+    }
+
+    fn cache_arp(&mut self, ip: Ipv4Addr, mac: MacAddr) {
+        if let Some(entry) = self.arp_cache.iter_mut().find(|entry| entry.ip == ip) {
+            entry.mac = mac;
+            return;
+        }
+        self.arp_cache.push(ArpEntry { ip, mac });
+    }
+
+    fn resolve_mac(&self, ip: Ipv4Addr) -> Option<MacAddr> {
+        self.arp_cache
+            .iter()
+            .find(|entry| entry.ip == ip)
+            .map(|entry| entry.mac)
+    }
+
+    fn stats(&self) -> NetStats {
+        NetStats {
+            rx_frames: self.rx_frames,
+            tx_frames: self.tx_frames,
+            arp_entries: self.arp_cache.len(),
+            udp_sockets: self.udp_sockets.len(),
+        }
+    }
+}
+
+struct ArpPacket {
+    opcode: u16,
+    sender_mac: MacAddr,
+    sender_ip: Ipv4Addr,
+    target_ip: Ipv4Addr,
+}
+
+struct Ipv4Packet {
+    protocol: u8,
+    src: Ipv4Addr,
+    dst: Ipv4Addr,
+    payload: Vec<u8>,
 }
 
 pub fn init() {
     self_test();
 }
 
-fn arp_reply(sender_mac: MacAddr, sender_ip: Ipv4Addr, target_ip: Ipv4Addr) -> EthernetFrame {
+pub fn stats() -> NetStats {
+    *NET_STATS.lock()
+}
+
+fn build_arp(
+    opcode: u16,
+    sender_mac: MacAddr,
+    sender_ip: Ipv4Addr,
+    target_mac: MacAddr,
+    target_ip: Ipv4Addr,
+) -> Vec<u8> {
     let mut payload = Vec::new();
+    payload.extend_from_slice(&opcode.to_be_bytes());
+    payload.extend_from_slice(&sender_mac.0);
     payload.extend_from_slice(&sender_ip.0);
+    payload.extend_from_slice(&target_mac.0);
     payload.extend_from_slice(&target_ip.0);
-    EthernetFrame {
-        dst: MacAddr([0xff; 6]),
-        src: sender_mac,
-        ethertype: 0x0806,
-        payload,
-    }
+    payload
 }
 
-fn icmp_echo_reply(src: Ipv4Addr, dst: Ipv4Addr, sequence: u16) -> Vec<u8> {
-    let mut packet = Vec::new();
-    packet.extend_from_slice(&src.0);
-    packet.extend_from_slice(&dst.0);
-    packet.push(0);
-    packet.push(0);
-    packet.extend_from_slice(&sequence.to_be_bytes());
-    packet
+fn parse_arp(payload: &[u8]) -> Option<ArpPacket> {
+    if payload.len() < 22 {
+        return None;
+    }
+    Some(ArpPacket {
+        opcode: u16::from_be_bytes([payload[0], payload[1]]),
+        sender_mac: MacAddr(payload[2..8].try_into().ok()?),
+        sender_ip: Ipv4Addr(payload[8..12].try_into().ok()?),
+        target_ip: Ipv4Addr(payload[18..22].try_into().ok()?),
+    })
 }
 
-fn udp_send(src_port: u16, dst_port: u16, payload: &[u8]) -> UdpPacket {
-    UdpPacket {
-        src_port,
-        dst_port,
-        payload: Vec::from(payload),
+fn build_ipv4(protocol: u8, src: Ipv4Addr, dst: Ipv4Addr, body: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.push(protocol);
+    payload.extend_from_slice(&src.0);
+    payload.extend_from_slice(&dst.0);
+    payload.extend_from_slice(body);
+    payload
+}
+
+fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
+    if payload.len() < 9 {
+        return None;
     }
+    Some(Ipv4Packet {
+        protocol: payload[0],
+        src: Ipv4Addr(payload[1..5].try_into().ok()?),
+        dst: Ipv4Addr(payload[5..9].try_into().ok()?),
+        payload: Vec::from(&payload[9..]),
+    })
 }
 
 fn self_test() {
-    let mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
-    let local = Ipv4Addr([10, 0, 2, 15]);
-    let peer = Ipv4Addr([10, 0, 2, 2]);
-    let arp = arp_reply(mac, local, peer);
-    if arp.ethertype != 0x0806
-        || arp.dst != MacAddr([0xff; 6])
-        || arp.src != mac
-        || arp.payload.len() != 8
+    let local_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    let local_ip = Ipv4Addr([10, 0, 2, 15]);
+    let peer_ip = Ipv4Addr([10, 0, 2, 2]);
+    let mut stack = NetworkStack::new(local_mac, local_ip);
+
+    stack.inject_rx(EthernetFrame {
+        dst: MacAddr([0xff; 6]),
+        src: peer_mac,
+        ethertype: ETHERTYPE_ARP,
+        payload: build_arp(ARP_REQUEST, peer_mac, peer_ip, MacAddr([0; 6]), local_ip),
+    });
+    stack.poll();
+    let arp_reply = stack.pop_tx().expect("ARP did not transmit a reply");
+    if arp_reply.ethertype != ETHERTYPE_ARP
+        || arp_reply.dst != peer_mac
+        || parse_arp(&arp_reply.payload).map(|packet| packet.opcode) != Some(ARP_REPLY)
     {
         panic!("ARP self-test failed");
     }
 
-    let echo = icmp_echo_reply(local, peer, 7);
-    if echo[8] != 0 || echo[10..12] != 7u16.to_be_bytes() {
+    let mut echo_body = Vec::new();
+    echo_body.push(ICMP_ECHO_REQUEST);
+    echo_body.push(0);
+    echo_body.extend_from_slice(&7u16.to_be_bytes());
+    echo_body.extend_from_slice(b"ping");
+    stack.inject_rx(EthernetFrame {
+        dst: local_mac,
+        src: peer_mac,
+        ethertype: ETHERTYPE_IPV4,
+        payload: build_ipv4(IP_PROTO_ICMP, peer_ip, local_ip, &echo_body),
+    });
+    stack.poll();
+    let echo_reply = stack.pop_tx().expect("ICMP did not transmit a reply");
+    let echo_packet = parse_ipv4(&echo_reply.payload).expect("ICMP reply was not IPv4");
+    if echo_reply.ethertype != ETHERTYPE_IPV4
+        || echo_reply.dst != peer_mac
+        || echo_packet.protocol != IP_PROTO_ICMP
+        || echo_packet.payload.first() != Some(&ICMP_ECHO_REPLY)
+    {
         panic!("ICMP echo self-test failed");
     }
 
-    let udp = udp_send(1000, 1001, b"ristux");
-    if udp.src_port != 1000 || udp.dst_port != 1001 || udp.payload != b"ristux" {
-        panic!("UDP self-test failed");
+    let socket = stack.bind_udp(9000);
+    if !stack.send_udp(socket, peer_ip, 9001, b"ristux") {
+        panic!("UDP send self-test could not resolve peer");
+    }
+    let udp_tx = stack.pop_tx().expect("UDP send did not transmit a frame");
+    let udp_packet = parse_ipv4(&udp_tx.payload).expect("UDP transmit was not IPv4");
+    if udp_tx.dst != peer_mac
+        || udp_packet.protocol != IP_PROTO_UDP
+        || udp_packet.payload[0..4] != [0x23, 0x28, 0x23, 0x29]
+        || &udp_packet.payload[4..] != b"ristux"
+    {
+        panic!("UDP send self-test failed");
     }
 
-    crate::println!("Networking self-test passed: ARP, ICMP, UDP.");
+    let mut udp_body = Vec::new();
+    udp_body.extend_from_slice(&9001u16.to_be_bytes());
+    udp_body.extend_from_slice(&9000u16.to_be_bytes());
+    udp_body.extend_from_slice(b"reply");
+    stack.inject_rx(EthernetFrame {
+        dst: local_mac,
+        src: peer_mac,
+        ethertype: ETHERTYPE_IPV4,
+        payload: build_ipv4(IP_PROTO_UDP, peer_ip, local_ip, &udp_body),
+    });
+    stack.poll();
+    let received = stack
+        .recv_udp(socket)
+        .expect("UDP socket inbox stayed empty");
+    if received.src != peer_ip || received.src_port != 9001 || received.payload != b"reply" {
+        panic!("UDP receive self-test failed");
+    }
+
+    *NET_STATS.lock() = stack.stats();
+    crate::println!("Networking self-test passed: VirtIO net, ARP, IPv4, ICMP, UDP sockets.");
 }

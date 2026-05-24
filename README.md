@@ -104,7 +104,7 @@ quit
 Then inspect the serial log:
 
 ```sh
-grep -E "Multiboot2 handoff|self-test|Kernel self-test|keyboard scancode|panic" /tmp/ristux-serial.log
+grep -E "Multiboot2 handoff|Timekeeping|Dynamic linker|Networking|Kernel self-test|keyboard scancode|panic" /tmp/ristux-serial.log
 ```
 
 A passing boot reaches `Kernel self-test harness passed.`, logs the keyboard
@@ -126,4 +126,6 @@ scancode from `sendkey a`, and does not print `kernel panic`.
 - Mounts an initrd-backed VFS with `/dev`, `/proc`, and `/tmp`.
 - Implements basic device files, pipes, redirection, and a scripted shell smoke test.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
-- Exercises minimal networking, RTC/timekeeping, timer queue, and dynamic-linker relocation models.
+- Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
+- Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.
+- Packages `/lib/libc.so` into the initrd and resolves shared-library symbols for a PIE-style user program through the dynamic linker.

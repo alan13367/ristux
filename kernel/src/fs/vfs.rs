@@ -25,6 +25,12 @@ pub enum DeviceKind {
     Keyboard,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileTimestamps {
+    pub created_at: u64,
+    pub modified_at: u64,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum VfsError {
     NotFound,
@@ -48,6 +54,7 @@ struct Node {
     path: String,
     kind: NodeKind,
     metadata: FileMetadata,
+    timestamps: FileTimestamps,
     data: Vec<u8>,
 }
 
@@ -70,6 +77,7 @@ impl Vfs {
 
         vfs.add_directory("/");
         vfs.add_directory("/bin");
+        vfs.add_directory("/lib");
         vfs.add_directory("/dev");
         vfs.add_directory("/proc");
         vfs.add_directory("/tmp");
@@ -89,18 +97,25 @@ impl Vfs {
     }
 
     fn add_directory(&mut self, path: &str) {
+        let now = crate::time::filesystem_timestamp();
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Directory,
             metadata: FileMetadata::new(0, 0, 0o755),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
             data: Vec::new(),
         });
     }
 
     fn add_file(&mut self, path: &str, data: &[u8]) {
+        let now = crate::time::filesystem_timestamp();
         if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
             node.kind = NodeKind::File;
             node.metadata = FileMetadata::new(0, 0, 0o644);
+            node.timestamps.modified_at = now;
             node.data.clear();
             node.data.extend_from_slice(data);
             return;
@@ -110,15 +125,24 @@ impl Vfs {
             path: String::from(path),
             kind: NodeKind::File,
             metadata: FileMetadata::new(0, 0, 0o644),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
             data: Vec::from(data),
         });
     }
 
     fn add_device(&mut self, path: &str, kind: DeviceKind) {
+        let now = crate::time::filesystem_timestamp();
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Device(kind),
             metadata: FileMetadata::new(0, 0, 0o666),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
             data: Vec::new(),
         });
     }
@@ -154,7 +178,8 @@ impl Vfs {
             NodeKind::File => {
                 let remaining = node.data.len().saturating_sub(open_file.offset);
                 let count = remaining.min(output.len());
-                output[..count].copy_from_slice(&node.data[open_file.offset..open_file.offset + count]);
+                output[..count]
+                    .copy_from_slice(&node.data[open_file.offset..open_file.offset + count]);
                 open_file.offset += count;
                 Ok(count)
             }
@@ -196,6 +221,7 @@ impl Vfs {
                 }
                 node.data[open_file.offset..end].copy_from_slice(input);
                 open_file.offset = end;
+                node.timestamps.modified_at = crate::time::filesystem_timestamp();
                 Ok(input.len())
             }
             NodeKind::Device(DeviceKind::Null) => Ok(input.len()),
@@ -243,6 +269,13 @@ impl Vfs {
         } else {
             None
         }
+    }
+
+    fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
+        self.nodes
+            .iter()
+            .find(|node| node.path == path)
+            .map(|node| node.timestamps)
     }
 
     fn list_paths(&self, prefix: &str) -> Vec<String> {
@@ -296,6 +329,11 @@ pub fn write_file(path: &str, data: &[u8]) {
     with_vfs(|vfs| vfs.add_file(path, data));
 }
 
+pub fn timestamps(path: &str) -> Option<FileTimestamps> {
+    let guard = VFS.lock();
+    guard.as_ref().and_then(|vfs| vfs.timestamps(path))
+}
+
 pub fn list_paths(prefix: &str) -> Vec<String> {
     let guard = VFS.lock();
     guard
@@ -324,7 +362,10 @@ pub fn self_test() {
     write(fd, b"console device online\n").expect("write /dev/console failed");
     close(fd).expect("close /dev/console failed");
 
-    if read_file("/bin/init").is_none() || read_file("/tmp/message.txt").is_none() {
+    if read_file("/bin/init").is_none()
+        || read_file("/lib/libc.so").is_none()
+        || read_file("/tmp/message.txt").is_none()
+    {
         panic!("VFS path resolution self-test failed");
     }
     if list_paths("/dev").len() < 4 {
@@ -334,6 +375,15 @@ pub fn self_test() {
     let user = Credentials::user(1000, 1000);
     if can_access("/tmp/message.txt", user, Access::Read).expect("permission check failed") {
         panic!("VFS permission self-test allowed private read");
+    }
+    write_file("/tmp/timestamp.txt", b"before");
+    let before = timestamps("/tmp/timestamp.txt").expect("missing timestamps before write");
+    let fd = open("/tmp/timestamp.txt").expect("open timestamp test file failed");
+    write(fd, b"timestamped").expect("timestamp test write failed");
+    close(fd).expect("close timestamp test file failed");
+    let after = timestamps("/tmp/timestamp.txt").expect("missing timestamps after write");
+    if before.created_at != after.created_at || after.modified_at <= before.modified_at {
+        panic!("VFS timestamp self-test failed");
     }
 
     crate::println!("VFS self-test passed.");

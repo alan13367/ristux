@@ -16,6 +16,8 @@ ISO_INITRD := $(ISO_DIR)/boot/initrd.bin
 ISO_IMAGE := build/ristux.iso
 USER_INIT_OBJ := build/userland/init.o
 USER_INIT_ELF := build/userland/init.elf
+USER_LIBC_OBJ := build/userland/libc.o
+USER_LIBC_SO := build/userland/libc.so
 INITRD_BUILDER := build/build_initrd
 
 .PHONY: all build check-multiboot iso run clean
@@ -35,12 +37,19 @@ $(USER_INIT_OBJ): userland/init.S
 $(USER_INIT_ELF): $(USER_INIT_OBJ) userland/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_INIT_OBJ)
 
+$(USER_LIBC_OBJ): userland/libc.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_LIBC_SO): $(USER_LIBC_OBJ)
+	$(RUST_LLD) -flavor gnu -shared -o $@ $(USER_LIBC_OBJ)
+
 $(INITRD_BUILDER): tools/build_initrd.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(INITRD_BUILDER)
-	$(INITRD_BUILDER) $(USER_INIT_ELF) $(ISO_INITRD)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_LIBC_SO) $(INITRD_BUILDER)
+	$(INITRD_BUILDER) $(USER_INIT_ELF) $(USER_LIBC_SO) $(ISO_INITRD)
 
 check-multiboot: $(ISO_KERNEL)
 	$(GRUB_FILE) --is-x86-multiboot2 $(ISO_KERNEL)

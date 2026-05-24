@@ -1,0 +1,30 @@
+.section .text
+
+.global write
+.type write, @function
+write:
+    mov $1, %rax
+    int $0x80
+    ret
+
+.global read
+.type read, @function
+read:
+    mov $2, %rax
+    int $0x80
+    ret
+
+.global exit
+.type exit, @function
+exit:
+    mov $3, %rax
+    int $0x80
+.exit_halt:
+    jmp .exit_halt
+
+.global time
+.type time, @function
+time:
+    mov $7, %rax
+    int $0x80
+    ret
