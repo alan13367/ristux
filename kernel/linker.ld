@@ -6,6 +6,7 @@ KERNEL_LOAD_ADDR = 1M;
 SECTIONS
 {
     . = KERNEL_LOAD_ADDR;
+    __kernel_start = .;
 
     .boot ALIGN(8) :
     {
@@ -34,6 +35,8 @@ SECTIONS
         *(COMMON)
         *(.bss .bss.*)
     }
+
+    __kernel_end = .;
 
     /DISCARD/ :
     {

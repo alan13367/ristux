@@ -11,6 +11,7 @@ mod arch;
 mod config;
 mod drivers;
 mod log;
+mod memory;
 mod multiboot;
 mod panic;
 mod sync;
@@ -36,6 +37,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
             .unwrap_or_else(|message| panic!("{}", message))
     };
     boot_info.print_summary();
+    memory::init(&boot_info);
 
     arch::x86_64::interrupts::init();
     println!(
