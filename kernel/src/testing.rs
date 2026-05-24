@@ -2,6 +2,7 @@ use crate::{
     drivers,
     error::{KernelError, KernelResult},
     memory,
+    task,
 };
 
 pub fn run_kernel_self_tests() {
@@ -20,6 +21,8 @@ fn run() -> KernelResult<()> {
         !drivers::registered_drivers().is_empty(),
         "no kernel drivers registered",
     )?;
+    let scheduler = task::scheduler::stats();
+    ensure(scheduler.task_count >= 4, "scheduler did not create kernel tasks")?;
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
@@ -34,6 +37,13 @@ fn run() -> KernelResult<()> {
     for driver in drivers::registered_drivers() {
         crate::println!("  {} ({})", driver.name, driver.kind);
     }
+
+    crate::println!(
+        "Scheduler stats: {} tasks, {} ready, {} timer dispatches",
+        scheduler.task_count,
+        scheduler.ready_count,
+        scheduler.preemption_count
+    );
 
     Ok(())
 }

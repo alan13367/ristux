@@ -34,6 +34,7 @@ pub fn init() {
 
 pub fn timer_tick() {
     let tick = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    crate::task::on_timer_tick(tick);
     if tick == 1 || tick % config::LOG_TIMER_EVERY_TICKS == 0 {
         crate::println!("timer tick {}", tick);
     }
