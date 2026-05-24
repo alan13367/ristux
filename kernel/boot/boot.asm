@@ -95,6 +95,8 @@ gdt64_pointer:
 
 .section .bss.boot, "aw", @nobits
 .align 4096
+.global boot_p4_table
+boot_p4_table:
 p4_table:
     .skip 4096
 p3_table:
