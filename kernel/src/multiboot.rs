@@ -271,6 +271,16 @@ impl MemoryMapEntry {
     }
 }
 
+impl Module {
+    pub fn size(&self) -> usize {
+        self.end.saturating_sub(self.start) as usize
+    }
+
+    pub fn bytes(&self) -> &'static [u8] {
+        unsafe { slice::from_raw_parts(self.start as *const u8, self.size()) }
+    }
+}
+
 pub struct ModuleIter {
     tags: TagIter<'static>,
 }

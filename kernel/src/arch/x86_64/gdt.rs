@@ -3,8 +3,11 @@ use core::{arch::asm, mem, ptr};
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 const KERNEL_DATA_SELECTOR: u16 = 0x10;
 const TSS_SELECTOR: u16 = 0x18;
+const USER_DATA_SELECTOR: u16 = 0x28 | 3;
+const USER_CODE_SELECTOR: u16 = 0x30 | 3;
 const DOUBLE_FAULT_IST_INDEX: usize = 0;
 const DOUBLE_FAULT_STACK_SIZE: usize = 4096 * 5;
+const RING0_STACK_SIZE: usize = 4096 * 5;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -41,14 +44,17 @@ impl TaskStateSegment {
 struct Stack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
 static DOUBLE_FAULT_STACK: Stack = Stack([0; DOUBLE_FAULT_STACK_SIZE]);
+static RING0_STACK: Stack = Stack([0; RING0_STACK_SIZE]);
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
-static mut GDT: [u64; 5] = [0; 5];
+static mut GDT: [u64; 7] = [0; 7];
 
 pub fn init() {
     unsafe {
         let tss = ptr::addr_of_mut!(TSS);
         (*tss).interrupt_stack_table[DOUBLE_FAULT_IST_INDEX] =
             ptr::addr_of!(DOUBLE_FAULT_STACK.0) as u64 + DOUBLE_FAULT_STACK_SIZE as u64;
+        (*tss).privilege_stack_table[0] =
+            ptr::addr_of!(RING0_STACK.0) as u64 + RING0_STACK_SIZE as u64;
 
         let gdt = ptr::addr_of_mut!(GDT);
         (*gdt)[0] = 0;
@@ -58,9 +64,11 @@ pub fn init() {
         let (tss_low, tss_high) = tss_descriptor(tss as u64);
         (*gdt)[3] = tss_low;
         (*gdt)[4] = tss_high;
+        (*gdt)[5] = 0x00af_f200_0000_ffff;
+        (*gdt)[6] = 0x00af_fa00_0000_ffff;
 
         let pointer = DescriptorTablePointer {
-            limit: (mem::size_of::<[u64; 5]>() - 1) as u16,
+            limit: (mem::size_of::<[u64; 7]>() - 1) as u16,
             base: gdt as u64,
         };
 
@@ -88,6 +96,27 @@ pub const fn kernel_code_selector() -> u16 {
     KERNEL_CODE_SELECTOR
 }
 
+pub const fn user_data_selector() -> u16 {
+    USER_DATA_SELECTOR
+}
+
+pub const fn user_code_selector() -> u16 {
+    USER_CODE_SELECTOR
+}
+
+pub fn init_user_segments() {
+    crate::println!(
+        "User mode segments configured: code {:#x}, data {:#x}, rsp0 {:#x}",
+        user_code_selector(),
+        user_data_selector(),
+        kernel_stack_top()
+    );
+}
+
+fn kernel_stack_top() -> u64 {
+    ptr::addr_of!(RING0_STACK.0) as u64 + RING0_STACK_SIZE as u64
+}
+
 fn tss_descriptor(base: u64) -> (u64, u64) {
     let limit = (mem::size_of::<TaskStateSegment>() - 1) as u64;
     let low = (limit & 0xffff)
@@ -99,4 +128,3 @@ fn tss_descriptor(base: u64) -> (u64, u64) {
 
     (low, high)
 }
-

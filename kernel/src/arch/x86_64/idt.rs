@@ -4,6 +4,8 @@ use super::gdt;
 
 const IDT_ENTRIES: usize = 256;
 const INTERRUPT_GATE: u16 = 0x8e00;
+const USER_INTERRUPT_GATE: u16 = 0xee00;
+const SYSCALL_VECTOR: usize = 0x80;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -29,9 +31,17 @@ impl IdtEntry {
     }
 
     fn set_handler_addr(&mut self, addr: u64, ist: u16) {
+        self.set_handler_addr_with_options(addr, ist, INTERRUPT_GATE);
+    }
+
+    fn set_user_handler_addr(&mut self, addr: u64) {
+        self.set_handler_addr_with_options(addr, 0, USER_INTERRUPT_GATE);
+    }
+
+    fn set_handler_addr_with_options(&mut self, addr: u64, ist: u16, options: u16) {
         self.offset_low = addr as u16;
         self.selector = gdt::kernel_code_selector();
-        self.options = INTERRUPT_GATE | (ist & 0x7);
+        self.options = options | (ist & 0x7);
         self.offset_middle = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;
@@ -56,6 +66,10 @@ impl InterruptDescriptorTable {
 
     fn set_handler_with_ist(&mut self, index: usize, addr: u64, ist: u16) {
         self.entries[index].set_handler_addr(addr, ist);
+    }
+
+    fn set_user_handler(&mut self, index: usize, addr: u64) {
+        self.entries[index].set_user_handler_addr(addr);
     }
 }
 
@@ -116,6 +130,14 @@ pub fn trigger_breakpoint() {
     }
 }
 
+pub fn install_syscall_gate() {
+    unsafe {
+        let idt = ptr::addr_of_mut!(IDT);
+        (*idt).set_user_handler(SYSCALL_VECTOR, syscall_interrupt_handler as *const () as u64);
+    }
+    crate::println!("IDT syscall gate installed at vector {:#x}.", SYSCALL_VECTOR);
+}
+
 extern "x86-interrupt" fn divide_error_handler(_stack_frame: InterruptStackFrame) {
     panic!("divide error exception");
 }
@@ -172,4 +194,8 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     super::interrupts::keyboard_interrupt();
+}
+
+extern "x86-interrupt" fn syscall_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::println!("int 0x80 syscall gate reached without a register frame");
 }

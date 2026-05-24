@@ -14,13 +14,16 @@ mod arch;
 mod config;
 mod drivers;
 mod error;
+mod initrd;
 mod log;
 mod memory;
 mod multiboot;
 mod panic;
 mod sync;
+mod syscall;
 mod task;
 mod testing;
+mod userspace;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) -> ! {
@@ -44,6 +47,10 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     };
     boot_info.print_summary();
     memory::init(&boot_info);
+    let initrd = initrd::Initrd::from_boot_info(&boot_info)
+        .unwrap_or_else(|message| panic!("{}", message));
+    initrd.print_summary();
+    userspace::init(&initrd);
     task::init();
     testing::run_kernel_self_tests();
 

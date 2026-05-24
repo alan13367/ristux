@@ -5,6 +5,7 @@ use super::frame_allocator::{self, FRAME_SIZE};
 const ENTRY_COUNT: usize = 512;
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
+const USER: u64 = 1 << 2;
 const HUGE_PAGE: u64 = 1 << 7;
 const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
 
@@ -22,6 +23,7 @@ pub struct PageFlags(u64);
 
 impl PageFlags {
     pub const WRITABLE: Self = Self(PRESENT | WRITABLE);
+    pub const USER_WRITABLE: Self = Self(PRESENT | WRITABLE | USER);
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -53,9 +55,9 @@ pub fn init() {
 
 pub unsafe fn map_page(virt: usize, phys: usize, flags: PageFlags) -> Result<(), PagingError> {
     let p4 = root_table();
-    let p3 = unsafe { next_table_or_create(&mut (*p4).entries[p4_index(virt)])? };
-    let p2 = unsafe { next_table_or_create(&mut (*p3).entries[p3_index(virt)])? };
-    let p1 = unsafe { next_table_or_create(&mut (*p2).entries[p2_index(virt)])? };
+    let p3 = unsafe { next_table_or_create(&mut (*p4).entries[p4_index(virt)], flags)? };
+    let p2 = unsafe { next_table_or_create(&mut (*p3).entries[p3_index(virt)], flags)? };
+    let p1 = unsafe { next_table_or_create(&mut (*p2).entries[p2_index(virt)], flags)? };
     let entry = unsafe { &mut (*p1).entries[p1_index(virt)] };
 
     if *entry & PRESENT != 0 {
@@ -113,6 +115,18 @@ fn self_test() {
     }
 
     frame_allocator::free_frame(frame);
+    let user_frame =
+        frame_allocator::allocate_frame().expect("user paging self-test frame allocation failed");
+    unsafe {
+        map_page(0x4010_0000, user_frame.start, PageFlags::USER_WRITABLE)
+            .unwrap_or_else(|err| panic!("user paging map self-test failed: {}", err));
+        let unmapped = unmap_page(0x4010_0000)
+            .unwrap_or_else(|err| panic!("user paging unmap self-test failed: {}", err));
+        if unmapped != user_frame.start {
+            panic!("user paging self-test unmapped unexpected frame {:#x}", unmapped);
+        }
+    }
+    frame_allocator::free_frame(user_frame);
     crate::println!("Paging map/unmap self-test passed.");
 }
 
@@ -120,7 +134,10 @@ fn root_table() -> *mut PageTable {
     ptr::addr_of_mut!(boot_p4_table)
 }
 
-unsafe fn next_table_or_create(entry: &mut u64) -> Result<*mut PageTable, PagingError> {
+unsafe fn next_table_or_create(
+    entry: &mut u64,
+    flags: PageFlags,
+) -> Result<*mut PageTable, PagingError> {
     if *entry & HUGE_PAGE != 0 {
         return Err(PagingError::HugePage);
     }
@@ -130,7 +147,9 @@ unsafe fn next_table_or_create(entry: &mut u64) -> Result<*mut PageTable, Paging
         unsafe {
             ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
         }
-        *entry = frame.start as u64 | PRESENT | WRITABLE;
+        *entry = frame.start as u64 | PRESENT | WRITABLE | (flags.0 & USER);
+    } else if flags.0 & USER != 0 {
+        *entry |= USER;
     }
 
     Ok((*entry & ADDR_MASK) as *mut PageTable)
@@ -169,4 +188,3 @@ const fn p2_index(addr: usize) -> usize {
 const fn p1_index(addr: usize) -> usize {
     (addr >> 12) & 0x1ff
 }
-

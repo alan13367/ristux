@@ -3,6 +3,7 @@ use crate::{
     error::{KernelError, KernelResult},
     memory,
     task,
+    userspace,
 };
 
 pub fn run_kernel_self_tests() {
@@ -23,6 +24,12 @@ fn run() -> KernelResult<()> {
     )?;
     let scheduler = task::scheduler::stats();
     ensure(scheduler.task_count >= 4, "scheduler did not create kernel tasks")?;
+    let userspace = userspace::stats();
+    ensure(userspace.processes_loaded >= 1, "no user process loaded")?;
+    ensure(
+        userspace.last_exit_status == Some(0),
+        "init process did not exit cleanly",
+    )?;
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
@@ -43,6 +50,12 @@ fn run() -> KernelResult<()> {
         scheduler.task_count,
         scheduler.ready_count,
         scheduler.preemption_count
+    );
+    crate::println!(
+        "Userspace stats: {} process(es), {} syscall(s), last exit {:?}",
+        userspace.processes_loaded,
+        userspace.syscalls_handled,
+        userspace.last_exit_status
     );
 
     Ok(())
