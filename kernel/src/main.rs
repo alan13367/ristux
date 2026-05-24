@@ -37,6 +37,12 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     };
     boot_info.print_summary();
 
+    arch::x86_64::interrupts::init();
+    println!(
+        "Initial timer tick count: {}",
+        arch::x86_64::interrupts::timer_ticks()
+    );
+
     halt_loop()
 }
 

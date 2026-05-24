@@ -90,6 +90,14 @@ pub fn init() {
         (*idt).set_handler(12, stack_segment_fault_handler as *const () as u64);
         (*idt).set_handler(13, general_protection_fault_handler as *const () as u64);
         (*idt).set_handler(14, page_fault_handler as *const () as u64);
+        (*idt).set_handler(
+            super::interrupts::TIMER_VECTOR as usize,
+            timer_interrupt_handler as *const () as u64,
+        );
+        (*idt).set_handler(
+            super::interrupts::KEYBOARD_VECTOR as usize,
+            keyboard_interrupt_handler as *const () as u64,
+        );
 
         let pointer = DescriptorTablePointer {
             limit: (mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
@@ -156,4 +164,12 @@ extern "x86-interrupt" fn page_fault_handler(
         "page fault exception at {:#x}, error code {:#x}",
         fault_addr, error_code
     );
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    super::interrupts::timer_tick();
+}
+
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    super::interrupts::keyboard_interrupt();
 }
