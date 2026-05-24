@@ -63,7 +63,7 @@ enable_long_mode:
 
 .code64
 long_mode_start:
-    mov ax, GDT64_DATA
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax

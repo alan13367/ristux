@@ -1,23 +1,37 @@
 #![no_std]
 #![no_main]
 
-use core::arch::{asm, global_asm};
+use core::arch::global_asm;
 
 global_asm!(include_str!("../boot/multiboot2_header.asm"));
 global_asm!(include_str!("../boot/boot.asm"));
 
+mod arch;
+mod config;
+mod drivers;
+mod log;
 mod panic;
+mod sync;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_main(_multiboot_magic: u32, _multiboot_info_addr: u32) -> ! {
+pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) -> ! {
+    log::init();
+
+    println!("{}", config::KERNEL_HELLO);
+    println!("Multiboot2 magic: {:#010x}", multiboot_magic);
+    println!("Multiboot2 info:  {:#010x}", multiboot_info_addr);
+
+    if multiboot_magic != config::MULTIBOOT2_BOOTLOADER_MAGIC {
+        panic!("invalid Multiboot2 magic: {:#010x}", multiboot_magic);
+    }
+
+    println!("Multiboot2 handoff validated.");
     halt_loop()
 }
 
 #[inline(always)]
 pub fn halt_loop() -> ! {
     loop {
-        unsafe {
-            asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
+        arch::x86_64::instructions::halt();
     }
 }
