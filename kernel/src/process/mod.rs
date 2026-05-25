@@ -1535,6 +1535,36 @@ pub fn brk(new_break: usize) -> Result<usize, ()> {
     .ok_or(())?
 }
 
+pub fn mmap_anonymous(hint: usize, len: usize, writable: bool) -> Result<usize, ()> {
+    with_current(|p| {
+        p.address_space
+            .map_anonymous(hint, len, user_page_flags(writable))
+            .map_err(|_| ())
+    })
+    .ok_or(())?
+}
+
+pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
+    with_current(|p| p.address_space.unmap_user_range(addr, len).map_err(|_| ())).ok_or(())?
+}
+
+pub fn mprotect(addr: usize, len: usize, writable: bool) -> Result<(), ()> {
+    with_current(|p| {
+        p.address_space
+            .protect_user_range(addr, len, writable)
+            .map_err(|_| ())
+    })
+    .ok_or(())?
+}
+
+fn user_page_flags(writable: bool) -> PageFlags {
+    if writable {
+        PageFlags::USER_WRITABLE
+    } else {
+        PageFlags::USER_READABLE
+    }
+}
+
 pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, Option<i32>)> {
     with_table(|table| {
         let p = table.get(pid)?;

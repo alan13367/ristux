@@ -11,7 +11,16 @@
 
 use alloc::vec::Vec;
 
-use crate::{fs, process, syscall::SyscallInterruptFrame, tty};
+use crate::{
+    fs,
+    memory::{
+        address_space::{USER_MMAP_END, USER_MMAP_START},
+        frame_allocator::FRAME_SIZE,
+    },
+    process,
+    syscall::SyscallInterruptFrame,
+    tty,
+};
 
 pub const NR_read: u64 = 0;
 pub const NR_write: u64 = 1;
@@ -21,6 +30,9 @@ pub const NR_stat: u64 = 4;
 pub const NR_fstat: u64 = 5;
 pub const NR_lstat: u64 = 6;
 pub const NR_lseek: u64 = 8;
+pub const NR_mmap: u64 = 9;
+pub const NR_mprotect: u64 = 10;
+pub const NR_munmap: u64 = 11;
 pub const NR_brk: u64 = 12;
 pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigreturn: u64 = 15;
@@ -93,6 +105,12 @@ const O_ACCMODE: u32 = 0o3;
 const O_APPEND: u32 = 0o2000;
 const O_NONBLOCK: u32 = 0o4000;
 const SETTABLE_STATUS_FLAGS: u32 = O_APPEND | O_NONBLOCK;
+const PROT_READ: i32 = 0x1;
+const PROT_WRITE: i32 = 0x2;
+const PROT_EXEC: i32 = 0x4;
+const MAP_PRIVATE: i32 = 0x02;
+const MAP_FIXED: i32 = 0x10;
+const MAP_ANONYMOUS: i32 = 0x20;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -180,6 +198,16 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
+        NR_mmap => linux_mmap(
+            a0 as usize,
+            a1 as usize,
+            a2 as i32,
+            a3 as i32,
+            a4 as i64,
+            a5 as usize,
+        ),
+        NR_mprotect => linux_mprotect(a0 as usize, a1 as usize, a2 as i32),
+        NR_munmap => linux_munmap(a0 as usize, a1 as usize),
         NR_stat => linux_stat(a0 as usize, a1 as usize),
         NR_fstat => linux_fstat(a0 as usize, a1 as usize),
         NR_lstat => linux_lstat(a0 as usize, a1 as usize),
@@ -900,6 +928,105 @@ fn linux_brk(new_break: usize) -> Result<u64, i64> {
         Ok(addr) => Ok(addr as u64),
         Err(_) => Ok(process::current_heap_break() as u64),
     }
+}
+
+fn linux_mmap(
+    addr: usize,
+    len: usize,
+    prot: i32,
+    flags: i32,
+    fd: i64,
+    offset: usize,
+) -> Result<u64, i64> {
+    let writable = mmap_writable(prot)?;
+    if flags & MAP_FIXED != 0 || flags & MAP_PRIVATE == 0 {
+        return Err(EINVAL);
+    }
+    let length = page_aligned_len(len)?;
+    if length > USER_MMAP_END - USER_MMAP_START {
+        return Err(ENOMEM);
+    }
+
+    let file_bytes = if flags & MAP_ANONYMOUS != 0 {
+        None
+    } else {
+        if fd < 0 || offset % FRAME_SIZE != 0 {
+            return Err(EINVAL);
+        }
+        Some(read_mmap_file(fd as usize, length, offset)?)
+    };
+
+    let mapped = process::mmap_anonymous(addr, length, true).map_err(|_| ENOMEM)?;
+    if let Some(bytes) = file_bytes {
+        if !bytes.is_empty() {
+            let out = process::write_user_buffer(mapped, bytes.len()).ok_or(EFAULT)?;
+            out.copy_from_slice(&bytes);
+        }
+    }
+    if !writable {
+        process::mprotect(mapped, length, false).map_err(|_| ENOMEM)?;
+    }
+    Ok(mapped as u64)
+}
+
+fn linux_mprotect(addr: usize, len: usize, prot: i32) -> Result<u64, i64> {
+    if addr % FRAME_SIZE != 0 {
+        return Err(EINVAL);
+    }
+    let writable = mmap_writable(prot)?;
+    let length = page_aligned_len(len)?;
+    process::mprotect(addr, length, writable)
+        .map(|_| 0)
+        .map_err(|_| EINVAL)
+}
+
+fn linux_munmap(addr: usize, len: usize) -> Result<u64, i64> {
+    if addr % FRAME_SIZE != 0 {
+        return Err(EINVAL);
+    }
+    let length = page_aligned_len(len)?;
+    process::munmap(addr, length).map(|_| 0).map_err(|_| EINVAL)
+}
+
+fn mmap_writable(prot: i32) -> Result<bool, i64> {
+    if prot == 0 || prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
+        return Err(EINVAL);
+    }
+    Ok(prot & PROT_WRITE != 0)
+}
+
+fn page_aligned_len(len: usize) -> Result<usize, i64> {
+    if len == 0 {
+        return Err(EINVAL);
+    }
+    len.checked_add(FRAME_SIZE - 1)
+        .map(|value| value & !(FRAME_SIZE - 1))
+        .ok_or(ENOMEM)
+}
+
+fn read_mmap_file(fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let dup = fs::duplicate_fd(vfs_fd).map_err(map_vfs_error)?;
+    let result = read_mmap_file_from_vfs(dup, len, offset);
+    let _ = fs::close(dup);
+    result
+}
+
+fn read_mmap_file_from_vfs(vfs_fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
+    fs::lseek(vfs_fd, offset as isize, 0).map_err(map_vfs_error)?;
+    let mut bytes = Vec::new();
+    bytes.resize(len, 0);
+    let mut read = 0usize;
+    while read < len {
+        match fs::read(vfs_fd, &mut bytes[read..]) {
+            Ok(0) => break,
+            Ok(n) => read += n,
+            Err(fs::vfs::VfsError::WouldBlock) => break,
+            Err(err) => return Err(map_vfs_error(err)),
+        }
+    }
+    bytes.truncate(read);
+    Ok(bytes)
 }
 
 fn linux_time(tloc: usize) -> Result<u64, i64> {

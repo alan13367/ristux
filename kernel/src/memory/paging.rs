@@ -23,6 +23,7 @@ pub struct PageFlags(u64);
 
 impl PageFlags {
     pub const WRITABLE: Self = Self(PRESENT | WRITABLE);
+    pub const USER_READABLE: Self = Self(PRESENT | USER);
     pub const USER_WRITABLE: Self = Self(PRESENT | WRITABLE | USER);
 
     pub fn from_raw(flags: u64) -> Self {
@@ -31,6 +32,8 @@ impl PageFlags {
 }
 
 pub const WRITABLE_FLAG: u64 = WRITABLE;
+pub const PRESENT_FLAG: u64 = PRESENT;
+pub const USER_FLAG: u64 = USER;
 pub const COW_FLAG: u64 = 1 << 9;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

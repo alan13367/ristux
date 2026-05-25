@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -23,6 +24,9 @@
 #define SYS_FSTAT 5
 #define SYS_LSTAT 6
 #define SYS_LSEEK 8
+#define SYS_MMAP 9
+#define SYS_MPROTECT 10
+#define SYS_MUNMAP 11
 #define SYS_BRK 12
 #define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGRETURN 15
@@ -103,6 +107,15 @@ static long syscall4(long n, long a, long b, long c, long d) {
     return ret;
 }
 
+static long syscall6(long n, long a, long b, long c, long d, long e, long f) {
+    long ret;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    register long r9 __asm__("r9") = f;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+    return ret;
+}
+
 static long syscall_ret(long ret) {
     if (ret < 0 && ret >= -4095) {
         errno = (int)-ret;
@@ -159,6 +172,19 @@ int fcntl(int fd, int cmd, ...) {
         va_end(ap);
     }
     return (int)syscall_ret(syscall3(SYS_FCNTL, fd, cmd, arg));
+}
+
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    long ret = syscall6(SYS_MMAP, (long)addr, (long)length, prot, flags, fd, offset);
+    return (void *)syscall_ret(ret);
+}
+
+int munmap(void *addr, size_t length) {
+    return (int)syscall_ret(syscall2(SYS_MUNMAP, (long)addr, (long)length));
+}
+
+int mprotect(void *addr, size_t length, int prot) {
+    return (int)syscall_ret(syscall3(SYS_MPROTECT, (long)addr, (long)length, prot));
 }
 
 pid_t fork(void) {

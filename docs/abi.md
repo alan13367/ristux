@@ -64,6 +64,9 @@ The current Linux-like syscall surface is:
 | 5 | `fstat` | Descriptor metadata. |
 | 6 | `lstat` | Symlink metadata without final-target traversal. |
 | 8 | `lseek` | Regular file offsets. |
+| 9 | `mmap` | Anonymous and private file-backed mappings. |
+| 10 | `mprotect` | Read/read-write page permission changes. |
+| 11 | `munmap` | Unmaps page-aligned mmap ranges. |
 | 12 | `brk` | Process heap break used by the in-tree malloc. |
 | 13 | `rt_sigaction` | Installs one handler pointer per signal. |
 | 15 | `rt_sigreturn` | Returns from a delivered signal frame. |
@@ -83,7 +86,7 @@ The current Linux-like syscall surface is:
 | 49 | `bind` | Socket bind. |
 | 50 | `listen` | TCP listen. |
 | 51 | `getsockname` | Socket local address. |
-| 57 | `fork` | Full address-space copy; COW is not part of Phase E. |
+| 57 | `fork` | Copy-on-write user address-space clone. |
 | 59 | `execve` | Replaces image and preserves descriptors. |
 | 60 | `exit` | Terminates the current process. |
 | 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15. |
@@ -136,9 +139,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,
   `TIOCSPGRP`, and `TIOCGWINSZ`.
-- Memory/string/stdio: `brk`, `sbrk`, `malloc`, `calloc`, `realloc`, `free`,
-  `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`, `strcpy`,
-  `strncpy`, `strchr`, `putchar`, `puts`, `printf`, `vprintf`.
+- Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
+  `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
+  `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
+  `printf`, `vprintf`.
 
 `free` is currently a no-op because the first allocator is a simple `sbrk`
 bump allocator. Programs must not depend on reclaimed heap memory until a fuller
@@ -186,10 +190,12 @@ Phase E handler path is guaranteed.
 
 ## Current Limits
 
-These are explicit non-guarantees of the Phase E ABI:
+These are explicit non-guarantees of the current ABI:
 
-- No `mmap`, `munmap`, `mprotect`, `poll`, or `select` contract yet.
-- `fork` copies full address spaces instead of using copy-on-write.
+- No `poll` or `select` contract yet.
+- `mmap` currently supports `MAP_PRIVATE` anonymous mappings and private
+  file-backed reads. `MAP_SHARED`, `MAP_FIXED`, and demand paging are not part
+  of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
 - The libc is a Ristux foundation layer, not a complete musl/newlib port yet.
 - Socket coverage is enough for the current TCP/UDP fixtures, not a complete
