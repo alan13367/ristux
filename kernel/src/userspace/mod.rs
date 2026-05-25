@@ -15,6 +15,7 @@ use crate::{
 const USER_INIT_STACK_TOP: usize = 0x7000_2000;
 const MAX_USER_RANGES: usize = 16;
 const MAX_USER_MAPPINGS: usize = 32;
+const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
@@ -22,6 +23,7 @@ static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     last_exit_status: None,
 };
 static ACTIVE_USER: SpinLock<ActiveUserContext> = SpinLock::new(ActiveUserContext::empty());
+static USER_RUN_STATE: SpinLock<UserRunState> = SpinLock::new(UserRunState::new());
 
 #[derive(Clone, Copy)]
 struct UserRange {
@@ -68,7 +70,27 @@ struct ActiveUserContext {
 
 pub struct ActiveExit {
     pub name: &'static str,
+    pub pid: u64,
     pub unmapped_pages: usize,
+}
+
+struct UserRunState {
+    next_index: usize,
+    completed: usize,
+}
+
+impl UserRunState {
+    const fn new() -> Self {
+        Self {
+            next_index: 0,
+            completed: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.next_index = 0;
+        self.completed = 0;
+    }
 }
 
 impl ActiveUserContext {
@@ -209,27 +231,53 @@ pub fn stats() -> UserspaceStats {
     unsafe { USERSPACE_STATS }
 }
 
-pub fn enter_init_elf() -> ! {
-    let init = fs::read_file("/bin/init").unwrap_or_else(|| panic!("/bin/init missing from VFS"));
-    let process = UserProcess::load(1, "init", &init)
-        .unwrap_or_else(|err| panic!("failed to load /bin/init ELF for ring 3: {}", err));
+pub fn enter_userland_sequence() -> ! {
+    USER_RUN_STATE.lock().reset();
+    enter_next_user_program()
+}
+
+pub fn enter_next_user_program() -> ! {
+    let (index, path) = {
+        let mut state = USER_RUN_STATE.lock();
+        if state.next_index >= USER_PROGRAMS.len() {
+            crate::println!(
+                "Ring 3 user program sequence passed: {} program(s).",
+                state.completed
+            );
+            crate::arch::x86_64::instructions::enable_interrupts();
+            crate::halt_loop();
+        }
+
+        let index = state.next_index;
+        state.next_index += 1;
+        (index, USER_PROGRAMS[index])
+    };
+
+    let pid = (index + 1) as u64;
 
     {
         let mut active = ACTIVE_USER.lock();
-        *active = ActiveUserContext::new(process.pid(), process.name());
+        *active = ActiveUserContext::new(pid, path);
     }
 
-    map_user_elf(&process.image);
+    let entry = fs::with_file_data(path, |data| map_user_elf_bytes(path, data))
+        .unwrap_or_else(|| panic!("{} missing from VFS", path));
     map_user_stack(USER_INIT_STACK_TOP);
 
+    unsafe {
+        USERSPACE_STATS.processes_loaded += 1;
+    }
+
     crate::println!(
-        "Entering ring 3 ELF init at {:#x} with stack {:#x}.",
-        process.entry(),
+        "Entering ring 3 ELF program {} pid {} at {:#x} with stack {:#x}.",
+        path,
+        pid,
+        entry,
         USER_INIT_STACK_TOP
     );
 
     unsafe {
-        enter_user_mode(process.entry() as usize, USER_INIT_STACK_TOP);
+        enter_user_mode(entry as usize, USER_INIT_STACK_TOP);
     }
 }
 
@@ -249,11 +297,18 @@ pub fn active_user_pid() -> u64 {
     ACTIVE_USER.lock().pid
 }
 
+pub fn record_active_syscall() {
+    unsafe {
+        USERSPACE_STATS.syscalls_handled += 1;
+    }
+}
+
 pub fn finish_active_exit(status: i32) -> ActiveExit {
     let mut active = ACTIVE_USER.lock();
     active.exited = true;
     active.exit_status = status;
     let name = active.name;
+    let pid = active.pid;
     let mut unmapped_pages = 0;
 
     for index in 0..active.mapping_count {
@@ -274,9 +329,15 @@ pub fn finish_active_exit(status: i32) -> ActiveExit {
 
     active.range_count = 0;
     active.mapping_count = 0;
+    USER_RUN_STATE.lock().completed += 1;
+
+    unsafe {
+        USERSPACE_STATS.last_exit_status = Some(status);
+    }
 
     ActiveExit {
         name,
+        pid,
         unmapped_pages,
     }
 }
@@ -309,41 +370,68 @@ fn run_init_process(process: &mut UserProcess) {
     }
 }
 
-fn map_user_elf(image: &elf::LoadedElf) {
-    for segment in image.segments() {
-        let segment_start = segment.vaddr;
-        let segment_end = segment_start
-            .checked_add(segment.bytes.len())
-            .expect("ELF segment end overflow");
-        let map_start = align_down(segment_start, FRAME_SIZE);
-        let map_end = align_up(segment_end, FRAME_SIZE);
+fn map_user_elf_bytes(path: &str, data: &[u8]) -> u64 {
+    let mut segments = 0;
+    let entry = elf::for_each_load_segment(data, |segment| {
+        map_user_segment(segment);
+        segments += 1;
+    })
+    .unwrap_or_else(|err| panic!("failed to load {} ELF for ring 3: {}", path, err));
 
-        for page in (map_start..map_end).step_by(FRAME_SIZE) {
-            let frame = frame_allocator::allocate_frame()
-                .expect("ring 3 ELF segment frame allocation failed");
-            unsafe {
-                ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
-                let page_end = page + FRAME_SIZE;
-                let copy_start = cmp::max(page, segment_start);
-                let copy_end = cmp::min(page_end, segment_end);
-                if copy_start < copy_end {
-                    let source_offset = copy_start - segment_start;
-                    let target_offset = copy_start - page;
-                    ptr::copy_nonoverlapping(
-                        segment.bytes.as_ptr().add(source_offset),
-                        (frame.start + target_offset) as *mut u8,
-                        copy_end - copy_start,
-                    );
-                }
-
-                paging::map_page(page, frame.start, PageFlags::USER_WRITABLE)
-                    .unwrap_or_else(|err| panic!("ring 3 ELF segment map failed: {}", err));
-            }
-            ACTIVE_USER.lock().push_mapping(page, frame.start);
-        }
-
-        ACTIVE_USER.lock().push_range(segment_start, segment_end);
+    if segments == 0 {
+        panic!("{} ELF has no loadable segments", path);
     }
+
+    crate::println!(
+        "Ring 3 ELF loader: {} entry {:#x}, {} loadable segment(s)",
+        path,
+        entry,
+        segments
+    );
+
+    entry
+}
+
+fn map_user_segment(segment: elf::SegmentView<'_>) {
+    let segment_start = segment.vaddr;
+    let segment_end = segment_start
+        .checked_add(segment.mem_size)
+        .expect("ELF segment end overflow");
+    if segment_start == segment_end {
+        return;
+    }
+
+    let file_end = segment_start
+        .checked_add(segment.file_bytes.len())
+        .expect("ELF file segment end overflow");
+    let map_start = align_down(segment_start, FRAME_SIZE);
+    let map_end = align_up(segment_end, FRAME_SIZE);
+
+    for page in (map_start..map_end).step_by(FRAME_SIZE) {
+        let frame =
+            frame_allocator::allocate_frame().expect("ring 3 ELF segment frame allocation failed");
+        unsafe {
+            ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+            let page_end = page + FRAME_SIZE;
+            let copy_start = cmp::max(page, segment_start);
+            let copy_end = cmp::min(page_end, file_end);
+            if copy_start < copy_end {
+                let source_offset = copy_start - segment_start;
+                let target_offset = copy_start - page;
+                ptr::copy_nonoverlapping(
+                    segment.file_bytes.as_ptr().add(source_offset),
+                    (frame.start + target_offset) as *mut u8,
+                    copy_end - copy_start,
+                );
+            }
+
+            paging::map_page(page, frame.start, PageFlags::USER_WRITABLE)
+                .unwrap_or_else(|err| panic!("ring 3 ELF segment map failed: {}", err));
+        }
+        ACTIVE_USER.lock().push_mapping(page, frame.start);
+    }
+
+    ACTIVE_USER.lock().push_range(segment_start, segment_end);
 }
 
 fn map_user_stack(stack_top: usize) {

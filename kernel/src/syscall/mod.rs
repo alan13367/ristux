@@ -70,6 +70,8 @@ pub extern "C" fn syscall_interrupt_dispatch(frame: &mut SyscallInterruptFrame) 
 }
 
 fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
+    userspace::record_active_syscall();
+
     match frame.rax {
         SYS_WRITE => {
             frame.rax = match sys_write_active(
@@ -88,15 +90,14 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
             let status = frame.rdi as i32;
             let exit = userspace::finish_active_exit(status);
             crate::println!(
-                "Ring 3 ELF process {} exited with status {} from rip {:#x}; unmapped {} page(s).",
+                "Ring 3 ELF process {} pid {} exited with status {} from rip {:#x}; unmapped {} page(s).",
                 exit.name,
+                exit.pid,
                 status,
                 frame.rip,
                 exit.unmapped_pages
             );
-            crate::println!("Ring 3 ELF init passed.");
-            crate::arch::x86_64::instructions::enable_interrupts();
-            crate::halt_loop();
+            userspace::enter_next_user_program();
         }
         SYS_YIELD | SYS_SLEEP => {
             frame.rax = 0;

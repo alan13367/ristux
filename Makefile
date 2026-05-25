@@ -17,6 +17,12 @@ ISO_INITRD := $(ISO_DIR)/boot/initrd.bin
 ISO_IMAGE := build/ristux.iso
 USER_INIT_OBJ := build/userland/init.o
 USER_INIT_ELF := build/userland/init.elf
+USER_ECHO_OBJ := build/userland/echo.o
+USER_ECHO_ELF := build/userland/echo.elf
+USER_TRUE_OBJ := build/userland/true.o
+USER_TRUE_ELF := build/userland/true.elf
+USER_FALSE_OBJ := build/userland/false.o
+USER_FALSE_ELF := build/userland/false.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
 ROOTFS_BUILDER := build/build_rootfs
@@ -40,6 +46,27 @@ $(USER_INIT_OBJ): userland/init.S
 $(USER_INIT_ELF): $(USER_INIT_OBJ) userland/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_INIT_OBJ)
 
+$(USER_ECHO_OBJ): userland/echo.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_ECHO_ELF): $(USER_ECHO_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_ECHO_OBJ)
+
+$(USER_TRUE_OBJ): userland/true.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_TRUE_ELF): $(USER_TRUE_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_TRUE_OBJ)
+
+$(USER_FALSE_OBJ): userland/false.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_FALSE_ELF): $(USER_FALSE_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_FALSE_OBJ)
+
 $(USER_LIBC_OBJ): userland/libc.S
 	mkdir -p build/userland
 	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
@@ -51,7 +78,7 @@ $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

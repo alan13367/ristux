@@ -25,7 +25,9 @@ grep -q "SMP self-test passed" "$SERIAL_LOG"
 grep -q "AP bootstrap attempted 3 CPU(s), 3 reached Rust entry" "$SERIAL_LOG"
 grep -q "Framebuffer graphics self-test passed" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
-grep -q "Ring 3 ELF init passed" "$SERIAL_LOG"
+grep -q "echo: hello from real /bin/echo" "$SERIAL_LOG"
+grep -q "Ring 3 ELF process /bin/false pid 4 exited with status 1" "$SERIAL_LOG"
+grep -q "Ring 3 user program sequence passed: 4 program(s)" "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
 if grep -q "kernel panic" "$SERIAL_LOG"; then
   echo "kernel panic found in $SERIAL_LOG" >&2

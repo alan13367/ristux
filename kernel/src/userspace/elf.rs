@@ -14,6 +14,12 @@ pub struct LoadedSegment {
     pub bytes: Vec<u8>,
 }
 
+pub struct SegmentView<'a> {
+    pub vaddr: usize,
+    pub mem_size: usize,
+    pub file_bytes: &'a [u8],
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ElfError {
     TooSmall,
@@ -116,10 +122,6 @@ impl LoadedElf {
         None
     }
 
-    pub fn segments(&self) -> &[LoadedSegment] {
-        &self.segments
-    }
-
     pub fn find_bytes(&self, needle: &[u8]) -> Option<usize> {
         for segment in &self.segments {
             if segment.flags & 0x4 == 0 {
@@ -135,6 +137,83 @@ impl LoadedElf {
 
         None
     }
+}
+
+pub fn for_each_load_segment(
+    data: &[u8],
+    mut f: impl FnMut(SegmentView<'_>),
+) -> Result<u64, ElfError> {
+    let header = parse_header(data)?;
+
+    for index in 0..header.phnum {
+        let offset = header
+            .phoff
+            .checked_add(index * header.phentsize)
+            .ok_or(ElfError::OutOfBounds)?;
+        let end = offset.checked_add(56).ok_or(ElfError::OutOfBounds)?;
+        if end > data.len() {
+            return Err(ElfError::OutOfBounds);
+        }
+
+        let typ = read_u32(data, offset)?;
+        if typ != PT_LOAD {
+            continue;
+        }
+
+        let _flags = read_u32(data, offset + 4)?;
+        let file_offset = read_u64(data, offset + 8)? as usize;
+        let vaddr = read_u64(data, offset + 16)? as usize;
+        let filesz = read_u64(data, offset + 32)? as usize;
+        let memsz = read_u64(data, offset + 40)? as usize;
+        let file_end = file_offset.checked_add(filesz).ok_or(ElfError::OutOfBounds)?;
+        if file_end > data.len() || filesz > memsz {
+            return Err(ElfError::OutOfBounds);
+        }
+
+        f(SegmentView {
+            vaddr,
+            mem_size: memsz,
+            file_bytes: &data[file_offset..file_end],
+        });
+    }
+
+    Ok(header.entry)
+}
+
+struct ElfHeader {
+    entry: u64,
+    phoff: usize,
+    phentsize: usize,
+    phnum: usize,
+}
+
+fn parse_header(data: &[u8]) -> Result<ElfHeader, ElfError> {
+    if data.len() < 64 {
+        return Err(ElfError::TooSmall);
+    }
+
+    if data.get(0..4) != Some(b"\x7fELF") {
+        return Err(ElfError::BadMagic);
+    }
+
+    if data[4] != 2 || data[5] != 1 || read_u16(data, 18)? != 0x3e {
+        return Err(ElfError::Unsupported);
+    }
+
+    let entry = read_u64(data, 24)?;
+    let phoff = read_u64(data, 32)? as usize;
+    let phentsize = read_u16(data, 54)? as usize;
+    let phnum = read_u16(data, 56)? as usize;
+    if phentsize < 56 {
+        return Err(ElfError::Unsupported);
+    }
+
+    Ok(ElfHeader {
+        entry,
+        phoff,
+        phentsize,
+        phnum,
+    })
 }
 
 fn read_u16(data: &[u8], offset: usize) -> Result<u16, ElfError> {

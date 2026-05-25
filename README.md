@@ -119,8 +119,8 @@ grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|
 ```
 
 A passing boot reaches `Kernel self-test harness passed.`, runs the initrd
-`/bin/init` ELF in ring 3, logs the keyboard scancode from `sendkey a`, and
-does not print `kernel panic`.
+ring-3 ELF sequence, logs the keyboard scancode from `sendkey a`, and does
+not print `kernel panic`.
 
 ## Current Kernel Milestones
 
@@ -134,8 +134,8 @@ does not print `kernel panic`.
 - Runs a boot-time kernel self-test harness for core APIs.
 - Runs cooperative kernel tasks and timer-driven scheduler dispatch.
 - Loads `/bin/init` from a GRUB Multiboot2 initrd and parses its ELF image.
-- Maps and enters the initrd `/bin/init` ELF in CPL3 through the `int 0x80`
-  syscall gate.
+- Maps and enters initrd ELF programs in CPL3 through the `int 0x80` syscall
+  gate, including `/bin/init`, `/bin/echo`, `/bin/true`, and `/bin/false`.
 - Provides a small syscall ABI and process model with `fork`, `exec`, `wait`, and exit statuses.
 - Mounts an initrd-backed VFS with `/dev`, `/proc`, and `/tmp`.
 - Implements basic device files, pipes, redirection, and a scripted shell smoke test.

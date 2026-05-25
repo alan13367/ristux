@@ -277,6 +277,15 @@ impl Vfs {
         }
     }
 
+    fn with_file_data<T>(&self, path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
+        let node = self.nodes.iter().find(|node| node.path == path)?;
+        if node.kind == NodeKind::File {
+            Some(f(&node.data))
+        } else {
+            None
+        }
+    }
+
     fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
         self.nodes
             .iter()
@@ -329,6 +338,11 @@ pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool
 pub fn read_file(path: &str) -> Option<Vec<u8>> {
     let guard = VFS.lock();
     guard.as_ref().and_then(|vfs| vfs.read_file(path))
+}
+
+pub fn with_file_data<T>(path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
+    let guard = VFS.lock();
+    guard.as_ref().and_then(|vfs| vfs.with_file_data(path, f))
 }
 
 pub fn write_file(path: &str, data: &[u8]) {
