@@ -5,7 +5,10 @@ file /bin/cat ../build/userland/cat.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
 file /bin/ls ../build/userland/ls.elf
+file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/pwd ../build/userland/pwd.elf
+file /bin/rm ../build/userland/rm.elf
+file /bin/touch ../build/userland/touch.elf
 file /bin/true ../build/userland/true.elf
 file /etc/os-release etc/os-release
 file /lib/libc.so ../build/userland/libc.so
@@ -15,5 +18,8 @@ package false 0.1.0 /bin/false
 package init 0.1.0 /bin/init
 package libc 0.1.0 /lib/libc.so
 package ls 0.1.0 /bin/ls
+package mkdir 0.1.0 /bin/mkdir
 package pwd 0.1.0 /bin/pwd
+package rm 0.1.0 /bin/rm
+package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true

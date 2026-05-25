@@ -29,6 +29,12 @@ USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
 USER_PWD_ELF := build/userland/pwd.elf
+USER_TOUCH_OBJ := build/userland/touch.o
+USER_TOUCH_ELF := build/userland/touch.elf
+USER_MKDIR_OBJ := build/userland/mkdir.o
+USER_MKDIR_ELF := build/userland/mkdir.elf
+USER_RM_OBJ := build/userland/rm.o
+USER_RM_ELF := build/userland/rm.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
 ROOTFS_BUILDER := build/build_rootfs
@@ -94,6 +100,27 @@ $(USER_PWD_OBJ): userland/pwd.S
 $(USER_PWD_ELF): $(USER_PWD_OBJ) userland/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_PWD_OBJ)
 
+$(USER_TOUCH_OBJ): userland/touch.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_TOUCH_ELF): $(USER_TOUCH_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_TOUCH_OBJ)
+
+$(USER_MKDIR_OBJ): userland/mkdir.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_MKDIR_ELF): $(USER_MKDIR_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_MKDIR_OBJ)
+
+$(USER_RM_OBJ): userland/rm.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_RM_ELF): $(USER_RM_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_RM_OBJ)
+
 $(USER_LIBC_OBJ): userland/libc.S
 	mkdir -p build/userland
 	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
@@ -105,7 +132,7 @@ $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

@@ -18,9 +18,13 @@ pub const SYS_GETCWD: u64 = 10;
 pub const SYS_LISTDIR: u64 = 11;
 pub const SYS_DUP: u64 = 12;
 pub const SYS_DUP2: u64 = 13;
+pub const SYS_CREATE: u64 = 14;
+pub const SYS_MKDIR: u64 = 15;
+pub const SYS_UNLINK: u64 = 16;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
+const EEXIST: i64 = -17;
 const ENOENT: i64 = -2;
 const ENOSYS: i64 = -38;
 
@@ -165,6 +169,24 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_CREATE => {
+            frame.rax = match sys_create_active(frame.rdi as usize) {
+                Ok(fd) => fd,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_MKDIR => {
+            frame.rax = match sys_mkdir_active(frame.rdi as usize) {
+                Ok(status) => status,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_UNLINK => {
+            frame.rax = match sys_unlink_active(frame.rdi as usize) {
+                Ok(status) => status,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -265,6 +287,30 @@ fn sys_open_active(path_ptr: usize) -> SyscallResult {
         .map_err(map_vfs_error)
 }
 
+fn sys_create_active(path_ptr: usize) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    userspace::active_user_create(path)
+        .map(|fd| fd as u64)
+        .map_err(map_vfs_error)
+}
+
+fn sys_mkdir_active(path_ptr: usize) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    userspace::active_user_mkdir(path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn sys_unlink_active(path_ptr: usize) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    userspace::active_user_unlink(path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
     let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
@@ -346,6 +392,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
         VfsError::NotFound => SyscallError(ENOENT),
         VfsError::BadFd => SyscallError(EBADF),
         VfsError::NotFile | VfsError::Utf8 => SyscallError(EFAULT),
+        VfsError::AlreadyExists => SyscallError(EEXIST),
     }
 }
 

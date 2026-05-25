@@ -38,6 +38,7 @@ pub enum VfsError {
     NotFile,
     BadFd,
     Utf8,
+    AlreadyExists,
 }
 
 impl fmt::Display for VfsError {
@@ -47,6 +48,7 @@ impl fmt::Display for VfsError {
             Self::NotFile => f.write_str("not a file"),
             Self::BadFd => f.write_str("bad file descriptor"),
             Self::Utf8 => f.write_str("invalid utf-8"),
+            Self::AlreadyExists => f.write_str("already exists"),
         }
     }
 }
@@ -179,6 +181,17 @@ impl Vfs {
         });
     }
 
+    fn create_file(&mut self, path: &str) -> Result<usize, VfsError> {
+        self.ensure_parent_directory(path)?;
+        if let Some(node) = self.nodes.iter().find(|node| node.path == path) {
+            if node.kind != NodeKind::File {
+                return Err(VfsError::NotFile);
+            }
+        }
+        self.add_file(path, b"");
+        self.open(path)
+    }
+
     fn add_device(&mut self, path: &str, kind: DeviceKind) {
         let now = crate::time::filesystem_timestamp();
         self.nodes.push(Node {
@@ -233,6 +246,46 @@ impl Vfs {
             .and_then(|slot| *slot)
             .ok_or(VfsError::BadFd)?;
         self.push_open_handle(handle)
+    }
+
+    fn mkdir(&mut self, path: &str) -> Result<(), VfsError> {
+        if self.nodes.iter().any(|node| node.path == path) {
+            return Err(VfsError::AlreadyExists);
+        }
+        self.ensure_parent_directory(path)?;
+        self.add_directory(path);
+        Ok(())
+    }
+
+    fn unlink(&mut self, path: &str) -> Result<(), VfsError> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        if node.kind != NodeKind::File {
+            return Err(VfsError::NotFile);
+        }
+        node.path.clear();
+        Ok(())
+    }
+
+    fn ensure_parent_directory(&self, path: &str) -> Result<(), VfsError> {
+        if !path.starts_with('/') || path == "/" {
+            return Err(VfsError::NotFound);
+        }
+
+        let slash = path.rfind('/').ok_or(VfsError::NotFound)?;
+        let parent = if slash == 0 { "/" } else { &path[..slash] };
+        let parent = self
+            .nodes
+            .iter()
+            .find(|node| node.path == parent)
+            .ok_or(VfsError::NotFound)?;
+        if parent.kind != NodeKind::Directory {
+            return Err(VfsError::NotFile);
+        }
+        Ok(())
     }
 
     fn read(&mut self, fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
@@ -403,6 +456,10 @@ pub fn create_pipe(capacity: usize) -> Result<(usize, usize), VfsError> {
     with_vfs(|vfs| vfs.create_pipe(capacity))
 }
 
+pub fn create_file(path: &str) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.create_file(path))
+}
+
 pub fn duplicate_fd(fd: usize) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.duplicate_fd(fd))
 }
@@ -421,6 +478,14 @@ pub fn close(fd: usize) -> Result<(), VfsError> {
 
 pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.chmod(path, mode))
+}
+
+pub fn mkdir(path: &str) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.mkdir(path))
+}
+
+pub fn unlink(path: &str) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.unlink(path))
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
@@ -481,6 +546,18 @@ pub fn self_test() {
     close(duplicated).expect("close duplicated fd failed");
     if dup_read != dup_bytes.len() || &dup_bytes != b"dup ok" {
         panic!("duplicated fd self-test read wrong data");
+    }
+
+    mkdir("/tmp/vfsdir").expect("mkdir self-test failed");
+    let fd = create_file("/tmp/vfsdir/created.txt").expect("create file self-test failed");
+    write(fd, b"created").expect("write created file self-test failed");
+    close(fd).expect("close created file self-test failed");
+    if read_file("/tmp/vfsdir/created.txt").as_deref() != Some(b"created") {
+        panic!("created file self-test read wrong data");
+    }
+    unlink("/tmp/vfsdir/created.txt").expect("unlink self-test failed");
+    if read_file("/tmp/vfsdir/created.txt").is_some() {
+        panic!("unlink self-test left file reachable");
     }
 
     let fd = open("/dev/console").expect("open /dev/console failed");

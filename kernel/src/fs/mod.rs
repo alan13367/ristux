@@ -15,6 +15,10 @@ pub fn create_pipe(capacity: usize) -> Result<(usize, usize), vfs::VfsError> {
     vfs::create_pipe(capacity)
 }
 
+pub fn create_file(path: &str) -> Result<usize, vfs::VfsError> {
+    vfs::create_file(path)
+}
+
 pub fn duplicate_fd(fd: usize) -> Result<usize, vfs::VfsError> {
     vfs::duplicate_fd(fd)
 }
@@ -29,6 +33,14 @@ pub fn write(fd: usize, input: &[u8]) -> Result<usize, vfs::VfsError> {
 
 pub fn close(fd: usize) -> Result<(), vfs::VfsError> {
     vfs::close(fd)
+}
+
+pub fn mkdir(path: &str) -> Result<(), vfs::VfsError> {
+    vfs::mkdir(path)
+}
+
+pub fn unlink(path: &str) -> Result<(), vfs::VfsError> {
+    vfs::unlink(path)
 }
 
 pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {

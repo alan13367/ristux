@@ -151,6 +151,8 @@ not print `kernel panic`.
   `/bin/cat` read either an argv path or stdin fd 0.
 - Supports user-mode `dup`/`dup2` syscalls and shell input redirection such as
   `/bin/cat < file`.
+- Exposes user-mode `create`, `mkdir`, and `unlink` syscalls through
+  shell-launched `/bin/touch`, `/bin/mkdir`, and `/bin/rm`.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

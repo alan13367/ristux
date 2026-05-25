@@ -9,6 +9,12 @@ pub fn init() {
         "echo hello from shell",
         "/bin/echo hello from argv",
         "/bin/ls /bin",
+        "/bin/mkdir /tmp/work",
+        "/bin/touch /tmp/work/empty.txt",
+        "/bin/ls /tmp/work",
+        "/bin/rm /tmp/work/empty.txt",
+        "/bin/cat /tmp/work/empty.txt",
+        "/bin/ls /tmp/work",
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
@@ -93,7 +99,10 @@ fn external_path(program: &str) -> Option<&'static str> {
         "cat" | "/bin/cat" => Some("/bin/cat"),
         "/bin/echo" => Some("/bin/echo"),
         "ls" | "/bin/ls" => Some("/bin/ls"),
+        "mkdir" | "/bin/mkdir" => Some("/bin/mkdir"),
         "pwd" | "/bin/pwd" => Some("/bin/pwd"),
+        "rm" | "/bin/rm" => Some("/bin/rm"),
+        "touch" | "/bin/touch" => Some("/bin/touch"),
         "true" | "/bin/true" => Some("/bin/true"),
         "false" | "/bin/false" => Some("/bin/false"),
         _ => None,
@@ -156,7 +165,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
     let args: Vec<&str> = parts.collect();
 
     match program {
-        "help" => output("builtins: help clear echo pwd cd exit ls cat true false\n"),
+        "help" => output("builtins: help clear echo pwd cd exit ls cat mkdir rm touch true false\n"),
         "clear" => output("\x0c"),
         "echo" => {
             let mut text = args.join(" ");
@@ -170,6 +179,9 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         }
         "exit" => output("exit\n"),
         "ls" => run_external_with_args("/bin/ls", &args),
+        "mkdir" => run_external_with_args("/bin/mkdir", &args),
+        "rm" => run_external_with_args("/bin/rm", &args),
+        "touch" => run_external_with_args("/bin/touch", &args),
         "cat" => {
             let Some(path) = args.first() else {
                 return String::new();
@@ -187,7 +199,10 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "/bin/cat" => run_external_with_args("/bin/cat", &args),
         "/bin/echo" => run_external_with_args("/bin/echo", &args),
         "/bin/ls" => run_external_with_args("/bin/ls", &args),
+        "/bin/mkdir" => run_external_with_args("/bin/mkdir", &args),
         "/bin/pwd" => run_external("/bin/pwd"),
+        "/bin/rm" => run_external_with_args("/bin/rm", &args),
+        "/bin/touch" => run_external_with_args("/bin/touch", &args),
         other => {
             let mut text = String::from(other);
             text.push_str(": not found\n");

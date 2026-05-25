@@ -136,7 +136,7 @@ impl RamDiskFs {
 
 pub fn init() {
     *STORAGE.lock() = Some(RamDiskFs::new());
-    crate::fs::vfs::write_file("/disk", b"");
+    crate::fs::vfs::mkdir("/disk").expect("failed to mount /disk directory");
     crate::println!("RAM disk initialized: {} bytes.", RAMDISK_SIZE);
 }
 

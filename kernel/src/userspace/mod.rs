@@ -540,6 +540,20 @@ pub fn active_user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     Ok(active.push_fd(vfs_fd))
 }
 
+pub fn active_user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
+    let vfs_fd = fs::create_file(path)?;
+    let mut active = ACTIVE_USER.lock();
+    Ok(active.push_fd(vfs_fd))
+}
+
+pub fn active_user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
+    fs::mkdir(path)
+}
+
+pub fn active_user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
+    fs::unlink(path)
+}
+
 pub fn active_user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
     let vfs_fd = ACTIVE_USER
         .lock()
