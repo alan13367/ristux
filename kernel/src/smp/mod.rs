@@ -1,5 +1,5 @@
 use alloc::{vec, vec::Vec};
-use core::ptr;
+use core::{arch::asm, ptr};
 
 use crate::{
     memory::{
@@ -11,6 +11,14 @@ use crate::{
 };
 
 static SMP: SpinLock<Option<SmpSystem>> = SpinLock::new(None);
+
+const IA32_APIC_BASE_MSR: u32 = 0x1b;
+const APIC_BASE_ENABLE: u64 = 1 << 11;
+const APIC_BASE_MASK: u64 = 0x000f_ffff_ffff_f000;
+const APIC_VERSION: usize = 0x30;
+const APIC_SPURIOUS_VECTOR: usize = 0xf0;
+const APIC_SOFTWARE_ENABLE: u32 = 1 << 8;
+const APIC_SPURIOUS_IRQ_VECTOR: u32 = 0xff;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuId(pub usize);
@@ -494,14 +502,21 @@ fn find_mp_floating_pointer() -> Option<usize> {
 }
 
 fn map_local_apic(addr: u32) -> (bool, u32) {
-    if addr == 0 {
+    let msr_base = enable_local_apic();
+    let base = if addr == 0 { msr_base as u32 } else { addr };
+    if base == 0 {
         return (false, 0);
     }
-    let Some(()) = map_physical_range(addr as usize, FRAME_SIZE) else {
+    let Some(()) = map_physical_range(base as usize, FRAME_SIZE) else {
         return (false, 0);
     };
 
-    let version = read_u32(addr as usize + 0x30);
+    let spurious = read_u32(base as usize + APIC_SPURIOUS_VECTOR);
+    write_u32(
+        base as usize + APIC_SPURIOUS_VECTOR,
+        spurious | APIC_SOFTWARE_ENABLE | APIC_SPURIOUS_IRQ_VECTOR,
+    );
+    let version = read_u32(base as usize + APIC_VERSION);
     (true, version)
 }
 
@@ -562,6 +577,12 @@ fn read_u32(addr: usize) -> u32 {
     ])
 }
 
+fn write_u32(addr: usize, value: u32) {
+    unsafe {
+        ptr::write_volatile(addr as *mut u32, value);
+    }
+}
+
 fn read_u64(addr: usize) -> u64 {
     u64::from_le_bytes([
         read_u8(addr),
@@ -577,4 +598,38 @@ fn read_u64(addr: usize) -> u64 {
 
 const fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
+}
+
+fn enable_local_apic() -> usize {
+    let mut value = read_msr(IA32_APIC_BASE_MSR);
+    value |= APIC_BASE_ENABLE;
+    write_msr(IA32_APIC_BASE_MSR, value);
+    (value & APIC_BASE_MASK) as usize
+}
+
+fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    ((high as u64) << 32) | low as u64
+}
+
+fn write_msr(msr: u32, value: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
 }
