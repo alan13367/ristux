@@ -86,12 +86,13 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         }
         SYS_EXIT => {
             let status = frame.rdi as i32;
-            let name = userspace::record_active_exit(status);
+            let exit = userspace::finish_active_exit(status);
             crate::println!(
-                "Ring 3 ELF process {} exited with status {} from rip {:#x}.",
-                name,
+                "Ring 3 ELF process {} exited with status {} from rip {:#x}; unmapped {} page(s).",
+                exit.name,
                 status,
-                frame.rip
+                frame.rip,
+                exit.unmapped_pages
             );
             crate::println!("Ring 3 ELF init passed.");
             crate::arch::x86_64::instructions::enable_interrupts();

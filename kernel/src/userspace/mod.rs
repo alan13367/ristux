@@ -14,6 +14,7 @@ use crate::{
 
 const USER_INIT_STACK_TOP: usize = 0x7000_2000;
 const MAX_USER_RANGES: usize = 16;
+const MAX_USER_MAPPINGS: usize = 32;
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
@@ -26,6 +27,12 @@ static ACTIVE_USER: SpinLock<ActiveUserContext> = SpinLock::new(ActiveUserContex
 struct UserRange {
     start: usize,
     end: usize,
+}
+
+#[derive(Clone, Copy)]
+struct UserMapping {
+    virt: usize,
+    phys: usize,
 }
 
 impl UserRange {
@@ -42,13 +49,26 @@ impl UserRange {
     }
 }
 
+impl UserMapping {
+    const fn empty() -> Self {
+        Self { virt: 0, phys: 0 }
+    }
+}
+
 struct ActiveUserContext {
     pid: u64,
     name: &'static str,
     range_count: usize,
     ranges: [UserRange; MAX_USER_RANGES],
+    mapping_count: usize,
+    mappings: [UserMapping; MAX_USER_MAPPINGS],
     exited: bool,
     exit_status: i32,
+}
+
+pub struct ActiveExit {
+    pub name: &'static str,
+    pub unmapped_pages: usize,
 }
 
 impl ActiveUserContext {
@@ -58,6 +78,8 @@ impl ActiveUserContext {
             name: "",
             range_count: 0,
             ranges: [UserRange::empty(); MAX_USER_RANGES],
+            mapping_count: 0,
+            mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
             exited: false,
             exit_status: 0,
         }
@@ -69,6 +91,8 @@ impl ActiveUserContext {
             name,
             range_count: 0,
             ranges: [UserRange::empty(); MAX_USER_RANGES],
+            mapping_count: 0,
+            mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
             exited: false,
             exit_status: 0,
         }
@@ -81,6 +105,15 @@ impl ActiveUserContext {
 
         self.ranges[self.range_count] = UserRange { start, end };
         self.range_count += 1;
+    }
+
+    fn push_mapping(&mut self, virt: usize, phys: usize) {
+        if self.mapping_count >= MAX_USER_MAPPINGS {
+            panic!("too many active user page mappings");
+        }
+
+        self.mappings[self.mapping_count] = UserMapping { virt, phys };
+        self.mapping_count += 1;
     }
 
     fn allows(&self, addr: usize, len: usize) -> bool {
@@ -216,11 +249,36 @@ pub fn active_user_pid() -> u64 {
     ACTIVE_USER.lock().pid
 }
 
-pub fn record_active_exit(status: i32) -> &'static str {
+pub fn finish_active_exit(status: i32) -> ActiveExit {
     let mut active = ACTIVE_USER.lock();
     active.exited = true;
     active.exit_status = status;
-    active.name
+    let name = active.name;
+    let mut unmapped_pages = 0;
+
+    for index in 0..active.mapping_count {
+        let mapping = active.mappings[index];
+        let unmapped = unsafe {
+            paging::unmap_page(mapping.virt)
+                .unwrap_or_else(|err| panic!("ring 3 ELF unmap failed: {}", err))
+        };
+        if unmapped != mapping.phys {
+            panic!("ring 3 ELF unmap returned unexpected frame {:#x}", unmapped);
+        }
+
+        frame_allocator::free_frame(frame_allocator::Frame {
+            start: mapping.phys,
+        });
+        unmapped_pages += 1;
+    }
+
+    active.range_count = 0;
+    active.mapping_count = 0;
+
+    ActiveExit {
+        name,
+        unmapped_pages,
+    }
 }
 
 fn run_init_process(process: &mut UserProcess) {
@@ -281,6 +339,7 @@ fn map_user_elf(image: &elf::LoadedElf) {
                 paging::map_page(page, frame.start, PageFlags::USER_WRITABLE)
                     .unwrap_or_else(|err| panic!("ring 3 ELF segment map failed: {}", err));
             }
+            ACTIVE_USER.lock().push_mapping(page, frame.start);
         }
 
         ACTIVE_USER.lock().push_range(segment_start, segment_end);
@@ -298,6 +357,7 @@ fn map_user_stack(stack_top: usize) {
             .unwrap_or_else(|err| panic!("ring 3 ELF stack map failed: {}", err));
     }
 
+    ACTIVE_USER.lock().push_mapping(stack_bottom, frame.start);
     ACTIVE_USER.lock().push_range(stack_bottom, stack_top);
 }
 
