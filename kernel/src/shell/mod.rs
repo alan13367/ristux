@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::{fs, ipc::pipe::Pipe, process, userspace};
+use crate::{fs, process, userspace};
 
 pub fn init() {
     run_script(&[
@@ -12,8 +12,8 @@ pub fn init() {
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
-        "/bin/cat",
-        "cat /tmp/message.txt | cat",
+        "/bin/cat /tmp/message.txt",
+        "/bin/cat /tmp/message.txt | /bin/cat",
         "true",
         "false",
     ]);
@@ -31,18 +31,7 @@ fn run_line(line: &str, cwd: &mut String) {
     crate::println!("sh$ {}", line);
 
     if let Some((left, right)) = line.split_once('|') {
-        let output = run_command(left.trim(), cwd);
-        let mut pipe = Pipe::new(256);
-        pipe.write(output.as_bytes());
-        let mut bytes = [0; 256];
-        let read = pipe.read(&mut bytes);
-        let piped_input = core::str::from_utf8(&bytes[..read]).unwrap_or("");
-        let command = right.trim();
-        if command == "cat" {
-            crate::print!("{}", piped_input);
-        } else {
-            run_command(command, cwd);
-        }
+        run_pipeline(left.trim(), right.trim(), cwd);
         return;
     }
 
@@ -52,6 +41,57 @@ fn run_line(line: &str, cwd: &mut String) {
     }
 
     run_command(line, cwd);
+}
+
+fn run_pipeline(left: &str, right: &str, cwd: &mut String) {
+    if run_external_pipeline(left, right) {
+        return;
+    }
+
+    let output = run_command(left, cwd);
+    if right == "cat" {
+        crate::print!("{}", output);
+    } else {
+        run_command(right, cwd);
+    }
+}
+
+fn run_external_pipeline(left: &str, right: &str) -> bool {
+    let Some((left_path, left_args)) = parse_external_command(left) else {
+        return false;
+    };
+    let Some((right_path, right_args)) = parse_external_command(right) else {
+        return false;
+    };
+
+    let (read_fd, write_fd) = fs::create_pipe(4096).expect("shell pipe creation failed");
+    run_external_with_fds(left_path, &left_args, None, Some(write_fd));
+    run_external_with_fds(right_path, &right_args, Some(read_fd), None);
+    crate::println!(
+        "Ring 3 pipeline connected {} -> {} through VFS pipe.",
+        left_path,
+        right_path
+    );
+    true
+}
+
+fn parse_external_command(command: &str) -> Option<(&'static str, Vec<&str>)> {
+    let mut parts = command.split_whitespace();
+    let program = parts.next()?;
+    let path = external_path(program)?;
+    Some((path, parts.collect()))
+}
+
+fn external_path(program: &str) -> Option<&'static str> {
+    match program {
+        "cat" | "/bin/cat" => Some("/bin/cat"),
+        "/bin/echo" => Some("/bin/echo"),
+        "ls" | "/bin/ls" => Some("/bin/ls"),
+        "pwd" | "/bin/pwd" => Some("/bin/pwd"),
+        "true" | "/bin/true" => Some("/bin/true"),
+        "false" | "/bin/false" => Some("/bin/false"),
+        _ => None,
+    }
 }
 
 fn run_redirected(command: &str, target: &str, cwd: &mut String) {
@@ -107,7 +147,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         }
         "true" => run_external("/bin/true"),
         "false" => run_external("/bin/false"),
-        "/bin/cat" => run_external("/bin/cat"),
+        "/bin/cat" => run_external_with_args("/bin/cat", &args),
         "/bin/echo" => run_external_with_args("/bin/echo", &args),
         "/bin/ls" => run_external_with_args("/bin/ls", &args),
         "/bin/pwd" => run_external("/bin/pwd"),
@@ -129,7 +169,7 @@ fn run_external(path: &'static str) -> String {
 }
 
 fn run_external_with_args(path: &'static str, args: &[&str]) -> String {
-    run_external_with_stdio(path, args, None)
+    run_external_with_fds(path, args, None, None)
 }
 
 fn run_external_with_redirect(path: &'static str, args: &[&str], stdout_path: &str) -> String {
@@ -137,13 +177,34 @@ fn run_external_with_redirect(path: &'static str, args: &[&str], stdout_path: &s
 }
 
 fn run_external_with_stdio(path: &'static str, args: &[&str], stdout_path: Option<&str>) -> String {
+    run_external_with_process(path, args, |argv, child| {
+        userspace::run_user_program_with_stdio(path, argv, child, stdout_path)
+    })
+}
+
+fn run_external_with_fds(
+    path: &'static str,
+    args: &[&str],
+    stdin_vfs_fd: Option<usize>,
+    stdout_vfs_fd: Option<usize>,
+) -> String {
+    run_external_with_process(path, args, |argv, child| {
+        userspace::run_user_program_with_fds(path, argv, child, stdin_vfs_fd, stdout_vfs_fd)
+    })
+}
+
+fn run_external_with_process(
+    path: &'static str,
+    args: &[&str],
+    runner: impl FnOnce(&[&str], u64) -> userspace::UserProgramResult,
+) -> String {
     let parent = 1;
     let child = process::fork(parent).expect("shell fork failed");
     process::exec(child, path);
     let mut argv = Vec::new();
     argv.push(path);
     argv.extend_from_slice(args);
-    let result = userspace::run_user_program_with_stdio(path, &argv, child, stdout_path);
+    let result = runner(&argv, child);
     process::exit(child, result.status);
     let waited = process::wait(parent, child).unwrap_or(-1);
     crate::println!(

@@ -11,6 +11,10 @@ pub fn open(path: &str) -> Result<usize, vfs::VfsError> {
     vfs::open(path)
 }
 
+pub fn create_pipe(capacity: usize) -> Result<(usize, usize), vfs::VfsError> {
+    vfs::create_pipe(capacity)
+}
+
 pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, vfs::VfsError> {
     vfs::read(fd, output)
 }

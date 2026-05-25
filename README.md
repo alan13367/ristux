@@ -147,6 +147,8 @@ not print `kernel panic`.
   `/bin/pwd` and `/bin/ls`.
 - Maps redirected stdout for shell-launched user programs, so `/bin/echo ... >
   file` writes through a real CPL3 `write` syscall to the VFS.
+- Maps anonymous VFS pipes between shell-launched ring-3 programs, and lets
+  `/bin/cat` read either an argv path or stdin fd 0.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

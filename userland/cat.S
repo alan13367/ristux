@@ -1,13 +1,24 @@
 .section .text
 .global _start
 _start:
+    mov %rdi, %r14
+    mov %rsi, %r15
+    xor %r13, %r13
+    cmp $1, %r14
+    jle .use_stdin
+
     mov $8, %rax
-    lea path(%rip), %rdi
+    mov 8(%r15), %rdi
     xor %rsi, %rsi
     int $0x80
     test %rax, %rax
     js .fail
     mov %rax, %r12
+    mov $1, %r13
+    jmp .read_loop
+
+.use_stdin:
+    xor %r12, %r12
 
 .read_loop:
     mov $2, %rax
@@ -27,15 +38,20 @@ _start:
     jmp .read_loop
 
 .done:
+    test %r13, %r13
+    jz .exit_ok
     mov $9, %rax
     mov %r12, %rdi
     int $0x80
 
+.exit_ok:
     mov $3, %rax
     xor %rdi, %rdi
     int $0x80
 
 .fail_close:
+    test %r13, %r13
+    jz .fail
     mov $9, %rax
     mov %r12, %rdi
     int $0x80
@@ -47,10 +63,6 @@ _start:
 
 .halt:
     jmp .halt
-
-.section .rodata
-path:
-    .asciz "/tmp/message.txt"
 
 .section .bss
 .align 16

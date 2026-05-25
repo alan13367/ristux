@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::{fmt, str};
 
 use crate::{
@@ -59,14 +59,55 @@ struct Node {
     data: Vec<u8>,
 }
 
-struct OpenFile {
-    node: usize,
-    offset: usize,
+#[derive(Clone, Copy)]
+enum OpenHandle {
+    Node { node: usize, offset: usize },
+    PipeRead { pipe: usize },
+    PipeWrite { pipe: usize },
+}
+
+struct PipeState {
+    buffer: VecDeque<u8>,
+    capacity: usize,
+}
+
+impl PipeState {
+    fn new(capacity: usize) -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn read(&mut self, output: &mut [u8]) -> usize {
+        let mut read = 0;
+        for byte in output {
+            let Some(value) = self.buffer.pop_front() else {
+                break;
+            };
+            *byte = value;
+            read += 1;
+        }
+        read
+    }
+
+    fn write(&mut self, input: &[u8]) -> usize {
+        let mut written = 0;
+        for byte in input {
+            if self.buffer.len() == self.capacity {
+                break;
+            }
+            self.buffer.push_back(*byte);
+            written += 1;
+        }
+        written
+    }
 }
 
 pub struct Vfs {
     nodes: Vec<Node>,
-    open_files: Vec<Option<OpenFile>>,
+    open_files: Vec<Option<OpenHandle>>,
+    pipes: Vec<PipeState>,
 }
 
 impl Vfs {
@@ -74,6 +115,7 @@ impl Vfs {
         let mut vfs = Self {
             nodes: Vec::new(),
             open_files: Vec::new(),
+            pipes: Vec::new(),
         };
 
         vfs.add_directory("/");
@@ -161,83 +203,118 @@ impl Vfs {
             return Err(VfsError::NotFile);
         }
 
+        self.push_open_handle(OpenHandle::Node { node, offset: 0 })
+    }
+
+    fn push_open_handle(&mut self, handle: OpenHandle) -> Result<usize, VfsError> {
         for (fd, slot) in self.open_files.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(OpenFile { node, offset: 0 });
+                *slot = Some(handle);
                 return Ok(fd);
             }
         }
 
-        self.open_files.push(Some(OpenFile { node, offset: 0 }));
+        self.open_files.push(Some(handle));
         Ok(self.open_files.len() - 1)
     }
 
+    fn create_pipe(&mut self, capacity: usize) -> Result<(usize, usize), VfsError> {
+        let pipe = self.pipes.len();
+        self.pipes.push(PipeState::new(capacity));
+        let read_fd = self.push_open_handle(OpenHandle::PipeRead { pipe })?;
+        let write_fd = self.push_open_handle(OpenHandle::PipeWrite { pipe })?;
+        Ok((read_fd, write_fd))
+    }
+
     fn read(&mut self, fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
-        let Some(open_file) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
+        let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
-        let node = &self.nodes[open_file.node];
 
-        match node.kind {
-            NodeKind::File => {
-                let remaining = node.data.len().saturating_sub(open_file.offset);
-                let count = remaining.min(output.len());
-                output[..count]
-                    .copy_from_slice(&node.data[open_file.offset..open_file.offset + count]);
-                open_file.offset += count;
-                Ok(count)
-            }
-            NodeKind::Device(DeviceKind::Null) => Ok(0),
-            NodeKind::Device(DeviceKind::Zero) => {
-                output.fill(0);
-                Ok(output.len())
-            }
-            NodeKind::Device(DeviceKind::Keyboard) => {
-                let mut count = 0;
-                for byte in output.iter_mut() {
-                    let Some(scancode) = drivers::keyboard::pop_scancode() else {
-                        break;
+        match handle {
+            OpenHandle::Node { node, offset } => {
+                let node = &self.nodes[*node];
+                if node.kind != NodeKind::File {
+                    return match node.kind {
+                        NodeKind::Device(DeviceKind::Null) => Ok(0),
+                        NodeKind::Device(DeviceKind::Zero) => {
+                            output.fill(0);
+                            Ok(output.len())
+                        }
+                        NodeKind::Device(DeviceKind::Keyboard) => {
+                            let mut count = 0;
+                            for byte in output.iter_mut() {
+                                let Some(scancode) = drivers::keyboard::pop_scancode() else {
+                                    break;
+                                };
+                                *byte = scancode;
+                                count += 1;
+                            }
+                            Ok(count)
+                        }
+                        NodeKind::Device(DeviceKind::Console) => Ok(0),
+                        NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
+                        NodeKind::Directory => Err(VfsError::NotFile),
+                        NodeKind::File => unreachable!(),
                     };
-                    *byte = scancode;
-                    count += 1;
                 }
+
+                let remaining = node.data.len().saturating_sub(*offset);
+                let count = remaining.min(output.len());
+                output[..count].copy_from_slice(&node.data[*offset..*offset + count]);
+                *offset += count;
                 Ok(count)
             }
-            NodeKind::Device(DeviceKind::Console) => Ok(0),
-            NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
-            NodeKind::Directory => Err(VfsError::NotFile),
+            OpenHandle::PipeRead { pipe } => {
+                let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
+                Ok(pipe.read(output))
+            }
+            OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
         }
     }
 
     fn write(&mut self, fd: usize, input: &[u8]) -> Result<usize, VfsError> {
-        let Some(open_file) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
+        let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
-        let node = &mut self.nodes[open_file.node];
 
-        match node.kind {
-            NodeKind::File => {
-                if open_file.offset > node.data.len() {
-                    node.data.resize(open_file.offset, 0);
+        match handle {
+            OpenHandle::Node { node, offset } => {
+                let node = &mut self.nodes[*node];
+                if node.kind != NodeKind::File {
+                    return match node.kind {
+                        NodeKind::Device(DeviceKind::Null) => Ok(input.len()),
+                        NodeKind::Device(DeviceKind::Console) => {
+                            let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
+                            crate::print!("{}", text);
+                            Ok(input.len())
+                        }
+                        NodeKind::Device(DeviceKind::Framebuffer) => {
+                            Ok(drivers::framebuffer::write_bytes(input))
+                        }
+                        NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
+                        NodeKind::Directory => Err(VfsError::NotFile),
+                        NodeKind::File => unreachable!(),
+                    };
                 }
-                let end = open_file.offset + input.len();
+
+                if *offset > node.data.len() {
+                    node.data.resize(*offset, 0);
+                }
+                let end = *offset + input.len();
                 if end > node.data.len() {
                     node.data.resize(end, 0);
                 }
-                node.data[open_file.offset..end].copy_from_slice(input);
-                open_file.offset = end;
+                node.data[*offset..end].copy_from_slice(input);
+                *offset = end;
                 node.timestamps.modified_at = crate::time::filesystem_timestamp();
                 Ok(input.len())
             }
-            NodeKind::Device(DeviceKind::Null) => Ok(input.len()),
-            NodeKind::Device(DeviceKind::Console) => {
-                let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
-                crate::print!("{}", text);
-                Ok(input.len())
+            OpenHandle::PipeWrite { pipe } => {
+                let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
+                Ok(pipe.write(input))
             }
-            NodeKind::Device(DeviceKind::Framebuffer) => Ok(drivers::framebuffer::write_bytes(input)),
-            NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
-            NodeKind::Directory => Err(VfsError::NotFile),
+            OpenHandle::PipeRead { .. } => Err(VfsError::BadFd),
         }
     }
 
@@ -311,6 +388,10 @@ pub fn init(initrd: &Initrd) {
 
 pub fn open(path: &str) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.open(path))
+}
+
+pub fn create_pipe(capacity: usize) -> Result<(usize, usize), VfsError> {
+    with_vfs(|vfs| vfs.create_pipe(capacity))
 }
 
 pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {

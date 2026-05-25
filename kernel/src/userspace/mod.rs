@@ -437,20 +437,39 @@ pub fn run_user_program_with_stdio(
     pid: u64,
     stdout_path: Option<&str>,
 ) -> UserProgramResult {
+    let stdout_vfs_fd = stdout_path.map(|stdout_path| {
+        fs::write_file(stdout_path, b"");
+        fs::open(stdout_path).unwrap_or_else(|err| {
+            panic!(
+                "failed to open redirected stdout {}: {}",
+                stdout_path, err
+            )
+        })
+    });
+
+    run_user_program_with_fds(path, args, pid, None, stdout_vfs_fd)
+}
+
+pub fn run_user_program_with_fds(
+    path: &'static str,
+    args: &[&str],
+    pid: u64,
+    stdin_vfs_fd: Option<usize>,
+    stdout_vfs_fd: Option<usize>,
+) -> UserProgramResult {
     {
         let mut active = ACTIVE_USER.lock();
         *active = ActiveUserContext::new(pid, path);
     }
 
-    if let Some(stdout_path) = stdout_path {
-        fs::write_file(stdout_path, b"");
-        let stdout_fd = fs::open(stdout_path).unwrap_or_else(|err| {
-            panic!(
-                "failed to open redirected stdout {}: {}",
-                stdout_path, err
-            )
-        });
-        ACTIVE_USER.lock().set_fd(1, stdout_fd);
+    {
+        let mut active = ACTIVE_USER.lock();
+        if let Some(stdin_vfs_fd) = stdin_vfs_fd {
+            active.set_fd(0, stdin_vfs_fd);
+        }
+        if let Some(stdout_vfs_fd) = stdout_vfs_fd {
+            active.set_fd(1, stdout_vfs_fd);
+        }
     }
 
     let entry = fs::with_file_data(path, |data| map_user_elf_bytes(path, data))
