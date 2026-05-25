@@ -25,6 +25,7 @@ pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
 pub const NR_pipe: u64 = 22;
+pub const NR_sched_yield: u64 = 24;
 pub const NR_dup2: u64 = 33;
 pub const NR_getpid: u64 = 39;
 pub const NR_fork: u64 = 57;
@@ -67,12 +68,17 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let _a4 = frame.r8;
     let _a5 = frame.r9;
 
+    if deliver_pending_signal(frame) {
+        return;
+    }
+
     let result: Result<u64, i64> = match nr {
         NR_write => linux_write(a0 as usize, a1 as usize, a2 as usize),
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
         NR_close => linux_close(a0 as usize),
         NR_pipe => linux_pipe(a0 as usize),
+        NR_sched_yield => linux_sched_yield(frame),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_getppid => linux_getppid(),
@@ -121,6 +127,17 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         Err(CONTEXT_SWITCHED) => return,
         Err(e) => e as u64,
     };
+
+    let _ = deliver_pending_signal(frame);
+}
+
+fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
+    let Some((pid, status)) = process::take_pending_signal_current() else {
+        return false;
+    };
+    process::exit(pid, status);
+    let _ = crate::syscall::yield_until_runnable(frame);
+    true
 }
 
 fn linux_write(fd: usize, buf: usize, len: usize) -> Result<u64, i64> {
@@ -221,6 +238,14 @@ fn linux_pipe(pipefd: usize) -> Result<u64, i64> {
     process::install_pipe_fds(pipefd, read_fd, write_fd)
         .map(|_| 0)
         .map_err(|_| EFAULT)
+}
+
+fn linux_sched_yield(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
+    frame.rax = 0;
+    if !crate::syscall::yield_current_process(frame) {
+        return Err(CONTEXT_SWITCHED);
+    }
+    Ok(0)
 }
 
 fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {

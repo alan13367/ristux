@@ -511,6 +511,14 @@ pub fn yield_blocked(frame: &mut SyscallInterruptFrame) -> bool {
     yield_while_blocked(frame)
 }
 
+pub fn yield_current_process(frame: &mut SyscallInterruptFrame) -> bool {
+    let original = process::current_pid();
+    let mut saved = saved_from_frame(frame);
+    let resumed = sched::yield_current_from_syscall(&mut saved);
+    apply_saved_frame(frame, &saved);
+    resumed == original
+}
+
 /// Yield until a runnable process is dispatched. Used after `exit` empties the
 /// current process from the run queue so the kernel can fall back to another
 /// task instead of immediately iretq'ing into a torn-down address space.

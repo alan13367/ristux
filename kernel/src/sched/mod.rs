@@ -208,6 +208,36 @@ pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
     }
 }
 
+/// Voluntarily yield from a runnable user process. Unlike `yield_from_syscall`,
+/// the saved frame is resumed after the syscall instead of restarting it.
+pub fn yield_current_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
+    let self_pid = process::current_pid()?;
+    process::save_syscall_frame(self_pid, frame);
+    process::mark_ready(self_pid);
+
+    loop {
+        if let Some(next) = dispatch_local() {
+            if next != self_pid {
+                enqueue(self_pid);
+            }
+            if process::restore_syscall_frame(next, frame) {
+                process::set_current(next);
+                return Some(next);
+            }
+            enqueue(next);
+            continue;
+        }
+
+        if process::restore_syscall_frame(self_pid, frame) {
+            process::set_current(self_pid);
+            return Some(self_pid);
+        }
+
+        increment_idle_loops(current_cpu_id());
+        crate::arch::x86_64::instructions::halt_until_interrupt();
+    }
+}
+
 pub fn ap_idle_loop(cpu_id: usize) -> ! {
     crate::println!("AP {} entering scheduler idle loop.", cpu_id);
     unsafe {

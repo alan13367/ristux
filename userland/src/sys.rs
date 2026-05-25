@@ -15,6 +15,7 @@ pub const NR_LSEEK: usize = 8;
 pub const NR_BRK: usize = 12;
 pub const NR_IOCTL: usize = 16;
 pub const NR_PIPE: usize = 22;
+pub const NR_SCHED_YIELD: usize = 24;
 pub const NR_DUP2: usize = 33;
 pub const NR_GETPID: usize = 39;
 pub const NR_FORK: usize = 57;
@@ -144,6 +145,11 @@ pub fn close(fd: i32) -> isize {
 #[inline]
 pub fn pipe(pipefd: *mut i32) -> isize {
     unsafe { syscall1(NR_PIPE, pipefd as usize) }
+}
+
+#[inline]
+pub fn sched_yield() -> isize {
+    unsafe { syscall0(NR_SCHED_YIELD) }
 }
 
 #[inline]

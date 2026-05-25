@@ -50,6 +50,7 @@ pub struct Process {
     pub pgrp: Pid,
     pub sid: Pid,
     pub pending_signals: u64,
+    pending_signal_status: Option<i32>,
     pub signal_mask: u64,
     pub signal_handlers: [usize; 32],
     pub state: ProcessState,
@@ -111,6 +112,7 @@ impl Process {
             pgrp: pid,
             sid: parent.unwrap_or(pid),
             pending_signals: 0,
+            pending_signal_status: None,
             signal_mask: 0,
             signal_handlers: [0; 32],
             state: ProcessState::Ready,
@@ -315,6 +317,8 @@ impl ProcessTable {
         child.state = ProcessState::Ready;
         child.waiters.clear();
         child.exit_status = None;
+        child.pending_signals = 0;
+        child.pending_signal_status = None;
         self.processes.push(child);
         crate::sched::on_fork(pid);
         Some(pid)
@@ -419,8 +423,18 @@ impl ProcessTable {
         }
     }
 
-    fn signal(&mut self, pid: Pid, status: i32) -> Option<Vec<Pid>> {
-        if self.get(pid).is_some() {
+    fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<Vec<Pid>> {
+        if current == Some(pid) {
+            let process = self.get_mut(pid)?;
+            process.pending_signal_status = Some(status);
+            if status >= 128 {
+                let signal = (status - 128) as u64;
+                if signal < 64 {
+                    process.pending_signals |= 1 << signal;
+                }
+            }
+            Some(Vec::new())
+        } else if self.get(pid).is_some() {
             Some(self.exit(pid, status))
         } else {
             None
@@ -446,6 +460,7 @@ impl Process {
             pgrp: self.pgrp,
             sid: self.sid,
             pending_signals: self.pending_signals,
+            pending_signal_status: None,
             signal_mask: self.signal_mask,
             signal_handlers: self.signal_handlers,
             state: ProcessState::Ready,
@@ -563,7 +578,8 @@ pub fn wait(parent: Pid, child: Pid) -> Option<i32> {
 }
 
 pub fn signal(pid: Pid, status: i32) -> bool {
-    let wake = with_table(|table| table.signal(pid, status));
+    let current = current_pid();
+    let wake = with_table(|table| table.signal(pid, status, current));
     if let Some(wake) = wake {
         for pid in wake {
             scheduler::wake_blocked(pid);
@@ -572,6 +588,17 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     } else {
         false
     }
+}
+
+pub fn take_pending_signal_current() -> Option<(Pid, i32)> {
+    let pid = current_pid()?;
+    let status = with_table(|table| {
+        let process = table.get_mut(pid)?;
+        let status = process.pending_signal_status.take()?;
+        process.pending_signals = 0;
+        Some(status)
+    })?;
+    Some((pid, status))
 }
 
 pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
@@ -660,6 +687,19 @@ pub fn is_runnable(pid: Pid) -> bool {
             .get(pid)
             .map(|p| matches!(p.state, ProcessState::Ready))
             .unwrap_or(false)
+    })
+}
+
+pub fn mark_ready(pid: Pid) -> bool {
+    with_table(|table| {
+        let Some(process) = table.get_mut(pid) else {
+            return false;
+        };
+        if matches!(process.state, ProcessState::Zombie(_)) {
+            return false;
+        }
+        process.state = ProcessState::Ready;
+        true
     })
 }
 
