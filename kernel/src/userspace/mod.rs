@@ -1,6 +1,6 @@
 pub mod elf;
 
-use core::{arch::asm, ptr};
+use core::{arch::asm, cmp, ptr, slice};
 
 use crate::{
     fs,
@@ -9,16 +9,86 @@ use crate::{
         paging::{self, PageFlags},
     },
     syscall,
+    sync::spinlock::SpinLock,
 };
 
-const USER_SMOKE_ENTRY: usize = 0x4100_0000;
-const USER_SMOKE_STACK_TOP: usize = 0x7000_1000;
+const USER_INIT_STACK_TOP: usize = 0x7000_2000;
+const MAX_USER_RANGES: usize = 16;
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
     syscalls_handled: 0,
     last_exit_status: None,
 };
+static ACTIVE_USER: SpinLock<ActiveUserContext> = SpinLock::new(ActiveUserContext::empty());
+
+#[derive(Clone, Copy)]
+struct UserRange {
+    start: usize,
+    end: usize,
+}
+
+impl UserRange {
+    const fn empty() -> Self {
+        Self { start: 0, end: 0 }
+    }
+
+    fn contains(&self, addr: usize, len: usize) -> bool {
+        let Some(end) = addr.checked_add(len) else {
+            return false;
+        };
+
+        addr >= self.start && end <= self.end
+    }
+}
+
+struct ActiveUserContext {
+    pid: u64,
+    name: &'static str,
+    range_count: usize,
+    ranges: [UserRange; MAX_USER_RANGES],
+    exited: bool,
+    exit_status: i32,
+}
+
+impl ActiveUserContext {
+    const fn empty() -> Self {
+        Self {
+            pid: 0,
+            name: "",
+            range_count: 0,
+            ranges: [UserRange::empty(); MAX_USER_RANGES],
+            exited: false,
+            exit_status: 0,
+        }
+    }
+
+    const fn new(pid: u64, name: &'static str) -> Self {
+        Self {
+            pid,
+            name,
+            range_count: 0,
+            ranges: [UserRange::empty(); MAX_USER_RANGES],
+            exited: false,
+            exit_status: 0,
+        }
+    }
+
+    fn push_range(&mut self, start: usize, end: usize) {
+        if self.range_count >= MAX_USER_RANGES {
+            panic!("too many active user memory ranges");
+        }
+
+        self.ranges[self.range_count] = UserRange { start, end };
+        self.range_count += 1;
+    }
+
+    fn allows(&self, addr: usize, len: usize) -> bool {
+        self.ranges[..self.range_count]
+            .iter()
+            .any(|range| range.contains(addr, len))
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct UserspaceStats {
@@ -106,48 +176,51 @@ pub fn stats() -> UserspaceStats {
     unsafe { USERSPACE_STATS }
 }
 
-pub fn enter_ring3_smoke() -> ! {
-    let code_frame =
-        frame_allocator::allocate_frame().expect("ring 3 smoke code frame allocation failed");
-    let stack_frame =
-        frame_allocator::allocate_frame().expect("ring 3 smoke stack frame allocation failed");
-    let stack_bottom = USER_SMOKE_STACK_TOP - FRAME_SIZE;
-    let syscall = syscall::SYS_RING3_DONE as u32;
-    let code = [
-        0x48,
-        0xc7,
-        0xc0,
-        syscall as u8,
-        (syscall >> 8) as u8,
-        (syscall >> 16) as u8,
-        (syscall >> 24) as u8,
-        0xcd,
-        0x80,
-        0xf3,
-        0x90,
-        0xeb,
-        0xfc,
-    ];
+pub fn enter_init_elf() -> ! {
+    let init = fs::read_file("/bin/init").unwrap_or_else(|| panic!("/bin/init missing from VFS"));
+    let process = UserProcess::load(1, "init", &init)
+        .unwrap_or_else(|err| panic!("failed to load /bin/init ELF for ring 3: {}", err));
 
-    unsafe {
-        ptr::write_bytes(code_frame.start as *mut u8, 0, FRAME_SIZE);
-        ptr::write_bytes(stack_frame.start as *mut u8, 0, FRAME_SIZE);
-        ptr::copy_nonoverlapping(code.as_ptr(), code_frame.start as *mut u8, code.len());
-        paging::map_page(USER_SMOKE_ENTRY, code_frame.start, PageFlags::USER_WRITABLE)
-            .unwrap_or_else(|err| panic!("ring 3 smoke code map failed: {}", err));
-        paging::map_page(stack_bottom, stack_frame.start, PageFlags::USER_WRITABLE)
-            .unwrap_or_else(|err| panic!("ring 3 smoke stack map failed: {}", err));
+    {
+        let mut active = ACTIVE_USER.lock();
+        *active = ActiveUserContext::new(process.pid(), process.name());
     }
 
+    map_user_elf(&process.image);
+    map_user_stack(USER_INIT_STACK_TOP);
+
     crate::println!(
-        "Entering ring 3 smoke test at {:#x} with stack {:#x}.",
-        USER_SMOKE_ENTRY,
-        USER_SMOKE_STACK_TOP
+        "Entering ring 3 ELF init at {:#x} with stack {:#x}.",
+        process.entry(),
+        USER_INIT_STACK_TOP
     );
 
     unsafe {
-        enter_user_mode(USER_SMOKE_ENTRY, USER_SMOKE_STACK_TOP);
+        enter_user_mode(process.entry() as usize, USER_INIT_STACK_TOP);
     }
+}
+
+pub fn active_user_read(addr: usize, len: usize) -> Option<&'static [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+
+    if !ACTIVE_USER.lock().allows(addr, len) {
+        return None;
+    }
+
+    Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
+}
+
+pub fn active_user_pid() -> u64 {
+    ACTIVE_USER.lock().pid
+}
+
+pub fn record_active_exit(status: i32) -> &'static str {
+    let mut active = ACTIVE_USER.lock();
+    active.exited = true;
+    active.exit_status = status;
+    active.name
 }
 
 fn run_init_process(process: &mut UserProcess) {
@@ -176,6 +249,64 @@ fn run_init_process(process: &mut UserProcess) {
             _ => None,
         };
     }
+}
+
+fn map_user_elf(image: &elf::LoadedElf) {
+    for segment in image.segments() {
+        let segment_start = segment.vaddr;
+        let segment_end = segment_start
+            .checked_add(segment.bytes.len())
+            .expect("ELF segment end overflow");
+        let map_start = align_down(segment_start, FRAME_SIZE);
+        let map_end = align_up(segment_end, FRAME_SIZE);
+
+        for page in (map_start..map_end).step_by(FRAME_SIZE) {
+            let frame = frame_allocator::allocate_frame()
+                .expect("ring 3 ELF segment frame allocation failed");
+            unsafe {
+                ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+                let page_end = page + FRAME_SIZE;
+                let copy_start = cmp::max(page, segment_start);
+                let copy_end = cmp::min(page_end, segment_end);
+                if copy_start < copy_end {
+                    let source_offset = copy_start - segment_start;
+                    let target_offset = copy_start - page;
+                    ptr::copy_nonoverlapping(
+                        segment.bytes.as_ptr().add(source_offset),
+                        (frame.start + target_offset) as *mut u8,
+                        copy_end - copy_start,
+                    );
+                }
+
+                paging::map_page(page, frame.start, PageFlags::USER_WRITABLE)
+                    .unwrap_or_else(|err| panic!("ring 3 ELF segment map failed: {}", err));
+            }
+        }
+
+        ACTIVE_USER.lock().push_range(segment_start, segment_end);
+    }
+}
+
+fn map_user_stack(stack_top: usize) {
+    let stack_bottom = stack_top - FRAME_SIZE;
+    let frame =
+        frame_allocator::allocate_frame().expect("ring 3 ELF stack frame allocation failed");
+
+    unsafe {
+        ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+        paging::map_page(stack_bottom, frame.start, PageFlags::USER_WRITABLE)
+            .unwrap_or_else(|err| panic!("ring 3 ELF stack map failed: {}", err));
+    }
+
+    ACTIVE_USER.lock().push_range(stack_bottom, stack_top);
+}
+
+const fn align_down(value: usize, align: usize) -> usize {
+    value & !(align - 1)
+}
+
+const fn align_up(value: usize, align: usize) -> usize {
+    (value + align - 1) & !(align - 1)
 }
 
 unsafe fn enter_user_mode(entry: usize, stack_top: usize) -> ! {

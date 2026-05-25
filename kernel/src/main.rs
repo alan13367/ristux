@@ -85,7 +85,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
         arch::x86_64::interrupts::timer_ticks()
     );
 
-    userspace::enter_ring3_smoke()
+    userspace::enter_init_elf()
 }
 
 #[inline(always)]

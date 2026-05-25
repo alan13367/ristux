@@ -116,6 +116,10 @@ impl LoadedElf {
         None
     }
 
+    pub fn segments(&self) -> &[LoadedSegment] {
+        &self.segments
+    }
+
     pub fn find_bytes(&self, needle: &[u8]) -> Option<usize> {
         for segment in &self.segments {
             if segment.flags & 0x4 == 0 {
@@ -149,4 +153,3 @@ fn read_u64(data: &[u8], offset: usize) -> Result<u64, ElfError> {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))
 }
-
