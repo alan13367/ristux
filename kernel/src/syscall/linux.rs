@@ -40,6 +40,7 @@ pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
 pub const NR_access: u64 = 21;
 pub const NR_pipe: u64 = 22;
+pub const NR_select: u64 = 23;
 pub const NR_sched_yield: u64 = 24;
 pub const NR_dup: u64 = 32;
 pub const NR_dup2: u64 = 33;
@@ -142,6 +143,14 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_poll => linux_poll(frame, a0 as usize, a1 as usize, a2 as i32),
         NR_access => linux_access(a0 as usize, a1 as i32),
         NR_pipe => linux_pipe(a0 as usize),
+        NR_select => linux_select(
+            frame,
+            a0 as i32,
+            a1 as usize,
+            a2 as usize,
+            a3 as usize,
+            a4 as usize,
+        ),
         NR_sched_yield => linux_sched_yield(frame),
         NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
@@ -609,6 +618,177 @@ struct PollSnapshot {
     write: bool,
     error: bool,
     hangup: bool,
+}
+
+const SELECT_FD_SETSIZE: usize = 1024;
+const SELECT_FDSET_BYTES: usize = SELECT_FD_SETSIZE / 8;
+
+struct SelectInterest {
+    read_ptr: usize,
+    write_ptr: usize,
+    except_ptr: usize,
+    bytes: usize,
+    read: [u8; SELECT_FDSET_BYTES],
+    write: [u8; SELECT_FDSET_BYTES],
+    except: [u8; SELECT_FDSET_BYTES],
+}
+
+struct SelectResult {
+    count: usize,
+    read: [u8; SELECT_FDSET_BYTES],
+    write: [u8; SELECT_FDSET_BYTES],
+    except: [u8; SELECT_FDSET_BYTES],
+}
+
+fn linux_select(
+    frame: &mut SyscallInterruptFrame,
+    nfds: i32,
+    readfds: usize,
+    writefds: usize,
+    exceptfds: usize,
+    timeout: usize,
+) -> Result<u64, i64> {
+    if nfds < 0 || nfds as usize > SELECT_FD_SETSIZE {
+        return Err(EINVAL);
+    }
+    let nfds = nfds as usize;
+    let interest = read_select_interest(nfds, readfds, writefds, exceptfds)?;
+    let timeout_ms = read_select_timeout(timeout)?;
+    let start_ms = crate::time::uptime_millis();
+    loop {
+        let result = linux_select_once(nfds, &interest)?;
+        if result.count > 0 || timeout_ms == Some(0) {
+            write_select_result(&interest, &result)?;
+            return Ok(result.count as u64);
+        }
+        if let Some(timeout_ms) = timeout_ms {
+            if crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms {
+                write_select_result(&interest, &result)?;
+                return Ok(0);
+            }
+        }
+        if !crate::syscall::yield_current_process(frame) {
+            return Err(CONTEXT_SWITCHED);
+        }
+    }
+}
+
+fn read_select_interest(
+    nfds: usize,
+    readfds: usize,
+    writefds: usize,
+    exceptfds: usize,
+) -> Result<SelectInterest, i64> {
+    let bytes = select_fdset_bytes(nfds);
+    Ok(SelectInterest {
+        read_ptr: readfds,
+        write_ptr: writefds,
+        except_ptr: exceptfds,
+        bytes,
+        read: read_fdset(readfds, bytes)?,
+        write: read_fdset(writefds, bytes)?,
+        except: read_fdset(exceptfds, bytes)?,
+    })
+}
+
+fn read_fdset(ptr: usize, bytes: usize) -> Result<[u8; SELECT_FDSET_BYTES], i64> {
+    let mut bits = [0u8; SELECT_FDSET_BYTES];
+    if ptr == 0 || bytes == 0 {
+        return Ok(bits);
+    }
+    let source = process::read_user(ptr, bytes).ok_or(EFAULT)?;
+    process::write_user_buffer(ptr, bytes).ok_or(EFAULT)?;
+    bits[..bytes].copy_from_slice(&source);
+    Ok(bits)
+}
+
+fn read_select_timeout(timeout: usize) -> Result<Option<u64>, i64> {
+    if timeout == 0 {
+        return Ok(None);
+    }
+    let bytes = process::read_user(timeout, 16).ok_or(EFAULT)?;
+    let sec = i64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]);
+    let usec = i64::from_le_bytes([
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]);
+    if sec < 0 || usec < 0 || usec >= 1_000_000 {
+        return Err(EINVAL);
+    }
+    let millis = (sec as u64)
+        .checked_mul(1000)
+        .and_then(|ms| ms.checked_add(((usec as u64) + 999) / 1000))
+        .ok_or(EINVAL)?;
+    Ok(Some(millis))
+}
+
+fn linux_select_once(nfds: usize, interest: &SelectInterest) -> Result<SelectResult, i64> {
+    let mut result = SelectResult {
+        count: 0,
+        read: [0u8; SELECT_FDSET_BYTES],
+        write: [0u8; SELECT_FDSET_BYTES],
+        except: [0u8; SELECT_FDSET_BYTES],
+    };
+    for fd in 0..nfds {
+        let want_read = fdset_isset(&interest.read, fd);
+        let want_write = fdset_isset(&interest.write, fd);
+        let want_except = fdset_isset(&interest.except, fd);
+        if !want_read && !want_write && !want_except {
+            continue;
+        }
+        let mut events = 0;
+        if want_read {
+            events |= POLLIN;
+        }
+        if want_write {
+            events |= POLLOUT;
+        }
+        let revents = poll_revents(fd, events);
+        if revents & POLLNVAL != 0 {
+            return Err(EBADF);
+        }
+        if want_read && revents & (POLLIN | POLLERR | POLLHUP) != 0 {
+            fdset_set(&mut result.read, fd);
+            result.count += 1;
+        }
+        if want_write && revents & (POLLOUT | POLLERR | POLLHUP) != 0 {
+            fdset_set(&mut result.write, fd);
+            result.count += 1;
+        }
+        if want_except && revents & (POLLERR | POLLHUP) != 0 {
+            fdset_set(&mut result.except, fd);
+            result.count += 1;
+        }
+    }
+    Ok(result)
+}
+
+fn write_select_result(interest: &SelectInterest, result: &SelectResult) -> Result<(), i64> {
+    write_fdset(interest.read_ptr, interest.bytes, &result.read)?;
+    write_fdset(interest.write_ptr, interest.bytes, &result.write)?;
+    write_fdset(interest.except_ptr, interest.bytes, &result.except)
+}
+
+fn write_fdset(ptr: usize, bytes: usize, bits: &[u8; SELECT_FDSET_BYTES]) -> Result<(), i64> {
+    if ptr == 0 || bytes == 0 {
+        return Ok(());
+    }
+    let out = process::write_user_buffer(ptr, bytes).ok_or(EFAULT)?;
+    out.copy_from_slice(&bits[..bytes]);
+    Ok(())
+}
+
+fn select_fdset_bytes(nfds: usize) -> usize {
+    (nfds + 7) / 8
+}
+
+fn fdset_isset(bits: &[u8; SELECT_FDSET_BYTES], fd: usize) -> bool {
+    bits[fd / 8] & (1u8 << (fd % 8)) != 0
+}
+
+fn fdset_set(bits: &mut [u8; SELECT_FDSET_BYTES], fd: usize) {
+    bits[fd / 8] |= 1u8 << (fd % 8);
 }
 
 fn linux_close(fd: usize) -> Result<u64, i64> {

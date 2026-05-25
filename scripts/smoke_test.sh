@@ -161,6 +161,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_select"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_stack"
   sleep 1
   printf 'sendkey ret\n'
@@ -279,6 +283,10 @@ grep -q "cc_poll: stdin ok" "$SERIAL_LOG"
 grep -q "cc_poll: pipe ok" "$SERIAL_LOG"
 grep -q "cc_poll: invalid ok" "$SERIAL_LOG"
 grep -q "cc_poll: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_select" "$SERIAL_LOG"
+grep -q "cc_select: pipe ok" "$SERIAL_LOG"
+grep -q "cc_select: invalid ok" "$SERIAL_LOG"
+grep -q "cc_select: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_stack" "$SERIAL_LOG"
 grep -q "cc_stack: growth ok" "$SERIAL_LOG"
 grep -q "cc_stack: done" "$SERIAL_LOG"

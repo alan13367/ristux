@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -35,6 +36,7 @@
 #define SYS_IOCTL 16
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
+#define SYS_SELECT 23
 #define SYS_NANOSLEEP 35
 #define SYS_DUP 32
 #define SYS_DUP2 33
@@ -178,6 +180,10 @@ int fcntl(int fd, int cmd, ...) {
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     return (int)syscall_ret(syscall3(SYS_POLL, (long)fds, (long)nfds, timeout));
+}
+
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+    return (int)syscall_ret(syscall6(SYS_SELECT, nfds, (long)readfds, (long)writefds, (long)exceptfds, (long)timeout, 0));
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

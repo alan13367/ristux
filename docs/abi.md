@@ -73,6 +73,7 @@ The current Linux-like syscall surface is:
 | 15 | `rt_sigreturn` | Returns from a delivered signal frame. |
 | 16 | `ioctl` | TTY-oriented requests currently implemented by the kernel. |
 | 21 | `access` | Checks read, write, and execute permissions. |
+| 23 | `select` | `fd_set` readiness over the same TTY, pipe, file, and socket backend as `poll`. |
 | 22 | `pipe` | Returns two descriptors in an `int[2]`. |
 | 24 | `sched_yield` | Yields to the scheduler. |
 | 32 | `dup` | Duplicates a descriptor to the next free slot. |
@@ -132,7 +133,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `setgroups`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
-  `dup2`, `fcntl`, `poll`.
+  `dup2`, `fcntl`, `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `symlink`, `readlink`,
   `chdir`, `getcwd`.
@@ -193,7 +194,6 @@ Phase E handler path is guaranteed.
 
 These are explicit non-guarantees of the current ABI:
 
-- No `select` contract yet.
 - User stacks start with one mapped page and grow downward on page faults within
   a 1 MiB stack region. The lowest page is an unmapped guard page.
 - `mmap` currently supports `MAP_PRIVATE` anonymous mappings and private
