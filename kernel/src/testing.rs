@@ -25,6 +25,10 @@ fn run() -> KernelResult<()> {
         framebuffer.initialized && framebuffer.backbuffer_presented,
         "framebuffer graphics path did not initialize",
     )?;
+    ensure(
+        framebuffer.terminal_lines >= 4 && framebuffer.windows_drawn >= 2,
+        "graphical terminal/window path did not run",
+    )?;
     let scheduler = task::scheduler::stats();
     ensure(
         scheduler.task_count >= 4,
@@ -80,13 +84,15 @@ fn run() -> KernelResult<()> {
         crate::println!("  {} ({})", driver.name, driver.kind);
     }
     crate::println!(
-        "Framebuffer stats: {}x{}x{}, linear {}, {} pixel(s), {} glyph(s), {} fb0 write(s)",
+        "Framebuffer stats: {}x{}x{}, linear {}, {} pixel(s), {} glyph(s), {} terminal line(s), {} window(s), {} fb0 write(s)",
         framebuffer.width,
         framebuffer.height,
         framebuffer.bpp,
         framebuffer.linear,
         framebuffer.pixels_drawn,
         framebuffer.glyphs_drawn,
+        framebuffer.terminal_lines,
+        framebuffer.windows_drawn,
         framebuffer.fb0_writes
     );
 

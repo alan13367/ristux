@@ -12,11 +12,16 @@ use crate::{
 const BUFFER_WIDTH: usize = 320;
 const BUFFER_HEIGHT: usize = 180;
 const BUFFER_PIXELS: usize = BUFFER_WIDTH * BUFFER_HEIGHT;
+const TERMINAL_X: usize = 34;
+const TERMINAL_Y: usize = 102;
+const TERMINAL_LINE_HEIGHT: usize = 16;
+const TERMINAL_ROWS: usize = 4;
 const FRAMEBUFFER_TYPE_RGB: u8 = 1;
 const FRAMEBUFFER_TYPE_TEXT: u8 = 2;
 
 static STATE: SpinLock<FramebufferState> = SpinLock::new(FramebufferState::empty());
 static BACK_BUFFER: SpinLock<BackBuffer> = SpinLock::new(BackBuffer::new());
+static TERMINAL: SpinLock<GraphicsTerminal> = SpinLock::new(GraphicsTerminal::new());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FramebufferStats {
@@ -27,6 +32,8 @@ pub struct FramebufferStats {
     pub bpp: u8,
     pub pixels_drawn: usize,
     pub glyphs_drawn: usize,
+    pub terminal_lines: usize,
+    pub windows_drawn: usize,
     pub fb0_writes: usize,
     pub backbuffer_presented: bool,
 }
@@ -67,6 +74,11 @@ struct BackBuffer {
     pixels: [u32; BUFFER_PIXELS],
 }
 
+struct GraphicsTerminal {
+    cursor_row: usize,
+    lines_written: usize,
+}
+
 impl BackBuffer {
     const fn new() -> Self {
         Self {
@@ -96,6 +108,8 @@ impl FramebufferStats {
             bpp: 0,
             pixels_drawn: 0,
             glyphs_drawn: 0,
+            terminal_lines: 0,
+            windows_drawn: 0,
             fb0_writes: 0,
             backbuffer_presented: false,
         }
@@ -140,6 +154,8 @@ pub fn init(info: Option<FramebufferInfo>) {
                 bpp: info.bpp,
                 pixels_drawn: 0,
                 glyphs_drawn: 0,
+                terminal_lines: 0,
+                windows_drawn: 0,
                 fb0_writes: 0,
                 backbuffer_presented: false,
             };
@@ -164,6 +180,8 @@ pub fn init(info: Option<FramebufferInfo>) {
                 bpp: info.bpp,
                 pixels_drawn: 0,
                 glyphs_drawn: 0,
+                terminal_lines: 0,
+                windows_drawn: 0,
                 fb0_writes: 0,
                 backbuffer_presented: false,
             };
@@ -186,6 +204,8 @@ pub fn init(info: Option<FramebufferInfo>) {
                 bpp: 16,
                 pixels_drawn: 0,
                 glyphs_drawn: 0,
+                terminal_lines: 0,
+                windows_drawn: 0,
                 fb0_writes: 0,
                 backbuffer_presented: false,
             };
@@ -236,22 +256,45 @@ pub fn write_bytes(bytes: &[u8]) -> usize {
     bytes.len()
 }
 
+pub fn terminal_write_line(line: &str) {
+    let mut terminal = TERMINAL.lock();
+    {
+        let mut buffer = BACK_BUFFER.lock();
+        terminal.write_line(&mut buffer, line);
+    }
+    let mut state = STATE.lock();
+    state.stats.terminal_lines += 1;
+    drop(state);
+    present_backbuffer();
+}
+
 fn self_test() {
     draw_boot_scene();
+    terminal_write_line("sh$ help");
+    terminal_write_line("init ok");
+    terminal_write_line("fb0 online");
+    terminal_write_line("window ready");
     write_bytes(&[0x30, 0x90, 0xff, 0x10, 0xd0, 0xa0, 0xff, 0xff, 0xff]);
 
     let stats = stats();
-    if !stats.initialized || stats.glyphs_drawn < 6 || stats.fb0_writes == 0 {
+    if !stats.initialized
+        || stats.glyphs_drawn < 20
+        || stats.terminal_lines < TERMINAL_ROWS
+        || stats.windows_drawn < 2
+        || stats.fb0_writes == 0
+    {
         panic!("framebuffer graphics self-test failed");
     }
 
     crate::println!(
-        "Framebuffer graphics self-test passed: {}x{}x{}, linear {}, {} glyph(s).",
+        "Framebuffer graphics self-test passed: {}x{}x{}, linear {}, {} glyph(s), {} terminal line(s), {} window(s).",
         stats.width,
         stats.height,
         stats.bpp,
         stats.linear,
-        stats.glyphs_drawn
+        stats.glyphs_drawn,
+        stats.terminal_lines,
+        stats.windows_drawn
     );
 }
 
@@ -261,10 +304,10 @@ fn draw_boot_scene() {
         buffer.clear(rgb(9, 15, 24));
         fill_rect(&mut buffer, 0, 0, BUFFER_WIDTH, 24, rgb(17, 47, 74));
         fill_rect(&mut buffer, 0, BUFFER_HEIGHT - 24, BUFFER_WIDTH, 24, rgb(19, 67, 57));
-        fill_rect(&mut buffer, 22, 42, 276, 88, rgb(28, 38, 52));
-        stroke_rect(&mut buffer, 22, 42, 276, 88, rgb(90, 180, 210));
+        draw_window(&mut buffer, 22, 42, 276, 52, "RISTUX", rgb(28, 38, 52));
+        draw_window(&mut buffer, 22, 100, 276, 66, "TERM", rgb(18, 25, 36));
         draw_text(&mut buffer, 42, 61, "RISTUX", rgb(236, 242, 248));
-        draw_text(&mut buffer, 42, 82, "PHASE 31", rgb(112, 223, 176));
+        draw_text(&mut buffer, 118, 61, "PHASE 31", rgb(112, 223, 176));
     }
 
     present_backbuffer();
@@ -315,6 +358,23 @@ fn stroke_rect(buffer: &mut BackBuffer, x: usize, y: usize, width: usize, height
     fill_rect(buffer, x + width.saturating_sub(1), y, 1, height, color);
 }
 
+fn draw_window(
+    buffer: &mut BackBuffer,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    title: &str,
+    body: u32,
+) {
+    fill_rect(buffer, x, y, width, height, body);
+    fill_rect(buffer, x, y, width, 14, rgb(31, 66, 92));
+    stroke_rect(buffer, x, y, width, height, rgb(90, 180, 210));
+    draw_text(buffer, x + 8, y + 3, title, rgb(236, 242, 248));
+    let mut state = STATE.lock();
+    state.stats.windows_drawn += 1;
+}
+
 fn draw_text(buffer: &mut BackBuffer, x: usize, y: usize, text: &str, color: u32) {
     let mut cursor = x;
     for ch in text.bytes() {
@@ -349,10 +409,75 @@ fn glyph(ch: u8) -> [u8; 7] {
         b'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
         b'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
         b'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        b'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        b'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        b'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        b'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+        b'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        b'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        b'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+        b'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        b'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+        b'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        b'a' => [0, 0b01110, 0b00001, 0b01111, 0b10001, 0b10011, 0b01101],
+        b'd' => [0b00001, 0b00001, 0b01101, 0b10011, 0b10001, 0b10011, 0b01101],
+        b'e' => [0, 0b01110, 0b10001, 0b11111, 0b10000, 0b10000, 0b01110],
+        b'f' => [0b00110, 0b01001, 0b01000, 0b11100, 0b01000, 0b01000, 0b01000],
+        b'h' => [0b10000, 0b10000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001],
+        b'i' => [0b00100, 0, 0b01100, 0b00100, 0b00100, 0b00100, 0b01110],
+        b'k' => [0b10000, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        b'l' => [0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        b'n' => [0, 0, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001],
+        b'o' => [0, 0, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110],
+        b'p' => [0, 0, 0b11110, 0b10001, 0b11110, 0b10000, 0b10000],
+        b'r' => [0, 0, 0b10110, 0b11001, 0b10000, 0b10000, 0b10000],
+        b's' => [0, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110, 0],
+        b't' => [0b01000, 0b01000, 0b11100, 0b01000, 0b01000, 0b01001, 0b00110],
+        b'w' => [0, 0, 0b10001, 0b10001, 0b10101, 0b10101, 0b01010],
+        b'y' => [0, 0, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110],
+        b'$' => [0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100],
+        b'0' => [0b01110, 0b10011, 0b10101, 0b10101, 0b11001, 0b10001, 0b01110],
+        b'2' => [0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111],
+        b'4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        b'5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+        b'6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        b'7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        b'8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        b'9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
         b'1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
         b'3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+        b'>' => [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000],
         b' ' => [0, 0, 0, 0, 0, 0, 0],
         _ => [0b11111, 0b10001, 0b00110, 0b00100, 0b01100, 0b10001, 0b11111],
+    }
+}
+
+impl GraphicsTerminal {
+    const fn new() -> Self {
+        Self {
+            cursor_row: 0,
+            lines_written: 0,
+        }
+    }
+
+    fn write_line(&mut self, buffer: &mut BackBuffer, line: &str) {
+        if self.cursor_row >= TERMINAL_ROWS {
+            self.cursor_row = TERMINAL_ROWS - 1;
+            fill_rect(
+                buffer,
+                TERMINAL_X,
+                TERMINAL_Y,
+                246,
+                TERMINAL_ROWS * TERMINAL_LINE_HEIGHT,
+                rgb(18, 25, 36),
+            );
+        }
+
+        let y = TERMINAL_Y + self.cursor_row * TERMINAL_LINE_HEIGHT;
+        fill_rect(buffer, TERMINAL_X, y, 246, TERMINAL_LINE_HEIGHT, rgb(18, 25, 36));
+        draw_text(buffer, TERMINAL_X + 4, y + 2, line, rgb(167, 230, 190));
+        self.cursor_row += 1;
+        self.lines_written += 1;
     }
 }
 
