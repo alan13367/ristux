@@ -24,7 +24,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -39,6 +39,7 @@ USER_ID_ELF := build/userland/id.elf
 USER_SU_ELF := build/userland/su.elf
 USER_SLEEP_ELF := build/userland/sleep.elf
 USER_PING_ELF := build/userland/ping.elf
+USER_CURL_LITE_ELF := build/userland/curl_lite.elf
 USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
@@ -91,6 +92,7 @@ $(USER_ID_ELF): $(USERLAND_RS_STAMP)
 $(USER_SU_ELF): $(USERLAND_RS_STAMP)
 $(USER_SLEEP_ELF): $(USERLAND_RS_STAMP)
 $(USER_PING_ELF): $(USERLAND_RS_STAMP)
+$(USER_CURL_LITE_ELF): $(USERLAND_RS_STAMP)
 
 $(USER_LS_OBJ): userland/ls.S
 	mkdir -p build/userland
@@ -156,7 +158,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

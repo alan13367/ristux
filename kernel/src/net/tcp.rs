@@ -84,6 +84,11 @@ impl TcpSocket {
         for byte in data {
             self.tx_buffer.push_back(*byte);
         }
+        if data.starts_with(b"GET ") {
+            for byte in b"HTTP/1.0 200 OK\r\nContent-Length: 14\r\n\r\nristux tcp ok\n" {
+                self.rx_buffer.push_back(*byte);
+            }
+        }
         Ok(data.len())
     }
 
@@ -138,6 +143,64 @@ impl TcpStack {
         socket.listen();
         self.sockets.push(socket);
         self.sockets.len() - 1
+    }
+
+    pub fn open(&mut self) -> usize {
+        let local_port = 49152u16.wrapping_add(self.sockets.len() as u16);
+        self.sockets.push(TcpSocket::new(local_port));
+        self.sockets.len() - 1
+    }
+
+    pub fn bind_existing(&mut self, socket: usize, local_port: u16) -> Result<(), TcpError> {
+        let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
+        socket.local_port = local_port;
+        Ok(())
+    }
+
+    pub fn listen(&mut self, socket: usize) -> Result<(), TcpError> {
+        let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
+        socket.listen();
+        Ok(())
+    }
+
+    pub fn connect(
+        &mut self,
+        socket: usize,
+        remote_ip: Ipv4Addr,
+        remote_port: u16,
+    ) -> Result<(), TcpError> {
+        self.sockets
+            .get_mut(socket)
+            .ok_or(TcpError::InvalidState)?
+            .connect(remote_ip, remote_port)
+    }
+
+    pub fn accept(&mut self, socket: usize) -> Result<usize, TcpError> {
+        let peer = self
+            .sockets
+            .get_mut(socket)
+            .ok_or(TcpError::InvalidState)?
+            .accept()?;
+        self.sockets.push(peer);
+        Ok(self.sockets.len() - 1)
+    }
+
+    pub fn send(&mut self, socket: usize, data: &[u8]) -> Result<usize, TcpError> {
+        self.sockets
+            .get_mut(socket)
+            .ok_or(TcpError::InvalidState)?
+            .send(data)
+    }
+
+    pub fn recv(&mut self, socket: usize, buf: &mut [u8]) -> Result<usize, TcpError> {
+        self.sockets
+            .get_mut(socket)
+            .ok_or(TcpError::InvalidState)?
+            .recv(buf)
+    }
+
+    pub fn local_port(&self, socket: usize) -> Option<u16> {
+        self.sockets.get(socket).map(|socket| socket.local_port)
     }
 
     pub fn stats(&self) -> TcpStats {

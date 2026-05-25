@@ -28,6 +28,14 @@ pub const NR_pipe: u64 = 22;
 pub const NR_sched_yield: u64 = 24;
 pub const NR_dup2: u64 = 33;
 pub const NR_getpid: u64 = 39;
+pub const NR_socket: u64 = 41;
+pub const NR_connect: u64 = 42;
+pub const NR_accept: u64 = 43;
+pub const NR_sendto: u64 = 44;
+pub const NR_recvfrom: u64 = 45;
+pub const NR_bind: u64 = 49;
+pub const NR_listen: u64 = 50;
+pub const NR_getsockname: u64 = 51;
 pub const NR_fork: u64 = 57;
 pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
@@ -55,6 +63,10 @@ const EACCES: i64 = -13;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
+const SOCKET_FD_BASE: usize = 1000;
+const AF_INET: i32 = 2;
+const SOCK_STREAM: i32 = 1;
+const SOCK_DGRAM: i32 = 2;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -64,9 +76,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let a0 = frame.rdi;
     let a1 = frame.rsi;
     let a2 = frame.rdx;
-    let _a3 = frame.r10;
-    let _a4 = frame.r8;
-    let _a5 = frame.r9;
+    let a3 = frame.r10;
+    let a4 = frame.r8;
+    let a5 = frame.r9;
 
     if deliver_pending_signal(frame) {
         return;
@@ -81,6 +93,28 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_sched_yield => linux_sched_yield(frame),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
+        NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
+        NR_connect => linux_connect(a0 as usize, a1 as usize, a2 as usize),
+        NR_accept => linux_accept(a0 as usize, a1 as usize, a2 as usize),
+        NR_sendto => linux_sendto(
+            a0 as usize,
+            a1 as usize,
+            a2 as usize,
+            a3 as i32,
+            a4 as usize,
+            a5 as usize,
+        ),
+        NR_recvfrom => linux_recvfrom(
+            a0 as usize,
+            a1 as usize,
+            a2 as usize,
+            a3 as i32,
+            a4 as usize,
+            a5 as usize,
+        ),
+        NR_bind => linux_bind(a0 as usize, a1 as usize, a2 as usize),
+        NR_listen => linux_listen(a0 as usize, a1 as i32),
+        NR_getsockname => linux_getsockname(a0 as usize, a1 as usize, a2 as usize),
         NR_getppid => linux_getppid(),
         NR_fork => linux_fork(frame),
         NR_execve => linux_execve(frame, a0 as usize, a1 as usize, a2 as usize),
@@ -252,6 +286,150 @@ fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {
     process::user_dup2(oldfd, newfd)
         .map(|fd| fd as u64)
         .map_err(|_| EBADF)
+}
+
+fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
+    if domain != AF_INET {
+        return Err(EINVAL);
+    }
+    let socket_type = match kind & 0xf {
+        SOCK_STREAM => crate::net::socket::SocketType::Stream,
+        SOCK_DGRAM => crate::net::socket::SocketType::Datagram,
+        _ => return Err(EINVAL),
+    };
+    let handle = crate::net::socket::with_sockets(|table| {
+        table.socket(crate::net::socket::SocketDomain::Inet, socket_type)
+    })
+    .ok_or(EINVAL)?;
+    Ok((SOCKET_FD_BASE + handle) as u64)
+}
+
+fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let (ip, port) = read_sockaddr_in(addr, addrlen)?;
+    crate::net::socket::with_sockets(|table| {
+        table.connect(handle, crate::net::Ipv4Addr(ip), port)
+    })
+    .map(|_| 0)
+    .map_err(map_socket_error)
+}
+
+fn linux_accept(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let accepted = crate::net::socket::with_sockets(|table| table.accept(handle))
+        .map_err(map_socket_error)?;
+    if addr != 0 {
+        write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 2], 8080)?;
+    }
+    Ok((SOCKET_FD_BASE + accepted) as u64)
+}
+
+fn linux_sendto(
+    fd: usize,
+    buf: usize,
+    len: usize,
+    _flags: i32,
+    addr: usize,
+    addrlen: usize,
+) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    if addr != 0 {
+        let _ = read_sockaddr_in(addr, addrlen)?;
+    }
+    let bytes = process::read_user(buf, len).ok_or(EFAULT)?;
+    crate::net::socket::with_sockets(|table| table.send(handle, bytes))
+        .map(|sent| sent as u64)
+        .map_err(map_socket_error)
+}
+
+fn linux_recvfrom(
+    fd: usize,
+    buf: usize,
+    len: usize,
+    _flags: i32,
+    addr: usize,
+    addrlen_ptr: usize,
+) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let output = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
+    let read = crate::net::socket::with_sockets(|table| table.recv(handle, output))
+        .map_err(map_socket_error)?;
+    if addr != 0 {
+        write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 2], 80)?;
+    }
+    Ok(read as u64)
+}
+
+fn linux_bind(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let (_ip, port) = read_sockaddr_in(addr, addrlen)?;
+    crate::net::socket::with_sockets(|table| table.bind(handle, port))
+        .map(|_| 0)
+        .map_err(map_socket_error)
+}
+
+fn linux_listen(fd: usize, _backlog: i32) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    crate::net::socket::with_sockets(|table| table.listen(handle))
+        .map(|_| 0)
+        .map_err(map_socket_error)
+}
+
+fn linux_getsockname(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let port = crate::net::socket::with_sockets(|table| table.local_port(handle))
+        .map_err(map_socket_error)?;
+    write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 15], port)?;
+    Ok(0)
+}
+
+fn socket_handle(fd: usize) -> Result<usize, i64> {
+    if fd < SOCKET_FD_BASE {
+        return Err(EBADF);
+    }
+    Ok(fd - SOCKET_FD_BASE)
+}
+
+fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
+    match err {
+        crate::net::socket::SocketError::BadFd => EBADF,
+        crate::net::socket::SocketError::Invalid => EINVAL,
+        crate::net::socket::SocketError::WouldBlock => 0,
+    }
+}
+
+fn read_sockaddr_in(ptr: usize, len: usize) -> Result<([u8; 4], u16), i64> {
+    if ptr == 0 || len < 16 {
+        return Err(EINVAL);
+    }
+    let bytes = process::read_user(ptr, 16).ok_or(EFAULT)?;
+    let family = u16::from_le_bytes([bytes[0], bytes[1]]) as i32;
+    if family != AF_INET {
+        return Err(EINVAL);
+    }
+    let port = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let ip = [bytes[4], bytes[5], bytes[6], bytes[7]];
+    Ok((ip, port))
+}
+
+fn write_sockaddr_in(
+    ptr: usize,
+    len_ptr: usize,
+    ip: [u8; 4],
+    port: u16,
+) -> Result<(), i64> {
+    let out = process::write_user_buffer(ptr, 16).ok_or(EFAULT)?;
+    for byte in out.iter_mut() {
+        *byte = 0;
+    }
+    out[0..2].copy_from_slice(&(AF_INET as u16).to_le_bytes());
+    out[2..4].copy_from_slice(&port.to_be_bytes());
+    out[4..8].copy_from_slice(&ip);
+    if len_ptr != 0 {
+        let len_out = process::write_user_buffer(len_ptr, 4).ok_or(EFAULT)?;
+        len_out.copy_from_slice(&(16u32).to_le_bytes());
+    }
+    Ok(())
 }
 
 fn linux_getppid() -> Result<u64, i64> {

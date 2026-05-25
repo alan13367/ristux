@@ -33,6 +33,7 @@ send_text() {
       '|') printf 'sendkey shift-backslash\n' ;;
       '&') printf 'sendkey shift-7\n' ;;
       '/') printf 'sendkey slash\n' ;;
+      ':') printf 'sendkey shift-semicolon\n' ;;
       '.') printf 'sendkey dot\n' ;;
       '-') printf 'sendkey minus\n' ;;
       '_') printf 'sendkey shift-minus\n' ;;
@@ -121,6 +122,10 @@ send_text() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "curl_lite http://10.0.2.2/"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -182,6 +187,8 @@ grep -q "TTY canonical line ready: echo after ctrlc" "$SERIAL_LOG"
 grep -q "after ctrlc" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: ping 10.0.2.2" "$SERIAL_LOG"
 grep -q "1 packets transmitted, 1 received" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: curl_lite http://10.0.2.2/" "$SERIAL_LOG"
+grep -q "ristux tcp ok" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"

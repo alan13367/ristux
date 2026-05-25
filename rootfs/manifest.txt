@@ -4,6 +4,7 @@ file /bin/init ../build/userland/init.elf
 file /bin/sh ../build/userland/sh.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
+file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
 file /bin/id ../build/userland/id.elf
@@ -24,6 +25,7 @@ file /etc/os-release etc/os-release
 file /lib/libc.so ../build/userland/libc.so
 package cat 0.1.0 /bin/cat
 package chmod 0.1.0 /bin/chmod
+package curl_lite 0.1.0 /bin/curl_lite
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
 package id 0.1.0 /bin/id

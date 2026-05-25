@@ -18,6 +18,14 @@ pub const NR_PIPE: usize = 22;
 pub const NR_SCHED_YIELD: usize = 24;
 pub const NR_DUP2: usize = 33;
 pub const NR_GETPID: usize = 39;
+pub const NR_SOCKET: usize = 41;
+pub const NR_CONNECT: usize = 42;
+pub const NR_ACCEPT: usize = 43;
+pub const NR_SENDTO: usize = 44;
+pub const NR_RECVFROM: usize = 45;
+pub const NR_BIND: usize = 49;
+pub const NR_LISTEN: usize = 50;
+pub const NR_GETSOCKNAME: usize = 51;
 pub const NR_FORK: usize = 57;
 pub const NR_EXECVE: usize = 59;
 pub const NR_EXIT: usize = 60;
@@ -36,6 +44,29 @@ pub const NR_SETGROUPS: usize = 116;
 pub const NR_SETRESUID: usize = 117;
 pub const NR_RT_SIGACTION: usize = 13;
 pub const NR_RT_SIGRETURN: usize = 15;
+
+pub const AF_INET: i32 = 2;
+pub const SOCK_STREAM: i32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SockAddrIn {
+    pub family: u16,
+    pub port: u16,
+    pub addr: [u8; 4],
+    pub zero: [u8; 8],
+}
+
+impl SockAddrIn {
+    pub const fn new(addr: [u8; 4], port: u16) -> Self {
+        Self {
+            family: AF_INET as u16,
+            port: port.to_be(),
+            addr,
+            zero: [0; 8],
+        }
+    }
+}
 
 #[inline]
 pub unsafe fn syscall0(nr: usize) -> isize {
@@ -123,6 +154,62 @@ pub unsafe fn syscall4(nr: usize, a: usize, b: usize, c: usize, d: usize) -> isi
 }
 
 #[inline]
+pub unsafe fn syscall5(
+    nr: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
+) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") nr as isize => ret,
+            in("rdi") a,
+            in("rsi") b,
+            in("rdx") c,
+            in("r10") d,
+            in("r8") e,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
+#[inline]
+pub unsafe fn syscall6(
+    nr: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
+    f: usize,
+) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") nr as isize => ret,
+            in("rdi") a,
+            in("rsi") b,
+            in("rdx") c,
+            in("r10") d,
+            in("r8") e,
+            in("r9") f,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
+#[inline]
 pub fn write(fd: i32, buf: &[u8]) -> isize {
     unsafe { syscall3(NR_WRITE, fd as usize, buf.as_ptr() as usize, buf.len()) }
 }
@@ -145,6 +232,80 @@ pub fn close(fd: i32) -> isize {
 #[inline]
 pub fn pipe(pipefd: *mut i32) -> isize {
     unsafe { syscall1(NR_PIPE, pipefd as usize) }
+}
+
+#[inline]
+pub fn socket(domain: i32, kind: i32, protocol: i32) -> isize {
+    unsafe { syscall3(NR_SOCKET, domain as usize, kind as usize, protocol as usize) }
+}
+
+#[inline]
+pub fn connect(fd: i32, addr: &SockAddrIn) -> isize {
+    unsafe {
+        syscall3(
+            NR_CONNECT,
+            fd as usize,
+            addr as *const SockAddrIn as usize,
+            core::mem::size_of::<SockAddrIn>(),
+        )
+    }
+}
+
+#[inline]
+pub fn sendto(fd: i32, buf: &[u8], flags: i32) -> isize {
+    unsafe {
+        syscall6(
+            NR_SENDTO,
+            fd as usize,
+            buf.as_ptr() as usize,
+            buf.len(),
+            flags as usize,
+            0,
+            0,
+        )
+    }
+}
+
+#[inline]
+pub fn recvfrom(fd: i32, buf: &mut [u8], flags: i32) -> isize {
+    unsafe {
+        syscall6(
+            NR_RECVFROM,
+            fd as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+            flags as usize,
+            0,
+            0,
+        )
+    }
+}
+
+#[inline]
+pub fn bind(fd: i32, addr: &SockAddrIn) -> isize {
+    unsafe {
+        syscall3(
+            NR_BIND,
+            fd as usize,
+            addr as *const SockAddrIn as usize,
+            core::mem::size_of::<SockAddrIn>(),
+        )
+    }
+}
+
+#[inline]
+pub fn listen(fd: i32, backlog: i32) -> isize {
+    unsafe { syscall2(NR_LISTEN, fd as usize, backlog as usize) }
+}
+
+#[inline]
+pub fn accept(fd: i32, addr: *mut SockAddrIn, addrlen: *mut u32) -> isize {
+    unsafe { syscall3(NR_ACCEPT, fd as usize, addr as usize, addrlen as usize) }
+}
+
+#[inline]
+pub fn getsockname(fd: i32, addr: *mut SockAddrIn, addrlen: *mut u32) -> isize {
+    unsafe { syscall3(NR_GETSOCKNAME, fd as usize, addr as usize, addrlen as usize) }
 }
 
 #[inline]
