@@ -68,6 +68,8 @@ USER_CC_HELLO_OBJ := build/userland/c/cc_hello.o
 USER_CC_HELLO_ELF := build/userland/cc_hello.elf
 USER_CC_CRED_OBJ := build/userland/c/cc_cred.o
 USER_CC_CRED_ELF := build/userland/cc_cred.elf
+USER_CC_COW_OBJ := build/userland/c/cc_cow.o
+USER_CC_COW_ELF := build/userland/cc_cow.elf
 USER_CC_FCNTL_OBJ := build/userland/c/cc_fcntl.o
 USER_CC_FCNTL_ELF := build/userland/cc_fcntl.elf
 USER_CC_MMAP_OBJ := build/userland/c/cc_mmap.o
@@ -205,6 +207,13 @@ $(USER_CC_CRED_OBJ): userland/c/bin/cc_cred.c $(USER_C_HEADERS)
 $(USER_CC_CRED_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_CRED_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_CRED_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
 
+$(USER_CC_COW_OBJ): userland/c/bin/cc_cow.c $(USER_C_HEADERS)
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_CC_COW_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_COW_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_COW_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
+
 $(USER_CC_FCNTL_OBJ): userland/c/bin/cc_fcntl.c $(USER_C_HEADERS)
 	mkdir -p build/userland/c
 	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
@@ -255,7 +264,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_PROC_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_COW_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_PROC_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

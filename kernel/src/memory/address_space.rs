@@ -137,6 +137,7 @@ impl AddressSpace {
 
     pub fn clone_full_copy(&self) -> Result<Self, PagingError> {
         let mut clone = Self::new_kernel_clone()?;
+        clone.user_mappings = Vec::with_capacity(self.user_mappings.len());
         for &(virt, ref frame) in &self.user_mappings {
             unsafe {
                 if let Some(pte) = paging::get_pte_mut(self.p4, virt) {
