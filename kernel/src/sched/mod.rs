@@ -1,0 +1,325 @@
+//! Per-CPU run queues bridging the process table and SMP scheduling.
+
+use alloc::vec::Vec;
+use core::{
+    arch::asm,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+use crate::{
+    process::{self, Pid, SavedSyscallFrame},
+    sync::spinlock::SpinLock,
+};
+
+const MAX_CPUS: usize = 8;
+const RESCHEDULE_IPI_VECTOR: u32 = 0xf1;
+const SYSCALL_STACK_SIZE: usize = 4096 * 4;
+
+const IA32_GS_BASE: u32 = 0xc000_0101;
+const IA32_KERNEL_GS_BASE: u32 = 0xc000_0102;
+
+static CPU_SYSCALL_STACKS: SpinLock<[[u8; SYSCALL_STACK_SIZE]; MAX_CPUS]> =
+    SpinLock::new([[0; SYSCALL_STACK_SIZE]; MAX_CPUS]);
+
+/// Fields at the start are accessed from assembly via GS-relative offsets.
+#[repr(C, align(64))]
+pub struct PerCpu {
+    pub self_ptr: *mut PerCpu,
+    pub user_rsp: u64,
+    pub kernel_rsp: u64,
+    pub id: usize,
+    pub apic_id: u32,
+}
+
+unsafe impl Send for PerCpu {}
+unsafe impl Sync for PerCpu {}
+
+struct CpuRunState {
+    run_queue: Vec<Pid>,
+    current_pid: Option<Pid>,
+    reschedule_pending: bool,
+    idle_loops: u64,
+    dispatches: u64,
+}
+
+impl CpuRunState {
+    const fn new() -> Self {
+        Self {
+            run_queue: Vec::new(),
+            current_pid: None,
+            reschedule_pending: false,
+            idle_loops: 0,
+            dispatches: 0,
+        }
+    }
+}
+
+struct CpuScheduler {
+    lock: SpinLock<CpuRunState>,
+}
+
+impl CpuScheduler {
+    const fn new() -> Self {
+        Self {
+            lock: SpinLock::new(CpuRunState::new()),
+        }
+    }
+}
+
+static PER_CPU: SpinLock<[Option<PerCpu>; MAX_CPUS]> = SpinLock::new([const { None }; MAX_CPUS]);
+static CPU_SCHED: [CpuScheduler; MAX_CPUS] = [const { CpuScheduler::new() }; MAX_CPUS];
+static CPU_COUNT: AtomicUsize = AtomicUsize::new(1);
+static SCHED_INIT: AtomicBool = AtomicBool::new(false);
+
+pub fn init(cpu_count: usize, apic_ids: &[u32]) {
+    let count = cpu_count.min(MAX_CPUS).max(1);
+    let stacks = CPU_SYSCALL_STACKS.lock();
+    let mut guard = PER_CPU.lock();
+    for index in 0..count {
+        let kernel_rsp = stacks[index].as_ptr() as u64 + SYSCALL_STACK_SIZE as u64;
+        guard[index] = Some(PerCpu {
+            self_ptr: core::ptr::null_mut(),
+            user_rsp: 0,
+            kernel_rsp,
+            id: index,
+            apic_id: apic_ids.get(index).copied().unwrap_or(index as u32),
+        });
+    }
+    drop(stacks);
+    for index in 0..count {
+        if let Some(cpu) = guard[index].as_mut() {
+            cpu.self_ptr = cpu as *mut PerCpu;
+            if index == 0 {
+                write_gs_base(cpu as *mut PerCpu as u64);
+            }
+        }
+    }
+    drop(guard);
+    CPU_COUNT.store(count, Ordering::Release);
+    SCHED_INIT.store(true, Ordering::Release);
+    crate::println!(
+        "Per-CPU scheduler initialized with {} CPU run queue(s).",
+        count
+    );
+}
+
+pub fn init_ap(cpu_index: usize) {
+    let guard = PER_CPU.lock();
+    let Some(cpu) = guard[cpu_index].as_ref() else {
+        return;
+    };
+    write_gs_base(cpu as *const PerCpu as u64);
+}
+
+#[inline(always)]
+pub fn current_cpu_id() -> usize {
+    if !SCHED_INIT.load(Ordering::Acquire) {
+        return 0;
+    }
+    unsafe {
+        let base: *const PerCpu;
+        asm!(
+            "mov {0}, gs:0",
+            out(reg) base,
+            options(nomem, nostack, preserves_flags)
+        );
+        if base.is_null() {
+            0
+        } else {
+            (*base).id
+        }
+    }
+}
+
+pub fn enqueue(pid: Pid) {
+    let cpu_id = current_cpu_id();
+    let target = pick_cpu_for_enqueue(cpu_id);
+    with_cpu_state_mut(target, |state| {
+        if !state.run_queue.contains(&pid) {
+            state.run_queue.push(pid);
+        }
+    });
+    if target != cpu_id {
+        crate::smp::send_reschedule_ipi(target);
+    } else {
+        set_reschedule_pending(cpu_id);
+    }
+}
+
+pub fn wake_blocked(pid: Pid) {
+    if process::is_runnable(pid) {
+        enqueue(pid);
+    }
+}
+
+pub fn on_fork(child: Pid) {
+    enqueue(child);
+}
+
+pub fn dispatch_local() -> Option<Pid> {
+    let cpu_id = current_cpu_id();
+    with_cpu_state_mut(cpu_id, |state| {
+        state.reschedule_pending = false;
+        while let Some(pid) = state.run_queue.pop() {
+            if process::is_runnable(pid) {
+                state.current_pid = Some(pid);
+                state.dispatches += 1;
+                return Some(pid);
+            }
+        }
+        state.current_pid = None;
+        None
+    })
+}
+
+/// Yield the CPU while blocked in a syscall, switching to another runnable process when possible.
+pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) {
+    let self_pid = match process::current_pid() {
+        Some(pid) => pid,
+        None => {
+            crate::arch::x86_64::instructions::halt();
+            return;
+        }
+    };
+    process::save_syscall_frame(self_pid, frame);
+
+    loop {
+        if process::is_runnable(self_pid) {
+            process::set_current(self_pid);
+            if process::restore_syscall_frame(self_pid, frame) {
+                return;
+            }
+        }
+
+        if let Some(next) = dispatch_local() {
+            if next == self_pid {
+                continue;
+            }
+            if process::restore_syscall_frame(next, frame) {
+                process::set_current(next);
+                return;
+            }
+            enqueue(next);
+            continue;
+        }
+
+        increment_idle_loops(current_cpu_id());
+        crate::arch::x86_64::instructions::halt();
+    }
+}
+
+pub fn ap_idle_loop(cpu_id: usize) -> ! {
+    crate::println!("AP {} entering scheduler idle loop.", cpu_id);
+    unsafe {
+        asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+    loop {
+        if take_reschedule_pending(cpu_id) {
+            if let Some(pid) = dispatch_local() {
+                crate::println!("cpu{} dispatched pid {}", cpu_id, pid);
+            }
+        }
+        if dispatch_local().is_some() {
+            continue;
+        }
+        increment_idle_loops(cpu_id);
+        crate::arch::x86_64::instructions::halt();
+    }
+}
+
+pub fn handle_reschedule_ipi() {
+    set_reschedule_pending(current_cpu_id());
+}
+
+pub fn reschedule_ipi_vector() -> u32 {
+    RESCHEDULE_IPI_VECTOR
+}
+
+pub fn stats() -> SchedStats {
+    let count = CPU_COUNT.load(Ordering::Acquire);
+    let mut queued = 0usize;
+    let mut dispatches = 0u64;
+    let mut idle_loops = 0u64;
+    for index in 0..count {
+        let guard = CPU_SCHED[index].lock.lock();
+        queued += guard.run_queue.len();
+        dispatches += guard.dispatches;
+        idle_loops += guard.idle_loops;
+    }
+    SchedStats {
+        cpu_count: count,
+        queued,
+        dispatches,
+        idle_loops,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SchedStats {
+    pub cpu_count: usize,
+    pub queued: usize,
+    pub dispatches: u64,
+    pub idle_loops: u64,
+}
+
+fn pick_cpu_for_enqueue(preferred: usize) -> usize {
+    let count = CPU_COUNT.load(Ordering::Acquire);
+    if count <= 1 {
+        return 0;
+    }
+    let mut best = preferred.min(count - 1);
+    let mut best_len = usize::MAX;
+    for index in 0..count {
+        let len = CPU_SCHED[index].lock.lock().run_queue.len();
+        if len < best_len {
+            best_len = len;
+            best = index;
+        }
+    }
+    best
+}
+
+fn set_reschedule_pending(cpu_id: usize) {
+    if cpu_id >= MAX_CPUS {
+        return;
+    }
+    CPU_SCHED[cpu_id].lock.lock().reschedule_pending = true;
+}
+
+fn take_reschedule_pending(cpu_id: usize) -> bool {
+    if cpu_id >= MAX_CPUS {
+        return false;
+    }
+    let mut guard = CPU_SCHED[cpu_id].lock.lock();
+    let pending = guard.reschedule_pending;
+    guard.reschedule_pending = false;
+    pending
+}
+
+fn increment_idle_loops(cpu_id: usize) {
+    if cpu_id >= MAX_CPUS {
+        return;
+    }
+    CPU_SCHED[cpu_id].lock.lock().idle_loops += 1;
+}
+
+fn with_cpu_state_mut<T>(cpu_id: usize, f: impl FnOnce(&mut CpuRunState) -> T) -> T {
+    f(&mut CPU_SCHED[cpu_id.min(MAX_CPUS - 1)].lock.lock())
+}
+
+fn write_gs_base(base: u64) {
+    write_msr(IA32_GS_BASE, base);
+    write_msr(IA32_KERNEL_GS_BASE, base);
+}
+
+fn write_msr(msr: u32, value: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}

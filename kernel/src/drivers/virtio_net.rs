@@ -1,29 +1,12 @@
 use alloc::vec::Vec;
 
-use super::pci::{self};
+use super::{pci, virtio_mmio};
 use crate::net::{EthernetFrame, MacAddr};
 
 const VIRTIO_VENDOR: u16 = 0x1af4;
 const VIRTIO_NET_LEGACY: u16 = 0x1000;
 const VIRTIO_NET_MODERN: u16 = 0x1041;
-
-const MMIO_MAGIC: u32 = 0x7472_6976;
-const MMIO_VERSION: u32 = 0x01;
 const MMIO_DEVICE_ID_NET: u32 = 0x01;
-
-const MMIO_MAGIC_VALUE: usize = 0x000;
-const MMIO_VERSION_REG: usize = 0x004;
-const MMIO_DEVICE_ID: usize = 0x008;
-const MMIO_STATUS: usize = 0x070;
-const MMIO_QUEUE_SEL: usize = 0x030;
-const MMIO_QUEUE_NUM: usize = 0x034;
-const MMIO_QUEUE_READY: usize = 0x044;
-const MMIO_QUEUE_NOTIFY: usize = 0x050;
-
-const STATUS_ACK: u32 = 1;
-const STATUS_DRIVER: u32 = 2;
-const STATUS_DRIVER_OK: u32 = 4;
-const STATUS_FEATURES_OK: u32 = 8;
 
 pub struct VirtioNetDriver {
     mmio: usize,
@@ -40,10 +23,10 @@ impl VirtioNetDriver {
         let device = pci::find_device(VIRTIO_VENDOR, VIRTIO_NET_LEGACY)
             .or_else(|| pci::find_device(VIRTIO_VENDOR, VIRTIO_NET_MODERN))?;
         pci::enable_bus_master(&device);
-        let mmio = map_bar0(device.bar0)?;
+        let mmio = virtio_mmio::map_bar0(device.bar0)? as usize;
         let mut driver = Self {
-            mmio: mmio as usize,
-            mac: read_mac(mmio),
+            mmio,
+            mac: read_mac(mmio as *mut u8),
             rx_queue: Vec::new(),
             tx_queue: Vec::new(),
             hardware: true,
@@ -51,7 +34,7 @@ impl VirtioNetDriver {
         driver.init_device();
         crate::println!(
             "VirtIO net driver initialized at {:#x}, MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}.",
-            mmio as usize,
+            mmio,
             driver.mac.0[0],
             driver.mac.0[1],
             driver.mac.0[2],
@@ -111,34 +94,14 @@ impl VirtioNetDriver {
         if self.mmio == 0 {
             return;
         }
-        let mmio = self.mmio as *mut u8;
-        unsafe {
-            write32(mmio, MMIO_STATUS, 0);
-            write32(mmio, MMIO_STATUS, STATUS_ACK);
-            write32(mmio, MMIO_STATUS, STATUS_ACK | STATUS_DRIVER);
-            write32(mmio, MMIO_QUEUE_SEL, 0);
-            write32(mmio, MMIO_QUEUE_NUM, 256);
-            write32(mmio, MMIO_QUEUE_READY, 1);
-            write32(mmio, MMIO_QUEUE_SEL, 1);
-            write32(mmio, MMIO_QUEUE_NUM, 256);
-            write32(mmio, MMIO_QUEUE_READY, 1);
-            write32(
-                mmio,
-                MMIO_STATUS,
-                STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK,
-            );
-        }
+        virtio_mmio::init_device(self.mmio as *mut u8, 2);
     }
 
     fn kick_tx(&mut self) {
         if self.mmio == 0 {
             return;
         }
-        let mmio = self.mmio as *mut u8;
-        unsafe {
-            write32(mmio, MMIO_QUEUE_SEL, 1);
-            write32(mmio, MMIO_QUEUE_NOTIFY, 1);
-        }
+        virtio_mmio::kick_queue(self.mmio as *mut u8, 1);
     }
 
     fn maybe_gateway_echo(&mut self) {
@@ -197,14 +160,6 @@ impl VirtioNetDriver {
     }
 }
 
-fn map_bar0(bar0: u32) -> Option<*mut u8> {
-    let address = bar0 & 0xffff_fff0;
-    if address == 0 {
-        return None;
-    }
-    Some(address as usize as *mut u8)
-}
-
 fn ipv4_checksum(header: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut index = 0;
@@ -219,31 +174,12 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
 }
 
 fn read_mac(mmio: *mut u8) -> MacAddr {
-    unsafe {
-        if read32(mmio, MMIO_MAGIC_VALUE) != MMIO_MAGIC {
-            return MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-        }
-        if read32(mmio, MMIO_VERSION_REG) != MMIO_VERSION
-            || read32(mmio, MMIO_DEVICE_ID) != MMIO_DEVICE_ID_NET
-        {
-            return MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-        }
-        let mut mac = [0u8; 6];
-        for index in 0..6 {
-            mac[index] = read8(mmio, 0x0000_0014 + index);
-        }
-        MacAddr(mac)
+    if !virtio_mmio::validate(mmio, MMIO_DEVICE_ID_NET) {
+        return MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
     }
+    let mut mac = [0u8; 6];
+    for index in 0..6 {
+        mac[index] = unsafe { virtio_mmio::read8(mmio, 0x0000_0014 + index) };
+    }
+    MacAddr(mac)
 }
-
-unsafe fn read8(base: *mut u8, offset: usize) -> u8 { unsafe {
-    core::ptr::read_volatile(base.add(offset))
-}}
-
-unsafe fn read32(base: *mut u8, offset: usize) -> u32 { unsafe {
-    core::ptr::read_volatile(base.add(offset) as *const u32)
-}}
-
-unsafe fn write32(base: *mut u8, offset: usize, value: u32) { unsafe {
-    core::ptr::write_volatile(base.add(offset) as *mut u32, value);
-}}

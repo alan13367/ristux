@@ -24,6 +24,7 @@ mod multiboot;
 mod net;
 mod panic;
 mod process;
+mod sched;
 mod security;
 mod shell;
 mod signal;

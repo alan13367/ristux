@@ -46,6 +46,17 @@ pub struct ApBootStack([u8; 4096]);
 #[unsafe(no_mangle)]
 pub static SMP_AP_BOOT_STACK: ApBootStack = ApBootStack([0; 4096]);
 
+static AP_KERNEL_STACKS: [ApBootStack; 8] = [
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+    ApBootStack([0; 4096]),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuId(pub usize);
 
@@ -277,6 +288,9 @@ pub fn init(rsdp: Option<AcpiRsdp>) {
             cpu.apic_id
         );
     }
+
+    let apic_ids: Vec<u32> = system.cpus.iter().map(|c| c.apic_id).collect();
+    crate::sched::init(system.cpus.len(), &apic_ids);
 
     system.start_application_processors();
     crate::println!(
@@ -636,6 +650,20 @@ fn apic_write_icr(local_apic: usize, apic_id: u32, low: u32) {
     wait_icr_idle(local_apic);
 }
 
+pub fn send_reschedule_ipi(cpu_index: usize) {
+    let info = {
+        let guard = SMP.lock();
+        guard.as_ref().map(|s| (s.local_apic_addr as usize, s.cpus.get(cpu_index).map(|c| c.apic_id)))
+    };
+    if let Some((local_apic, Some(apic_id))) = info {
+        apic_write_icr(
+            local_apic,
+            apic_id,
+            0x000c_0000 | crate::sched::reschedule_ipi_vector(),
+        );
+    }
+}
+
 pub fn send_tlb_shootdown() {
     let addr = {
         let guard = SMP.lock();
@@ -799,10 +827,20 @@ fn write_msr(msr: u32, value: u64) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn smp_ap_start() -> ! {
-    AP_STARTED_COUNT.fetch_add(1, Ordering::AcqRel);
-    loop {
-        unsafe {
-            asm!("hlt", options(nomem, nostack, preserves_flags));
+    let cpu_id = AP_STARTED_COUNT.fetch_add(1, Ordering::AcqRel) + 1;
+    if cpu_id >= 8 {
+        loop {
+            unsafe {
+                asm!("hlt", options(nomem, nostack, preserves_flags));
+            }
         }
     }
+    unsafe {
+        let stack_top = AP_KERNEL_STACKS[cpu_id].0.as_ptr() as u64 + 4096;
+        asm!("mov rsp, {}", in(reg) stack_top, options(nomem, nostack));
+    }
+    crate::arch::x86_64::gdt::init_ap(cpu_id);
+    crate::arch::x86_64::idt::load();
+    crate::sched::init_ap(cpu_id);
+    crate::sched::ap_idle_loop(cpu_id);
 }

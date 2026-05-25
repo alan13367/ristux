@@ -404,7 +404,9 @@ pub fn sleep_current(tick: u64, delta: u64) {
     task_switch(false);
 }
 
-pub fn wake_blocked(_pid: u64) {}
+pub fn wake_blocked(pid: u64) {
+    crate::sched::wake_blocked(pid);
+}
 
 pub fn stats() -> SchedulerStats {
     with_scheduler(|scheduler| SchedulerStats {

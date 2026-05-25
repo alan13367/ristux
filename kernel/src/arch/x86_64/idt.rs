@@ -164,16 +164,31 @@ pub fn init() {
             0xf0,
             tlb_shootdown_interrupt_handler as *const () as u64,
         );
+        (*idt).set_handler(
+            crate::sched::reschedule_ipi_vector() as usize,
+            reschedule_interrupt_handler as *const () as u64,
+        );
 
-        let pointer = DescriptorTablePointer {
-            limit: (mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
-            base: idt as u64,
-        };
-
-        asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags));
+        load_idt();
     }
 
     crate::println!("IDT initialized.");
+}
+
+pub fn load() {
+    unsafe {
+        load_idt();
+    }
+}
+
+unsafe fn load_idt() {
+    let idt = ptr::addr_of!(IDT);
+    let pointer = DescriptorTablePointer {
+        limit: (mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
+        base: idt as u64,
+    };
+
+    asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags));
 }
 
 pub fn trigger_breakpoint() {
@@ -276,5 +291,72 @@ extern "x86-interrupt" fn tlb_shootdown_interrupt_handler(_stack_frame: Interrup
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
         asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
         crate::smp::signal_eoi();
+    }
+}
+
+extern "x86-interrupt" fn reschedule_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::sched::handle_reschedule_ipi();
+    crate::smp::signal_eoi();
+}
+
+const IA32_STAR: u32 = 0xc000_0081;
+const IA32_LSTAR: u32 = 0xc000_0082;
+const IA32_FMASK: u32 = 0xc000_0084;
+
+global_asm!(
+    r#"
+.global linux_syscall_entry
+linux_syscall_entry:
+    cld
+    swapgs
+    mov gs:[8], rsp
+    mov rsp, gs:[16]
+    push r11
+    push rcx
+    push r15
+    push r14
+    push r13
+    push r12
+    push rbp
+    push rbx
+    push r10
+    push rdx
+    push rsi
+    push rdi
+    push rax
+    mov rdi, rsp
+    call linux_syscall_dispatch
+    add rsp, 80
+    pop rcx
+    pop r11
+    mov rsp, gs:[8]
+    swapgs
+    sysretq
+"#
+);
+
+unsafe extern "C" {
+    fn linux_syscall_entry();
+}
+
+pub fn install_linux_syscall() {
+    unsafe {
+        let entry = linux_syscall_entry as *const () as u64;
+        write_msr(IA32_STAR, ((gdt::kernel_code_selector() as u64) << 32) | 0x0013_0008);
+        write_msr(IA32_LSTAR, entry);
+        write_msr(IA32_FMASK, 0x200);
+    }
+    crate::println!("Linux x86_64 syscall entry installed via MSR.");
+}
+
+fn write_msr(msr: u32, value: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags)
+        );
     }
 }

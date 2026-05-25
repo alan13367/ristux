@@ -1,5 +1,8 @@
 use alloc::vec::Vec;
 
+pub mod socket;
+pub mod tcp;
+
 use crate::{
     drivers::virtio_net::VirtioNetDriver,
     sync::spinlock::SpinLock,
@@ -292,7 +295,10 @@ struct Ipv4Packet {
 }
 
 pub fn init() {
+    socket::init();
+    socket::self_test();
     self_test();
+    tcp::self_test();
     *NET_STACK.lock() = Some(runtime_stack());
 }
 

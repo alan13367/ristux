@@ -60,6 +60,33 @@ pub struct Process {
     exit_status: Option<i32>,
     waiters: Vec<Pid>,
     is_user: bool,
+    saved_syscall: Option<SavedSyscallFrame>,
+}
+
+/// Saved register frame for resuming a blocked syscall (mirrors SyscallInterruptFrame).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SavedSyscallFrame {
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
 }
 
 pub struct ProcessTable {
@@ -92,6 +119,7 @@ impl Process {
             exit_status: None,
             waiters: Vec::new(),
             is_user: true,
+            saved_syscall: None,
         }
     }
 
@@ -278,6 +306,7 @@ impl ProcessTable {
         child.waiters.clear();
         child.exit_status = None;
         self.processes.push(child);
+        crate::sched::on_fork(pid);
         Some(pid)
     }
 
@@ -412,6 +441,7 @@ impl Process {
             exit_status: None,
             waiters: Vec::new(),
             is_user: self.is_user,
+            saved_syscall: None,
         })
     }
 }
@@ -429,7 +459,28 @@ pub fn fork(parent: Pid) -> Option<Pid> {
 }
 
 pub fn exec(pid: Pid, path: &str) -> bool {
-    with_table(|table| table.exec(pid, path, &[path]))
+    exec_with_args(pid, path, &[path])
+}
+
+pub fn exec_with_args(pid: Pid, path: &str, args: &[&str]) -> bool {
+    with_table(|table| table.exec(pid, path, args))
+}
+
+pub fn get_parent(pid: Pid) -> Option<Pid> {
+    with_table(|table| table.get(pid).and_then(|p| p.parent))
+}
+
+pub fn install_pipe_fds(pipefd: usize, read_vfs: usize, write_vfs: usize) -> Result<(), ()> {
+    let parent = current_pid().ok_or(())?;
+    with_table(|table| {
+        let process = table.get_mut(parent).ok_or(())?;
+        let user_read = process.push_fd(read_vfs);
+        let user_write = process.push_fd(write_vfs);
+        let out = write_user_buffer(pipefd, 8).ok_or(())?;
+        out[0..4].copy_from_slice(&(user_read as u32).to_le_bytes());
+        out[4..8].copy_from_slice(&(user_write as u32).to_le_bytes());
+        Ok(())
+    })
 }
 
 pub fn exit(pid: Pid, status: i32) {
@@ -472,6 +523,15 @@ pub fn clear_current() {
 
 pub fn current_pid() -> Option<Pid> {
     *CURRENT_PID.lock()
+}
+
+pub fn is_runnable(pid: Pid) -> bool {
+    with_table(|table| {
+        table
+            .get(pid)
+            .map(|p| matches!(p.state, ProcessState::Ready))
+            .unwrap_or(false)
+    })
 }
 
 pub fn with_current<T>(f: impl FnOnce(&mut Process) -> T) -> Option<T> {
@@ -693,6 +753,26 @@ pub fn block_current(reason: BlockReason) {
     }
 }
 
+pub fn save_syscall_frame(pid: Pid, frame: &SavedSyscallFrame) {
+    with_table(|table| {
+        if let Some(process) = table.get_mut(pid) {
+            process.saved_syscall = Some(*frame);
+        }
+    });
+}
+
+pub fn restore_syscall_frame(pid: Pid, frame: &mut SavedSyscallFrame) -> bool {
+    with_table(|table| {
+        if let Some(process) = table.get_mut(pid) {
+            if let Some(saved) = process.saved_syscall.take() {
+                *frame = saved;
+                return true;
+            }
+        }
+        false
+    })
+}
+
 pub fn wait_pid_blocking(parent: Pid, child: Pid) -> Option<i32> {
     loop {
         if let Some(status) = wait(parent, child) {
@@ -777,7 +857,7 @@ fn self_test() {
     crate::println!("Process model self-test passed: fork exec wait.");
 }
 
-fn with_table<T>(f: impl FnOnce(&mut ProcessTable) -> T) -> T {
+pub fn with_table<T>(f: impl FnOnce(&mut ProcessTable) -> T) -> T {
     let mut guard = PROCESS_TABLE.lock();
     let table = guard
         .as_mut()

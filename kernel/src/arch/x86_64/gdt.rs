@@ -8,6 +8,7 @@ const USER_CODE_SELECTOR: u16 = 0x30 | 3;
 const DOUBLE_FAULT_IST_INDEX: usize = 0;
 const DOUBLE_FAULT_STACK_SIZE: usize = 4096 * 5;
 const RING0_STACK_SIZE: usize = 4096 * 5;
+const MAX_CPUS: usize = 8;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -43,20 +44,37 @@ impl TaskStateSegment {
 #[repr(C, align(16))]
 struct Stack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
+#[repr(C, align(16))]
+struct Ring0Stack([u8; RING0_STACK_SIZE]);
+
 static DOUBLE_FAULT_STACK: Stack = Stack([0; DOUBLE_FAULT_STACK_SIZE]);
-static RING0_STACK: Stack = Stack([0; RING0_STACK_SIZE]);
-static mut TSS: TaskStateSegment = TaskStateSegment::new();
-static mut GDT: [u64; 7] = [0; 7];
+static mut CPU_RING0_STACKS: [Ring0Stack; MAX_CPUS] =
+    [const { Ring0Stack([0; RING0_STACK_SIZE]) }; MAX_CPUS];
+static mut CPU_TSS: [TaskStateSegment; MAX_CPUS] =
+    [const { TaskStateSegment::new() }; MAX_CPUS];
+static mut CPU_GDT: [[u64; 7]; MAX_CPUS] = [[0; 7]; MAX_CPUS];
 
 pub fn init() {
+    init_cpu(0);
+    crate::println!("GDT and TSS initialized.");
+}
+
+pub fn init_ap(cpu_id: usize) {
+    if cpu_id >= MAX_CPUS {
+        return;
+    }
+    init_cpu(cpu_id);
+}
+
+fn init_cpu(cpu_id: usize) {
     unsafe {
-        let tss = ptr::addr_of_mut!(TSS);
+        let tss = ptr::addr_of_mut!(CPU_TSS[cpu_id]);
         (*tss).interrupt_stack_table[DOUBLE_FAULT_IST_INDEX] =
             ptr::addr_of!(DOUBLE_FAULT_STACK.0) as u64 + DOUBLE_FAULT_STACK_SIZE as u64;
-        (*tss).privilege_stack_table[0] =
-            ptr::addr_of!(RING0_STACK.0) as u64 + RING0_STACK_SIZE as u64;
+        (*tss).privilege_stack_table[0] = ptr::addr_of!(CPU_RING0_STACKS[cpu_id].0) as u64
+            + RING0_STACK_SIZE as u64;
 
-        let gdt = ptr::addr_of_mut!(GDT);
+        let gdt = ptr::addr_of_mut!(CPU_GDT[cpu_id]);
         (*gdt)[0] = 0;
         (*gdt)[1] = 0x00af_9a00_0000_ffff;
         (*gdt)[2] = 0x00af_9200_0000_ffff;
@@ -84,8 +102,6 @@ pub fn init() {
         );
         asm!("ltr ax", in("ax") TSS_SELECTOR, options(nostack, preserves_flags));
     }
-
-    crate::println!("GDT and TSS initialized.");
 }
 
 pub const fn double_fault_ist() -> u16 {
@@ -109,12 +125,15 @@ pub fn init_user_segments() {
         "User mode segments configured: code {:#x}, data {:#x}, rsp0 {:#x}",
         user_code_selector(),
         user_data_selector(),
-        kernel_stack_top()
+        kernel_stack_top(0)
     );
 }
 
-fn kernel_stack_top() -> u64 {
-    ptr::addr_of!(RING0_STACK.0) as u64 + RING0_STACK_SIZE as u64
+pub fn kernel_stack_top(cpu_id: usize) -> u64 {
+    let id = cpu_id.min(MAX_CPUS - 1);
+    unsafe {
+        ptr::addr_of!(CPU_RING0_STACKS[id].0) as u64 + RING0_STACK_SIZE as u64
+    }
 }
 
 fn tss_descriptor(base: u64) -> (u64, u64) {

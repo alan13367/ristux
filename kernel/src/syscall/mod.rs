@@ -1,8 +1,11 @@
 use core::{fmt, str};
 
+pub mod linux;
+
 use crate::{
     fs::vfs::VfsError,
-    process,
+    process::{self, SavedSyscallFrame},
+    sched,
     userspace::{self, ProcessState, UserProcess},
 };
 
@@ -82,7 +85,9 @@ impl fmt::Display for SyscallError {
 
 pub fn init() {
     crate::arch::x86_64::idt::install_syscall_gate();
-    crate::println!("Syscall ABI initialized on int 0x80.");
+    crate::arch::x86_64::idt::install_linux_syscall();
+    linux::self_test();
+    crate::println!("Syscall ABI initialized on int 0x80 and Linux syscall.");
 }
 
 #[unsafe(no_mangle)]
@@ -116,6 +121,7 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         }
         SYS_READ => {
             frame.rax = match sys_read_active(
+                frame,
                 frame.rdi as usize,
                 frame.rsi as usize,
                 frame.rdx as usize,
@@ -244,6 +250,7 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         }
         SYS_UDP_RECV => {
             frame.rax = match sys_udp_recv_active(
+                frame,
                 frame.rdi as usize,
                 frame.rsi as usize,
                 frame.rdx as usize,
@@ -255,7 +262,7 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         SYS_WAITPID => {
             let parent = process::current_pid().unwrap_or(0);
             let child = frame.rsi as process::Pid;
-            frame.rax = process::wait_pid_blocking(parent, child).unwrap_or(-1) as u64;
+            frame.rax = sys_waitpid_active(frame, parent, child).unwrap_or(-1) as u64;
         }
         SYS_BRK => {
             frame.rax = match process::brk(frame.rdi as usize) {
@@ -445,18 +452,28 @@ fn sys_udp_send_active(
     }
 }
 
-fn sys_udp_recv_active(socket: usize, ptr: usize, len: usize) -> SyscallResult {
+fn sys_udp_recv_active(
+    frame: &mut SyscallInterruptFrame,
+    socket: usize,
+    ptr: usize,
+    len: usize,
+) -> SyscallResult {
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
     loop {
         if let Some(read) = crate::net::udp_recv(socket, buffer) {
             return Ok(read as u64);
         }
         process::block_current(process::BlockReason::WaitIo);
-        crate::arch::x86_64::instructions::halt();
+        yield_while_blocked(frame);
     }
 }
 
-fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
+fn sys_read_active(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    ptr: usize,
+    len: usize,
+) -> SyscallResult {
     let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
     loop {
@@ -464,11 +481,79 @@ fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
             Ok(read) => return Ok(read as u64),
             Err(crate::fs::vfs::VfsError::WouldBlock) => {
                 process::block_current(process::BlockReason::WaitIo);
-                crate::arch::x86_64::instructions::halt();
+                yield_while_blocked(frame);
             }
             Err(err) => return Err(map_vfs_error(err)),
         }
     }
+}
+
+fn sys_waitpid_active(
+    frame: &mut SyscallInterruptFrame,
+    parent: process::Pid,
+    child: process::Pid,
+) -> Option<i32> {
+    loop {
+        if let Some(status) = process::wait(parent, child) {
+            return Some(status);
+        }
+        process::block_current(process::BlockReason::WaitChild(child));
+        yield_while_blocked(frame);
+    }
+}
+
+fn yield_while_blocked(frame: &mut SyscallInterruptFrame) {
+    let mut saved = saved_from_frame(frame);
+    sched::yield_from_syscall(&mut saved);
+    apply_saved_frame(frame, &saved);
+}
+
+fn saved_from_frame(frame: &SyscallInterruptFrame) -> SavedSyscallFrame {
+    SavedSyscallFrame {
+        rax: frame.rax,
+        rbx: frame.rbx,
+        rcx: frame.rcx,
+        rdx: frame.rdx,
+        rsi: frame.rsi,
+        rdi: frame.rdi,
+        rbp: frame.rbp,
+        r8: frame.r8,
+        r9: frame.r9,
+        r10: frame.r10,
+        r11: frame.r11,
+        r12: frame.r12,
+        r13: frame.r13,
+        r14: frame.r14,
+        r15: frame.r15,
+        rip: frame.rip,
+        cs: frame.cs,
+        rflags: frame.rflags,
+        rsp: frame.rsp,
+        ss: frame.ss,
+    }
+}
+
+fn apply_saved_frame(frame: &mut SyscallInterruptFrame, saved: &SavedSyscallFrame) {
+    frame.rax = saved.rax;
+    frame.rbx = saved.rbx;
+    frame.rcx = saved.rcx;
+    frame.rdx = saved.rdx;
+    frame.rsi = saved.rsi;
+    frame.rdi = saved.rdi;
+    frame.rbp = saved.rbp;
+    frame.r8 = saved.r8;
+    frame.r9 = saved.r9;
+    frame.r10 = saved.r10;
+    frame.r11 = saved.r11;
+    frame.r12 = saved.r12;
+    frame.r13 = saved.r13;
+    frame.r14 = saved.r14;
+    frame.r15 = saved.r15;
+    frame.rip = saved.rip;
+    frame.cs = saved.cs;
+    frame.rflags = saved.rflags;
+    frame.rsp = saved.rsp;
+    frame.ss = saved.ss;
 }
 
 fn sys_close_active(fd: usize) -> SyscallResult {

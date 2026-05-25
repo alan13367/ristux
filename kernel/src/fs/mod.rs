@@ -1,3 +1,4 @@
+pub mod ext2;
 pub mod vfs;
 
 use crate::{initrd::Initrd, security::Credentials};
@@ -67,6 +68,14 @@ pub use vfs::Stat;
 
 pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, vfs::VfsError> {
     vfs::lseek(fd, offset, whence)
+}
+
+pub fn mount(device: &str, mountpoint: &str, fstype: &str) -> Result<(), vfs::VfsError> {
+    vfs::mount(device, mountpoint, fstype)
+}
+
+pub fn mount_hybrid_ext2() {
+    vfs::mount_hybrid_ext2();
 }
 
 pub fn stat(path: &str) -> Result<Stat, vfs::VfsError> {

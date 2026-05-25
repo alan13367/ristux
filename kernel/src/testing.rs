@@ -77,6 +77,20 @@ fn run() -> KernelResult<()> {
         smp.shared_lock_audit_passed,
         "SMP lock audit did not pass",
     )?;
+    let sched = crate::sched::stats();
+    ensure(sched.cpu_count >= 2, "per-CPU scheduler did not initialize")?;
+    ensure(
+        crate::drivers::virtio_blk::self_test(),
+        "VirtIO block layer self-test failed",
+    )?;
+    ensure(
+        crate::fs::ext2::self_test().is_ok(),
+        "ext2 read-only parser self-test failed",
+    )?;
+    ensure(
+        crate::drivers::virtio_queue::self_test(),
+        "VirtIO virtqueue layer self-test failed",
+    )?;
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",
@@ -164,6 +178,13 @@ fn run() -> KernelResult<()> {
         smp.trampoline_installed,
         smp.ipis_sent,
         smp.scheduled_tasks
+    );
+    crate::println!(
+        "Scheduler stats: {} CPU(s), {} queued, {} dispatch(es), {} idle loop(s)",
+        sched.cpu_count,
+        sched.queued,
+        sched.dispatches,
+        sched.idle_loops
     );
 
     Ok(())

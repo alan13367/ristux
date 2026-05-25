@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, string::String, vec::Vec};
+use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use core::{fmt, str};
 
 use crate::{
@@ -7,6 +7,8 @@ use crate::{
     security::{Access, Credentials, FileMetadata},
     sync::spinlock::SpinLock,
 };
+
+use super::ext2;
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
 
@@ -141,6 +143,14 @@ pub struct Vfs {
     nodes: Vec<Node>,
     open_files: Vec<Option<OpenHandle>>,
     pipes: Vec<PipeState>,
+    mounts: Vec<MountPoint>,
+}
+
+#[derive(Clone)]
+struct MountPoint {
+    mountpoint: String,
+    fstype: String,
+    ext2: Option<ext2::Ext2Fs>,
 }
 
 impl Vfs {
@@ -149,6 +159,7 @@ impl Vfs {
             nodes: Vec::new(),
             open_files: Vec::new(),
             pipes: Vec::new(),
+            mounts: Vec::new(),
         };
 
         vfs.add_directory("/");
@@ -175,6 +186,69 @@ impl Vfs {
         for file in initrd.files() {
             self.add_file(file.path, file.data);
         }
+    }
+
+    fn mount(&mut self, device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsError> {
+        let _ = device;
+        if !self.nodes.iter().any(|node| node.path == mountpoint) {
+            self.add_directory(mountpoint);
+        }
+        if fstype == "ext2" {
+            let fs = ext2::Ext2Fs::mount().map_err(|_| VfsError::NotFound)?;
+            if let Ok(data) = fs.read_file("/etc/os-release") {
+                let path = format!("{}/etc/os-release", mountpoint.trim_end_matches('/'));
+                self.add_file(&path, &data);
+            }
+            if let Ok(data) = fs.read_file("README") {
+                let path = format!("{}/README", mountpoint.trim_end_matches('/'));
+                self.add_file(&path, &data);
+            }
+            self.mounts.push(MountPoint {
+                mountpoint: String::from(mountpoint),
+                fstype: String::from(fstype),
+                ext2: Some(fs),
+            });
+            crate::println!(
+                "VFS mounted {} on {} (hybrid initrd + ext2).",
+                fstype,
+                mountpoint
+            );
+            return Ok(());
+        }
+        Err(VfsError::NotFound)
+    }
+
+    fn resolve_mount_list_paths(&self, prefix: &str) -> Vec<String> {
+        let mut paths = self
+            .nodes
+            .iter()
+            .filter(|node| node.path.starts_with(prefix))
+            .map(|node| node.path.clone())
+            .collect::<Vec<_>>();
+        for mount in &self.mounts {
+            if let Some(ext2) = &mount.ext2 {
+                let mount_prefix = if prefix.starts_with(&mount.mountpoint) {
+                    prefix.strip_prefix(&mount.mountpoint).unwrap_or("/")
+                } else if prefix == "/" || mount.mountpoint.starts_with(prefix) {
+                    "/"
+                } else {
+                    continue;
+                };
+                if let Ok(entries) = ext2.list_dir(mount_prefix) {
+                    for entry in entries {
+                        let full = if mount.mountpoint == "/" {
+                            format!("/{}", entry.trim_start_matches('/'))
+                        } else {
+                            format!("{}/{}", mount.mountpoint, entry.trim_start_matches('/'))
+                        };
+                        if full.starts_with(prefix) && !paths.iter().any(|p| p == &full) {
+                            paths.push(full);
+                        }
+                    }
+                }
+            }
+        }
+        paths
     }
 
     fn add_directory(&mut self, path: &str) {
@@ -643,11 +717,7 @@ impl Vfs {
     }
 
     fn list_paths(&self, prefix: &str) -> Vec<String> {
-        self.nodes
-            .iter()
-            .filter(|node| node.path.starts_with(prefix))
-            .map(|node| node.path.clone())
-            .collect()
+        self.resolve_mount_list_paths(prefix)
     }
 }
 
@@ -656,6 +726,16 @@ pub fn init(initrd: &Initrd) {
     vfs.mount_initrd(initrd);
     crate::println!("VFS mounted initrd, devfs, procfs, and tmpfs.");
     *VFS.lock() = Some(vfs);
+}
+
+pub fn mount(device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.mount(device, mountpoint, fstype))
+}
+
+pub fn mount_hybrid_ext2() {
+    if mount("virtio0", "/mnt", "ext2").is_ok() {
+        crate::println!("Hybrid initrd root retained; ext2 mounted at /mnt.");
+    }
 }
 
 pub fn open(path: &str) -> Result<usize, VfsError> {
