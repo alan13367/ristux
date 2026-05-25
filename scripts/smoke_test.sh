@@ -46,6 +46,13 @@ send_text() {
   done
 }
 
+normalize_serial_noise() {
+  local log="$1"
+  local tmp="${log}.normalized"
+  perl -0pe 's/(keyboard scancode 0x[0-9a-fA-F]+|timer tick [0-9]+)\r?\n//g' "$log" > "$tmp"
+  mv "$tmp" "$log"
+}
+
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
   send_text "root"
@@ -134,6 +141,10 @@ send_text() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_cred"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_fs"
   sleep 1
   printf 'sendkey ret\n'
@@ -172,6 +183,10 @@ send_text() {
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$REBOOT_SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-reboot-monitor.log
 
+grep -q "keyboard scancode" "$SERIAL_LOG"
+normalize_serial_noise "$SERIAL_LOG"
+normalize_serial_noise "$REBOOT_SERIAL_LOG"
+
 grep -q "SMP self-test passed" "$SERIAL_LOG"
 grep -q "AP bootstrap attempted 3 CPU(s), 3 reached Rust entry" "$SERIAL_LOG"
 grep -q "Per-CPU scheduler initialized" "$SERIAL_LOG"
@@ -187,7 +202,6 @@ grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
 grep -q "init: spawning /bin/login" "$SERIAL_LOG"
 grep -q "login: " "$SERIAL_LOG"
 grep -q "\\$ " "$SERIAL_LOG"
-grep -q "keyboard scancode" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
@@ -221,6 +235,11 @@ grep -q "cc_hello: hello from C" "$SERIAL_LOG"
 grep -q "cc_hello: malloc ok" "$SERIAL_LOG"
 grep -q "cc_hello: file=file io ok" "$SERIAL_LOG"
 grep -q "cc_hello: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_cred" "$SERIAL_LOG"
+grep -q "cc_cred: ids ok" "$SERIAL_LOG"
+grep -q "cc_cred: setters ok" "$SERIAL_LOG"
+grep -q "cc_cred: ioctl ok" "$SERIAL_LOG"
+grep -q "cc_cred: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_fs" "$SERIAL_LOG"
 grep -q "cc_fs: access ok" "$SERIAL_LOG"
 grep -q "cc_fs: getdents ok" "$SERIAL_LOG"

@@ -106,6 +106,7 @@ The current Linux-like syscall surface is:
 | 105 | `setuid` | Credential update with permission checks. |
 | 106 | `setgid` | Credential update with permission checks. |
 | 107 | `geteuid` | Effective uid. |
+| 108 | `getegid` | Effective gid. |
 | 109 | `setpgid` | Process group update. |
 | 110 | `getppid` | Parent pid. |
 | 111 | `getpgrp` | Current process group. |
@@ -123,6 +124,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
   `getppid`.
+- Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
+  `setresuid`, `setgroups`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
   `dup2`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
@@ -130,6 +133,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `chdir`, `getcwd`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
+- Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,
+  `TIOCSPGRP`, and `TIOCGWINSZ`.
 - Memory/string/stdio: `brk`, `sbrk`, `malloc`, `calloc`, `realloc`, `free`,
   `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`, `strcpy`,
   `strncpy`, `strchr`, `putchar`, `puts`, `printf`, `vprintf`.

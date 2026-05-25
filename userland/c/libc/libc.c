@@ -26,6 +26,7 @@
 #define SYS_BRK 12
 #define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGRETURN 15
+#define SYS_IOCTL 16
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_NANOSLEEP 35
@@ -50,7 +51,15 @@
 #define SYS_CHOWN 92
 #define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
+#define SYS_GETUID 102
+#define SYS_GETGID 104
+#define SYS_SETUID 105
+#define SYS_SETGID 106
+#define SYS_GETEUID 107
+#define SYS_GETEGID 108
 #define SYS_GETPPID 110
+#define SYS_SETGROUPS 116
+#define SYS_SETRESUID 117
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
@@ -162,6 +171,46 @@ pid_t getpid(void) {
 
 pid_t getppid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_GETPPID));
+}
+
+uid_t getuid(void) {
+    return (uid_t)syscall_ret(syscall0(SYS_GETUID));
+}
+
+uid_t geteuid(void) {
+    return (uid_t)syscall_ret(syscall0(SYS_GETEUID));
+}
+
+gid_t getgid(void) {
+    return (gid_t)syscall_ret(syscall0(SYS_GETGID));
+}
+
+gid_t getegid(void) {
+    return (gid_t)syscall_ret(syscall0(SYS_GETEGID));
+}
+
+int setuid(uid_t uid) {
+    return (int)syscall_ret(syscall1(SYS_SETUID, uid));
+}
+
+int setgid(gid_t gid) {
+    return (int)syscall_ret(syscall1(SYS_SETGID, gid));
+}
+
+int setresuid(uid_t ruid, uid_t euid, uid_t suid) {
+    return (int)syscall_ret(syscall3(SYS_SETRESUID, ruid, euid, suid));
+}
+
+int setgroups(size_t size, const gid_t *list) {
+    return (int)syscall_ret(syscall2(SYS_SETGROUPS, (long)size, (long)list));
+}
+
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void *argp = va_arg(ap, void *);
+    va_end(ap);
+    return (int)syscall_ret(syscall3(SYS_IOCTL, fd, (long)request, (long)argp));
 }
 
 int chdir(const char *path) {

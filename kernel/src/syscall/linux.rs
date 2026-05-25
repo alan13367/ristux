@@ -63,6 +63,7 @@ pub const NR_getgid: u64 = 104;
 pub const NR_setuid: u64 = 105;
 pub const NR_setgid: u64 = 106;
 pub const NR_geteuid: u64 = 107;
+pub const NR_getegid: u64 = 108;
 pub const NR_setpgid: u64 = 109;
 pub const NR_getppid: u64 = 110;
 pub const NR_getpgrp: u64 = 111;
@@ -179,6 +180,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
         NR_getgid => Ok(process::current_gid() as u64),
+        NR_getegid => Ok(process::current_egid() as u64),
         NR_time => linux_time(a0 as usize),
         NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
