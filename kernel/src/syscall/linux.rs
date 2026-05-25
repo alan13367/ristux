@@ -29,6 +29,7 @@ pub const NR_close: u64 = 3;
 pub const NR_stat: u64 = 4;
 pub const NR_fstat: u64 = 5;
 pub const NR_lstat: u64 = 6;
+pub const NR_poll: u64 = 7;
 pub const NR_lseek: u64 = 8;
 pub const NR_mmap: u64 = 9;
 pub const NR_mprotect: u64 = 10;
@@ -111,6 +112,11 @@ const PROT_EXEC: i32 = 0x4;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_FIXED: i32 = 0x10;
 const MAP_ANONYMOUS: i32 = 0x20;
+const POLLIN: i16 = 0x001;
+const POLLOUT: i16 = 0x004;
+const POLLERR: i16 = 0x008;
+const POLLHUP: i16 = 0x010;
+const POLLNVAL: i16 = 0x020;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -133,6 +139,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
         NR_close => linux_close(a0 as usize),
+        NR_poll => linux_poll(frame, a0 as usize, a1 as usize, a2 as i32),
         NR_access => linux_access(a0 as usize, a1 as i32),
         NR_pipe => linux_pipe(a0 as usize),
         NR_sched_yield => linux_sched_yield(frame),
@@ -493,6 +500,115 @@ fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
         }
         _ => Err(EINVAL),
     }
+}
+
+fn linux_poll(
+    frame: &mut SyscallInterruptFrame,
+    fds_ptr: usize,
+    nfds: usize,
+    timeout_ms: i32,
+) -> Result<u64, i64> {
+    const POLLFD_SIZE: usize = 8;
+    const MAX_POLL_FDS: usize = 64;
+
+    if nfds > MAX_POLL_FDS {
+        return Err(EINVAL);
+    }
+    if nfds > 0 {
+        process::read_user(fds_ptr, nfds * POLLFD_SIZE).ok_or(EFAULT)?;
+        process::write_user_buffer(fds_ptr, nfds * POLLFD_SIZE).ok_or(EFAULT)?;
+    }
+
+    let start_ms = crate::time::uptime_millis();
+    loop {
+        let ready = linux_poll_once(fds_ptr, nfds)?;
+        if ready > 0 || timeout_ms == 0 {
+            return Ok(ready as u64);
+        }
+        if timeout_ms > 0
+            && crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms as u64
+        {
+            return Ok(0);
+        }
+        if !crate::syscall::yield_current_process(frame) {
+            return Err(CONTEXT_SWITCHED);
+        }
+    }
+}
+
+fn linux_poll_once(fds_ptr: usize, nfds: usize) -> Result<usize, i64> {
+    const POLLFD_SIZE: usize = 8;
+    let mut ready_count = 0usize;
+    for index in 0..nfds {
+        let entry = fds_ptr + index * POLLFD_SIZE;
+        let bytes = process::read_user(entry, POLLFD_SIZE).ok_or(EFAULT)?;
+        let fd = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let events = i16::from_le_bytes([bytes[4], bytes[5]]);
+        let revents = if fd < 0 {
+            0
+        } else {
+            poll_revents(fd as usize, events)
+        };
+        let out = process::write_user_buffer(entry + 6, 2).ok_or(EFAULT)?;
+        out.copy_from_slice(&revents.to_le_bytes());
+        if revents != 0 {
+            ready_count += 1;
+        }
+    }
+    Ok(ready_count)
+}
+
+fn poll_revents(fd: usize, events: i16) -> i16 {
+    let ready = if fd >= SOCKET_FD_BASE {
+        match crate::net::socket::with_sockets(|table| table.poll(fd - SOCKET_FD_BASE)) {
+            Ok(ready) => PollSnapshot {
+                read: ready.read,
+                write: ready.write,
+                error: ready.error,
+                hangup: ready.hangup,
+            },
+            Err(_) => {
+                return POLLNVAL;
+            }
+        }
+    } else {
+        let Some(vfs_fd) = process::user_vfs_fd(fd) else {
+            return POLLNVAL;
+        };
+        match fs::poll(vfs_fd) {
+            Ok(ready) => PollSnapshot {
+                read: ready.read,
+                write: ready.write,
+                error: ready.error,
+                hangup: ready.hangup,
+            },
+            Err(_) => {
+                return POLLNVAL;
+            }
+        }
+    };
+
+    let mut revents = 0;
+    if ready.read && events & POLLIN != 0 {
+        revents |= POLLIN;
+    }
+    if ready.write && events & POLLOUT != 0 {
+        revents |= POLLOUT;
+    }
+    if ready.error {
+        revents |= POLLERR;
+    }
+    if ready.hangup {
+        revents |= POLLHUP;
+    }
+    revents
+}
+
+struct PollSnapshot {
+    read: bool,
+    write: bool,
+    error: bool,
+    hangup: bool,
 }
 
 fn linux_close(fd: usize) -> Result<u64, i64> {

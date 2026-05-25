@@ -132,6 +132,14 @@ pub struct DirectoryEntry {
     pub kind: NodeKind,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PollReady {
+    pub read: bool,
+    pub write: bool,
+    pub error: bool,
+    pub hangup: bool,
+}
+
 impl PipeState {
     fn new(capacity: usize) -> Self {
         Self {
@@ -189,6 +197,14 @@ impl PipeState {
             return Err(VfsError::WouldBlock);
         }
         Ok(written)
+    }
+
+    fn poll_read(&self) -> bool {
+        !self.buffer.is_empty() || self.writers == 0
+    }
+
+    fn poll_write(&self) -> bool {
+        self.readers > 0 && self.buffer.len() < self.capacity
     }
 }
 
@@ -1142,6 +1158,81 @@ impl Vfs {
         }
     }
 
+    fn poll(&self, fd: usize) -> Result<PollReady, VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|h| h.as_ref())
+            .ok_or(VfsError::BadFd)?;
+        match handle {
+            OpenHandle::Node { node, rights, .. } => {
+                let node = self.nodes.get(*node).ok_or(VfsError::BadFd)?;
+                let ready = match node.kind {
+                    NodeKind::File | NodeKind::Symlink => PollReady {
+                        read: rights.read,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Directory => PollReady {
+                        read: rights.read,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Null) => PollReady {
+                        read: true,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Zero) => PollReady {
+                        read: rights.read,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Console) => PollReady {
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Keyboard) => PollReady::default(),
+                    NodeKind::Device(DeviceKind::Tty) => PollReady {
+                        read: crate::tty::has_data(),
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Framebuffer) => PollReady {
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                };
+                Ok(ready)
+            }
+            OpenHandle::Ext2File { rights, .. } => Ok(PollReady {
+                read: rights.read,
+                write: rights.write,
+                ..PollReady::default()
+            }),
+            OpenHandle::Ext2Dir { .. } => Ok(PollReady {
+                read: true,
+                ..PollReady::default()
+            }),
+            OpenHandle::PipeRead { pipe } => {
+                let pipe = self.pipes.get(*pipe).ok_or(VfsError::BadFd)?;
+                Ok(PollReady {
+                    read: pipe.poll_read(),
+                    hangup: pipe.writers == 0 && pipe.buffer.is_empty(),
+                    ..PollReady::default()
+                })
+            }
+            OpenHandle::PipeWrite { pipe } => {
+                let pipe = self.pipes.get(*pipe).ok_or(VfsError::BadFd)?;
+                Ok(PollReady {
+                    write: pipe.poll_write(),
+                    error: pipe.readers == 0,
+                    hangup: pipe.readers == 0,
+                    ..PollReady::default()
+                })
+            }
+        }
+    }
+
     fn is_tty_fd(&self, fd: usize) -> bool {
         let Some(Some(handle)) = self.open_files.get(fd) else {
             return false;
@@ -1441,6 +1532,12 @@ pub fn lstat(path: &str) -> Result<Stat, VfsError> {
 
 pub fn fstat(fd: usize) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.fstat(fd))
+}
+
+pub fn poll(fd: usize) -> Result<PollReady, VfsError> {
+    let guard = VFS.lock();
+    let vfs = guard.as_ref().expect("VFS used before initialization");
+    vfs.poll(fd)
 }
 
 pub fn is_tty_fd(fd: usize) -> bool {

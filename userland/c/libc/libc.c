@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -23,6 +24,7 @@
 #define SYS_STAT 4
 #define SYS_FSTAT 5
 #define SYS_LSTAT 6
+#define SYS_POLL 7
 #define SYS_LSEEK 8
 #define SYS_MMAP 9
 #define SYS_MPROTECT 10
@@ -172,6 +174,10 @@ int fcntl(int fd, int cmd, ...) {
         va_end(ap);
     }
     return (int)syscall_ret(syscall3(SYS_FCNTL, fd, cmd, arg));
+}
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    return (int)syscall_ret(syscall3(SYS_POLL, (long)fds, (long)nfds, timeout));
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

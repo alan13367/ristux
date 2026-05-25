@@ -194,6 +194,11 @@ pub fn try_read_line() -> Option<Vec<u8>> {
     Some(line)
 }
 
+pub fn has_data() -> bool {
+    let guard = TTY.lock();
+    guard.as_ref().map(|tty| tty.has_data()).unwrap_or(false)
+}
+
 /// Park the current process on the TTY wait-queue.
 pub fn park_current() {
     let Some(pid) = crate::process::current_pid() else {

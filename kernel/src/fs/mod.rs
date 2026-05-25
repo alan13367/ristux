@@ -136,6 +136,10 @@ pub fn fstat(fd: usize) -> Result<Stat, vfs::VfsError> {
     vfs::fstat(fd)
 }
 
+pub fn poll(fd: usize) -> Result<vfs::PollReady, vfs::VfsError> {
+    vfs::poll(fd)
+}
+
 pub fn is_tty_fd(fd: usize) -> bool {
     vfs::is_tty_fd(fd)
 }

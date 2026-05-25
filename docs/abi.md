@@ -63,6 +63,7 @@ The current Linux-like syscall surface is:
 | 4 | `stat` | Writes the Ristux Linux-compatible stat layout below. |
 | 5 | `fstat` | Descriptor metadata. |
 | 6 | `lstat` | Symlink metadata without final-target traversal. |
+| 7 | `poll` | Readiness for regular files, TTY, pipes, and sockets. |
 | 8 | `lseek` | Regular file offsets. |
 | 9 | `mmap` | Anonymous and private file-backed mappings. |
 | 10 | `mprotect` | Read/read-write page permission changes. |
@@ -131,7 +132,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `setgroups`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
-  `dup2`, `fcntl`.
+  `dup2`, `fcntl`, `poll`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `symlink`, `readlink`,
   `chdir`, `getcwd`.
@@ -192,7 +193,7 @@ Phase E handler path is guaranteed.
 
 These are explicit non-guarantees of the current ABI:
 
-- No `poll` or `select` contract yet.
+- No `select` contract yet.
 - `mmap` currently supports `MAP_PRIVATE` anonymous mappings and private
   file-backed reads. `MAP_SHARED`, `MAP_FIXED`, and demand paging are not part
   of the contract yet.

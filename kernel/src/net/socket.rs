@@ -29,6 +29,14 @@ pub enum SocketError {
     WouldBlock,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SocketReady {
+    pub read: bool,
+    pub write: bool,
+    pub error: bool,
+    pub hangup: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SocketBackend {
     Tcp(usize),
@@ -138,6 +146,34 @@ impl SocketTable {
     pub fn local_port(&self, handle: usize) -> Result<u16, SocketError> {
         match self.entry(handle)?.backend {
             SocketBackend::Tcp(socket) => self.tcp.local_port(socket).ok_or(SocketError::BadFd),
+        }
+    }
+
+    pub fn poll(&mut self, handle: usize) -> Result<SocketReady, SocketError> {
+        let entry = *self.entry(handle)?;
+        match entry.backend {
+            SocketBackend::Tcp(socket) => {
+                super::drive_tcp(&mut self.tcp);
+                let socket = self.tcp.sockets.get(socket).ok_or(SocketError::BadFd)?;
+                let ready = match socket.state {
+                    super::tcp::TcpState::Listen => SocketReady {
+                        read: self.tcp.has_pending_accept(),
+                        ..SocketReady::default()
+                    },
+                    super::tcp::TcpState::Established => SocketReady {
+                        read: !socket.rx_buffer.is_empty(),
+                        write: true,
+                        ..SocketReady::default()
+                    },
+                    super::tcp::TcpState::TimeWait | super::tcp::TcpState::Closed => SocketReady {
+                        read: !socket.rx_buffer.is_empty(),
+                        hangup: true,
+                        ..SocketReady::default()
+                    },
+                    _ => SocketReady::default(),
+                };
+                Ok(ready)
+            }
         }
     }
 

@@ -315,6 +315,10 @@ impl TcpStack {
         self.pending_outbound.pop_front()
     }
 
+    pub fn has_pending_accept(&self) -> bool {
+        !self.accept_queue.is_empty()
+    }
+
     pub fn established(&self, socket: usize) -> bool {
         self.sockets
             .get(socket)
