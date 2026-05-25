@@ -38,6 +38,7 @@
 #define SYS_EXIT 60
 #define SYS_WAIT4 61
 #define SYS_KILL 62
+#define SYS_FCNTL 72
 #define SYS_GETDENTS 78
 #define SYS_GETCWD 79
 #define SYS_CHDIR 80
@@ -147,6 +148,17 @@ int dup(int oldfd) {
 
 int dup2(int oldfd, int newfd) {
     return (int)syscall_ret(syscall2(SYS_DUP2, oldfd, newfd));
+}
+
+int fcntl(int fd, int cmd, ...) {
+    long arg = 0;
+    if (cmd != F_GETFD && cmd != F_GETFL) {
+        va_list ap;
+        va_start(ap, cmd);
+        arg = va_arg(ap, int);
+        va_end(ap);
+    }
+    return (int)syscall_ret(syscall3(SYS_FCNTL, fd, cmd, arg));
 }
 
 pid_t fork(void) {

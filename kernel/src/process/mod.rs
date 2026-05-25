@@ -22,6 +22,7 @@ pub type Pid = u64;
 const MAX_FDS: usize = 16;
 const MAX_USER_ARGS: usize = 8;
 const MAX_USER_ENVS: usize = 16;
+pub const FD_CLOEXEC: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
@@ -41,6 +42,8 @@ pub enum BlockReason {
 struct FdEntry {
     user_fd: usize,
     vfs_fd: usize,
+    status_flags: u32,
+    fd_flags: u32,
 }
 
 pub struct Process {
@@ -124,6 +127,8 @@ impl Process {
             fds: [FdEntry {
                 user_fd: 0,
                 vfs_fd: 0,
+                status_flags: 0,
+                fd_flags: 0,
             }; MAX_FDS],
             next_fd: 3,
             entry: 0,
@@ -147,17 +152,34 @@ impl Process {
     }
 
     fn set_fd(&mut self, user_fd: usize, vfs_fd: usize) {
+        self.set_fd_with_flags(user_fd, vfs_fd, 0, 0);
+    }
+
+    fn set_fd_with_flags(
+        &mut self,
+        user_fd: usize,
+        vfs_fd: usize,
+        status_flags: u32,
+        fd_flags: u32,
+    ) {
         if let Some(entry) = self.fds[..self.fd_count]
             .iter_mut()
             .find(|e| e.user_fd == user_fd)
         {
             entry.vfs_fd = vfs_fd;
+            entry.status_flags = status_flags;
+            entry.fd_flags = fd_flags;
             return;
         }
         if self.fd_count >= MAX_FDS {
             panic!("too many file descriptors");
         }
-        self.fds[self.fd_count] = FdEntry { user_fd, vfs_fd };
+        self.fds[self.fd_count] = FdEntry {
+            user_fd,
+            vfs_fd,
+            status_flags,
+            fd_flags,
+        };
         self.fd_count += 1;
         if user_fd >= self.next_fd {
             self.next_fd = user_fd + 1;
@@ -172,9 +194,13 @@ impl Process {
     }
 
     fn push_fd(&mut self, vfs_fd: usize) -> usize {
+        self.push_fd_with_flags(vfs_fd, 0)
+    }
+
+    fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> usize {
         let user_fd = self.next_fd;
         self.next_fd += 1;
-        self.set_fd(user_fd, vfs_fd);
+        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, 0);
         user_fd
     }
 
@@ -188,17 +214,76 @@ impl Process {
         Some(vfs_fd)
     }
 
-    fn replace_fd(&mut self, user_fd: usize, vfs_fd: usize) -> Option<usize> {
+    fn replace_fd_with_flags(
+        &mut self,
+        user_fd: usize,
+        vfs_fd: usize,
+        status_flags: u32,
+        fd_flags: u32,
+    ) -> Option<usize> {
         if let Some(entry) = self.fds[..self.fd_count]
             .iter_mut()
             .find(|e| e.user_fd == user_fd)
         {
             let old = entry.vfs_fd;
             entry.vfs_fd = vfs_fd;
+            entry.status_flags = status_flags;
+            entry.fd_flags = fd_flags;
             return Some(old);
         }
-        self.set_fd(user_fd, vfs_fd);
+        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags);
         None
+    }
+
+    fn status_flags(&self, user_fd: usize) -> Option<u32> {
+        self.fds[..self.fd_count]
+            .iter()
+            .find(|e| e.user_fd == user_fd)
+            .map(|e| e.status_flags)
+    }
+
+    fn set_status_flags(&mut self, user_fd: usize, flags: u32) -> bool {
+        if let Some(entry) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|e| e.user_fd == user_fd)
+        {
+            entry.status_flags = flags;
+            return true;
+        }
+        false
+    }
+
+    fn fd_flags(&self, user_fd: usize) -> Option<u32> {
+        self.fds[..self.fd_count]
+            .iter()
+            .find(|e| e.user_fd == user_fd)
+            .map(|e| e.fd_flags)
+    }
+
+    fn set_fd_flags(&mut self, user_fd: usize, flags: u32) -> bool {
+        if let Some(entry) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|e| e.user_fd == user_fd)
+        {
+            entry.fd_flags = flags;
+            return true;
+        }
+        false
+    }
+
+    fn close_on_exec_fds(&mut self) -> Vec<usize> {
+        let mut closed = Vec::new();
+        let mut index = 0;
+        while index < self.fd_count {
+            if self.fds[index].fd_flags & FD_CLOEXEC != 0 {
+                closed.push(self.fds[index].vfs_fd);
+                self.fd_count -= 1;
+                self.fds[index] = self.fds[self.fd_count];
+            } else {
+                index += 1;
+            }
+        }
+        closed
     }
 
     fn allows(&self, addr: usize, len: usize) -> bool {
@@ -570,7 +655,11 @@ pub fn exec_for_user(pid: Pid, path: &str, args: &[&str], env: &[&str]) -> Optio
         if !file.can_access(credentials, Access::Execute) {
             return None;
         }
-        // Preserve fds across exec (semantically correct execve behaviour).
+        let close_on_exec = table.processes[index].close_on_exec_fds();
+        for fd in close_on_exec {
+            let _ = fs::close(fd);
+        }
+        // Preserve fds across exec except descriptors marked FD_CLOEXEC.
         if table.processes[index].load_elf(path, &data).is_err() {
             return None;
         }
@@ -819,6 +908,7 @@ pub fn user_open_options(
     create: bool,
     truncate: bool,
     append: bool,
+    status_flags: u32,
 ) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
         let vfs_fd = if create {
@@ -839,7 +929,7 @@ pub fn user_open_options(
         if append {
             let _ = fs::lseek(vfs_fd, 0, 2);
         }
-        Ok(p.push_fd(vfs_fd))
+        Ok(p.push_fd_with_flags(vfs_fd, status_flags))
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -868,9 +958,10 @@ pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
 
 pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
+        let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
-        Ok(p.push_fd(dup))
+        Ok(p.push_fd_with_flags(dup, status_flags))
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -883,13 +974,46 @@ pub fn user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::Vfs
             }
             return Err(fs::vfs::VfsError::BadFd);
         }
+        let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
-        let old = p.replace_fd(target_fd, dup);
+        let old = p.replace_fd_with_flags(target_fd, dup, status_flags, 0);
         if let Some(old) = old {
             fs::close(old)?;
         }
         Ok(target_fd)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_fd_status_flags(user_fd: usize) -> Result<u32, fs::vfs::VfsError> {
+    with_current_read(|p| p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_set_fd_status_flags(user_fd: usize, flags: u32) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| {
+        if p.set_status_flags(user_fd, flags) {
+            Ok(())
+        } else {
+            Err(fs::vfs::VfsError::BadFd)
+        }
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_fd_flags(user_fd: usize) -> Result<u32, fs::vfs::VfsError> {
+    with_current_read(|p| p.fd_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_set_fd_flags(user_fd: usize, flags: u32) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| {
+        if p.set_fd_flags(user_fd, flags) {
+            Ok(())
+        } else {
+            Err(fs::vfs::VfsError::BadFd)
+        }
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }

@@ -145,6 +145,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_fcntl"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_fs"
   sleep 1
   printf 'sendkey ret\n'
@@ -240,6 +244,10 @@ grep -q "cc_cred: ids ok" "$SERIAL_LOG"
 grep -q "cc_cred: setters ok" "$SERIAL_LOG"
 grep -q "cc_cred: ioctl ok" "$SERIAL_LOG"
 grep -q "cc_cred: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_fcntl" "$SERIAL_LOG"
+grep -q "cc_fcntl: nonblock ok" "$SERIAL_LOG"
+grep -q "cc_fcntl: cloexec ok" "$SERIAL_LOG"
+grep -q "cc_fcntl: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_fs" "$SERIAL_LOG"
 grep -q "cc_fs: access ok" "$SERIAL_LOG"
 grep -q "cc_fs: getdents ok" "$SERIAL_LOG"

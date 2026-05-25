@@ -45,6 +45,7 @@ pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
 pub const NR_wait4: u64 = 61;
 pub const NR_kill: u64 = 62;
+pub const NR_fcntl: u64 = 72;
 pub const NR_getdents: u64 = 78;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
@@ -78,6 +79,7 @@ const EBADF: i64 = -9;
 const ENOMEM: i64 = -12;
 const EFAULT: i64 = -14;
 const ENOENT: i64 = -2;
+const EAGAIN: i64 = -11;
 const EACCES: i64 = -13;
 const EEXIST: i64 = -17;
 const ENOSYS: i64 = -38;
@@ -87,6 +89,10 @@ const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const SOCK_DGRAM: i32 = 2;
+const O_ACCMODE: u32 = 0o3;
+const O_APPEND: u32 = 0o2000;
+const O_NONBLOCK: u32 = 0o4000;
+const SETTABLE_STATUS_FLAGS: u32 = O_APPEND | O_NONBLOCK;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -154,6 +160,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             Ok(0)
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
+        NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
         NR_getdents | NR_getdents64 => {
             linux_getdents64(a0 as usize, a1 as usize, a2 as usize)
         }
@@ -333,9 +340,11 @@ fn apply_linux_saved_frame(frame: &mut SyscallInterruptFrame, saved: &process::S
 fn linux_write(fd: usize, buf: usize, len: usize) -> Result<u64, i64> {
     let bytes = process::read_user(buf, len).ok_or(EFAULT)?;
     if let Some(vfs_fd) = process::user_vfs_fd(fd) {
-        return fs::write(vfs_fd, bytes)
-            .map(|n| n as u64)
-            .map_err(|_| EBADF);
+        return match fs::write(vfs_fd, bytes) {
+            Ok(n) => Ok(n as u64),
+            Err(fs::vfs::VfsError::WouldBlock) => Err(EAGAIN),
+            Err(_) => Err(EBADF),
+        };
     }
     if fd == 1 || fd == 2 {
         write_console(bytes);
@@ -369,6 +378,9 @@ fn linux_read(
         Some(v) => v,
         None => return Err(EBADF),
     };
+    let nonblocking = process::user_fd_status_flags(fd)
+        .map(|flags| flags & O_NONBLOCK != 0)
+        .unwrap_or(false);
 
     if fs::is_tty_fd(vfs_fd) {
         loop {
@@ -377,6 +389,9 @@ fn linux_read(
                 let n = data.len().min(len);
                 out[..n].copy_from_slice(&data[..n]);
                 return Ok(n as u64);
+            }
+            if nonblocking {
+                return Err(EAGAIN);
             }
             tty::park_current();
             if !crate::syscall::yield_blocked(frame) {
@@ -390,6 +405,9 @@ fn linux_read(
         match fs::read(vfs_fd, buffer) {
             Ok(n) => return Ok(n as u64),
             Err(fs::vfs::VfsError::WouldBlock) => {
+                if nonblocking {
+                    return Err(EAGAIN);
+                }
                 process::block_current(process::BlockReason::WaitIo);
                 if !crate::syscall::yield_blocked(frame) {
                     return Err(CONTEXT_SWITCHED);
@@ -405,7 +423,6 @@ fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
     const O_RDWR: i32 = 2;
     const O_CREAT: i32 = 0o100;
     const O_TRUNC: i32 = 0o1000;
-    const O_APPEND: i32 = 0o2000;
 
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let access = flags & 0b11;
@@ -413,10 +430,41 @@ fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
     let read = access != O_WRONLY;
     let create = flags & O_CREAT != 0;
     let truncate = flags & O_TRUNC != 0;
-    let append = flags & O_APPEND != 0;
-    process::user_open_options(&path, read, write, create, truncate, append)
+    let status_flags = (flags as u32) & (O_ACCMODE | SETTABLE_STATUS_FLAGS);
+    let append = status_flags & O_APPEND != 0;
+    process::user_open_options(&path, read, write, create, truncate, append, status_flags)
         .map(|fd| fd as u64)
         .map_err(map_vfs_error)
+}
+
+fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
+    const F_GETFD: i32 = 1;
+    const F_SETFD: i32 = 2;
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+
+    match cmd {
+        F_GETFD => process::user_fd_flags(fd)
+            .map(|flags| flags as u64)
+            .map_err(|_| EBADF),
+        F_SETFD => {
+            let flags = (arg as u32) & process::FD_CLOEXEC;
+            process::user_set_fd_flags(fd, flags)
+                .map(|_| 0)
+                .map_err(|_| EBADF)
+        }
+        F_GETFL => process::user_fd_status_flags(fd)
+            .map(|flags| flags as u64)
+            .map_err(|_| EBADF),
+        F_SETFL => {
+            let current = process::user_fd_status_flags(fd).map_err(|_| EBADF)?;
+            let flags = (current & !SETTABLE_STATUS_FLAGS) | ((arg as u32) & SETTABLE_STATUS_FLAGS);
+            process::user_set_fd_status_flags(fd, flags)
+                .map(|_| 0)
+                .map_err(|_| EBADF)
+        }
+        _ => Err(EINVAL),
+    }
 }
 
 fn linux_close(fd: usize) -> Result<u64, i64> {

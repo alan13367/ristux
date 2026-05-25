@@ -88,6 +88,7 @@ The current Linux-like syscall surface is:
 | 60 | `exit` | Terminates the current process. |
 | 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15. |
 | 62 | `kill` | Sends process signals. |
+| 72 | `fcntl` | `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`. |
 | 78 | `getdents` | Alias of the `getdents64` implementation. |
 | 79 | `getcwd` | Copies the current working directory. |
 | 80 | `chdir` | Changes current working directory. |
@@ -127,7 +128,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `setgroups`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
-  `dup2`.
+  `dup2`, `fcntl`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `symlink`, `readlink`,
   `chdir`, `getcwd`.
@@ -187,7 +188,7 @@ Phase E handler path is guaranteed.
 
 These are explicit non-guarantees of the Phase E ABI:
 
-- No `mmap`, `munmap`, `mprotect`, `poll`, `select`, or `fcntl` contract yet.
+- No `mmap`, `munmap`, `mprotect`, `poll`, or `select` contract yet.
 - `fork` copies full address spaces instead of using copy-on-write.
 - Static ELF64 executables are supported; dynamic linking is not.
 - The libc is a Ristux foundation layer, not a complete musl/newlib port yet.
