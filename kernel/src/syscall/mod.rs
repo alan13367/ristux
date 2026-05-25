@@ -1,6 +1,9 @@
 use core::{fmt, str};
 
-use crate::userspace::{self, ProcessState, UserProcess};
+use crate::{
+    fs::vfs::VfsError,
+    userspace::{self, ProcessState, UserProcess},
+};
 
 pub const SYS_WRITE: u64 = 1;
 pub const SYS_READ: u64 = 2;
@@ -9,9 +12,12 @@ pub const SYS_YIELD: u64 = 4;
 pub const SYS_SLEEP: u64 = 5;
 pub const SYS_GETPID: u64 = 6;
 pub const SYS_TIME: u64 = 7;
+pub const SYS_OPEN: u64 = 8;
+pub const SYS_CLOSE: u64 = 9;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
+const ENOENT: i64 = -2;
 const ENOSYS: i64 = -38;
 
 #[repr(C)]
@@ -84,7 +90,14 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
             };
         }
         SYS_READ => {
-            frame.rax = EBADF as u64;
+            frame.rax = match sys_read_active(
+                frame.rdi as usize,
+                frame.rsi as usize,
+                frame.rdx as usize,
+            ) {
+                Ok(read) => read,
+                Err(err) => err.0 as u64,
+            };
         }
         SYS_EXIT => {
             let status = frame.rdi as i32;
@@ -107,6 +120,18 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         }
         SYS_TIME => {
             frame.rax = crate::time::unix_time();
+        }
+        SYS_OPEN => {
+            frame.rax = match sys_open_active(frame.rdi as usize) {
+                Ok(fd) => fd,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_CLOSE => {
+            frame.rax = match sys_close_active(frame.rdi as usize) {
+                Ok(status) => status,
+                Err(err) => err.0 as u64,
+            };
         }
         _ => {
             crate::println!(
@@ -191,6 +216,50 @@ fn sys_write_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
     }
 
     Ok(len as u64)
+}
+
+fn sys_open_active(path_ptr: usize) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    userspace::active_user_open(path)
+        .map(|fd| fd as u64)
+        .map_err(map_vfs_error)
+}
+
+fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
+    let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
+    let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
+    crate::fs::read(vfs_fd, buffer)
+        .map(|read| read as u64)
+        .map_err(map_vfs_error)
+}
+
+fn sys_close_active(fd: usize) -> SyscallResult {
+    userspace::active_user_close(fd)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn read_user_cstr<'a>(ptr: usize, buffer: &'a mut [u8]) -> Result<&'a str, SyscallError> {
+    for index in 0..buffer.len() {
+        let byte = userspace::active_user_read(ptr + index, 1)
+            .and_then(|bytes| bytes.first().copied())
+            .ok_or(SyscallError(EFAULT))?;
+        if byte == 0 {
+            return str::from_utf8(&buffer[..index]).map_err(|_| SyscallError(EFAULT));
+        }
+        buffer[index] = byte;
+    }
+
+    Err(SyscallError(EFAULT))
+}
+
+fn map_vfs_error(err: VfsError) -> SyscallError {
+    match err {
+        VfsError::NotFound => SyscallError(ENOENT),
+        VfsError::BadFd => SyscallError(EBADF),
+        VfsError::NotFile | VfsError::Utf8 => SyscallError(EFAULT),
+    }
 }
 
 fn sys_read(_process: &mut UserProcess, fd: usize, _ptr: usize, _len: usize) -> SyscallResult {

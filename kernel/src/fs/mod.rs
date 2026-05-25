@@ -7,6 +7,18 @@ pub fn init(initrd: &Initrd) {
     vfs::self_test();
 }
 
+pub fn open(path: &str) -> Result<usize, vfs::VfsError> {
+    vfs::open(path)
+}
+
+pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, vfs::VfsError> {
+    vfs::read(fd, output)
+}
+
+pub fn close(fd: usize) -> Result<(), vfs::VfsError> {
+    vfs::close(fd)
+}
+
 pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
     vfs::read_file(path)
 }

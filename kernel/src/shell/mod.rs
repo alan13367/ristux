@@ -11,6 +11,7 @@ pub fn init() {
         "cat /tmp/message.txt",
         "echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
+        "/bin/cat",
         "cat /tmp/message.txt | cat",
         "true",
         "false",
@@ -101,6 +102,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         }
         "true" => run_external("/bin/true"),
         "false" => run_external("/bin/false"),
+        "/bin/cat" => run_external("/bin/cat"),
         other => {
             let mut text = String::from(other);
             text.push_str(": not found\n");

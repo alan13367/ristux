@@ -15,6 +15,7 @@ use crate::{
 const USER_INIT_STACK_TOP: usize = 0x7000_2000;
 const MAX_USER_RANGES: usize = 16;
 const MAX_USER_MAPPINGS: usize = 32;
+const MAX_ACTIVE_FDS: usize = 8;
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
 global_asm!(
@@ -115,6 +116,12 @@ struct UserMapping {
     phys: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ActiveFd {
+    user_fd: usize,
+    vfs_fd: usize,
+}
+
 impl UserRange {
     const fn empty() -> Self {
         Self { start: 0, end: 0 }
@@ -135,6 +142,12 @@ impl UserMapping {
     }
 }
 
+impl ActiveFd {
+    const fn empty() -> Self {
+        Self { user_fd: 0, vfs_fd: 0 }
+    }
+}
+
 struct ActiveUserContext {
     pid: u64,
     name: &'static str,
@@ -142,6 +155,9 @@ struct ActiveUserContext {
     ranges: [UserRange; MAX_USER_RANGES],
     mapping_count: usize,
     mappings: [UserMapping; MAX_USER_MAPPINGS],
+    fd_count: usize,
+    next_fd: usize,
+    fds: [ActiveFd; MAX_ACTIVE_FDS],
     exited: bool,
     exit_status: i32,
 }
@@ -193,6 +209,9 @@ impl ActiveUserContext {
             ranges: [UserRange::empty(); MAX_USER_RANGES],
             mapping_count: 0,
             mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
+            fd_count: 0,
+            next_fd: 3,
+            fds: [ActiveFd::empty(); MAX_ACTIVE_FDS],
             exited: false,
             exit_status: 0,
         }
@@ -206,6 +225,9 @@ impl ActiveUserContext {
             ranges: [UserRange::empty(); MAX_USER_RANGES],
             mapping_count: 0,
             mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
+            fd_count: 0,
+            next_fd: 3,
+            fds: [ActiveFd::empty(); MAX_ACTIVE_FDS],
             exited: false,
             exit_status: 0,
         }
@@ -233,6 +255,36 @@ impl ActiveUserContext {
         self.ranges[..self.range_count]
             .iter()
             .any(|range| range.contains(addr, len))
+    }
+
+    fn push_fd(&mut self, vfs_fd: usize) -> usize {
+        if self.fd_count >= MAX_ACTIVE_FDS {
+            panic!("too many active user file descriptors");
+        }
+
+        let user_fd = self.next_fd;
+        self.next_fd += 1;
+        self.fds[self.fd_count] = ActiveFd { user_fd, vfs_fd };
+        self.fd_count += 1;
+        user_fd
+    }
+
+    fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
+        self.fds[..self.fd_count]
+            .iter()
+            .find(|fd| fd.user_fd == user_fd)
+            .map(|fd| fd.vfs_fd)
+    }
+
+    fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {
+        let index = self.fds[..self.fd_count]
+            .iter()
+            .position(|fd| fd.user_fd == user_fd)?;
+        let vfs_fd = self.fds[index].vfs_fd;
+        self.fd_count -= 1;
+        self.fds[index] = self.fds[self.fd_count];
+        self.fds[self.fd_count] = ActiveFd::empty();
+        Some(vfs_fd)
     }
 }
 
@@ -380,6 +432,36 @@ pub fn active_user_read(addr: usize, len: usize) -> Option<&'static [u8]> {
     Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
 }
 
+pub fn active_user_write_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+
+    if !ACTIVE_USER.lock().allows(addr, len) {
+        return None;
+    }
+
+    Some(unsafe { slice::from_raw_parts_mut(addr as *mut u8, len) })
+}
+
+pub fn active_user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
+    let vfs_fd = fs::open(path)?;
+    let mut active = ACTIVE_USER.lock();
+    Ok(active.push_fd(vfs_fd))
+}
+
+pub fn active_user_vfs_fd(user_fd: usize) -> Option<usize> {
+    ACTIVE_USER.lock().lookup_fd(user_fd)
+}
+
+pub fn active_user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
+    let Some(vfs_fd) = ACTIVE_USER.lock().remove_fd(user_fd) else {
+        return Err(fs::vfs::VfsError::BadFd);
+    };
+
+    fs::close(vfs_fd)
+}
+
 pub fn active_user_pid() -> u64 {
     ACTIVE_USER.lock().pid
 }
@@ -397,6 +479,12 @@ pub fn finish_active_exit(status: i32) -> UserProgramResult {
     let name = active.name;
     let pid = active.pid;
     let mut unmapped_pages = 0;
+
+    for index in 0..active.fd_count {
+        let _ = fs::close(active.fds[index].vfs_fd);
+    }
+    active.fd_count = 0;
+    active.next_fd = 3;
 
     for index in 0..active.mapping_count {
         let mapping = active.mappings[index];

@@ -28,3 +28,17 @@ time:
     mov $7, %rax
     int $0x80
     ret
+
+.global open
+.type open, @function
+open:
+    mov $8, %rax
+    int $0x80
+    ret
+
+.global close
+.type close, @function
+close:
+    mov $9, %rax
+    int $0x80
+    ret
