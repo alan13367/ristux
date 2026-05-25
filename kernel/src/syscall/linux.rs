@@ -66,6 +66,7 @@ pub const NR_chdir: u64 = 80;
 pub const NR_rename: u64 = 82;
 pub const NR_mkdir: u64 = 83;
 pub const NR_rmdir: u64 = 84;
+pub const NR_link: u64 = 86;
 pub const NR_unlink: u64 = 87;
 pub const NR_symlink: u64 = 88;
 pub const NR_readlink: u64 = 89;
@@ -205,6 +206,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_rename => linux_rename(a0 as usize, a1 as usize),
         NR_mkdir => linux_mkdir(a0 as usize, a1 as u16),
         NR_rmdir => linux_rmdir(a0 as usize),
+        NR_link => linux_link(a0 as usize, a1 as usize),
         NR_unlink => linux_unlink(a0 as usize),
         NR_symlink => linux_symlink(a0 as usize, a1 as usize),
         NR_readlink => linux_readlink(a0 as usize, a1 as usize, a2 as usize),
@@ -1199,6 +1201,14 @@ fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_link(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
+    let old_path = read_user_cstr(old_ptr).ok_or(EFAULT)?;
+    let new_path = read_user_cstr(new_ptr).ok_or(EFAULT)?;
+    process::user_link(&old_path, &new_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_symlink(target_ptr: usize, link_ptr: usize) -> Result<u64, i64> {
     let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
     let link_path = read_user_cstr(link_ptr).ok_or(EFAULT)?;
@@ -1484,19 +1494,19 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
 }
 
 fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::lstat(&path).map_err(|_| ENOENT)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
 }
 
 fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let meta = fs::fstat(vfs_fd).map_err(|_| EBADF)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
 }
 
 fn write_linux_stat(
@@ -1505,6 +1515,7 @@ fn write_linux_stat(
     group: u32,
     size: u64,
     mode: u32,
+    nlink: u64,
 ) -> Result<u64, i64> {
     // struct stat is ~144 bytes on x86_64; we only fill the fields userland
     // typically reads (size, mode), zeroing the rest.
@@ -1513,6 +1524,7 @@ fn write_linux_stat(
     for byte in out.iter_mut() {
         *byte = 0;
     }
+    out[16..24].copy_from_slice(&nlink.to_le_bytes()); // st_nlink
     out[24..28].copy_from_slice(&mode.to_le_bytes()); // st_mode
     out[28..32].copy_from_slice(&owner.to_le_bytes()); // st_uid
     out[32..36].copy_from_slice(&group.to_le_bytes()); // st_gid

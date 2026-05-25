@@ -35,6 +35,7 @@ char *getcwd(char *buf, size_t size);
 int access(const char *path, int mode);
 int unlink(const char *path);
 int rmdir(const char *path);
+int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 int chown(const char *path, uid_t owner, gid_t group);

@@ -1043,6 +1043,11 @@ pub fn user_symlink(target: &str, link_path: &str) -> Result<(), fs::vfs::VfsErr
         .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
+pub fn user_link(old_path: &str, new_path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::link_as(old_path, new_path, p.credentials))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn user_chown(path: &str, uid: u32, gid: u32) -> Result<(), fs::vfs::VfsError> {
     with_current(|p| fs::chown_as(path, uid, gid, p.credentials))
         .unwrap_or(Err(fs::vfs::VfsError::BadFd))

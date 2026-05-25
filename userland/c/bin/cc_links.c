@@ -9,7 +9,8 @@ int main(void) {
     const char *dir = "/tmp/cc_links";
     const char *original = "/tmp/cc_links/original";
     const char *moved = "/tmp/cc_links/moved";
-    const char *link = "/tmp/cc_links/link";
+    const char *hard = "/tmp/cc_links/hard";
+    const char *symlink_path = "/tmp/cc_links/link";
 
     if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
         puts("cc_links: mkdir failed");
@@ -23,12 +24,41 @@ int main(void) {
     }
     close(fd);
 
-    if (symlink(original, link) != 0) {
+    if (link(original, hard) != 0) {
+        puts("cc_links: hardlink failed");
+        return 1;
+    }
+    fd = open(hard, O_WRONLY, 0);
+    if (fd < 0 || write(fd, "hi", 2) != 2) {
+        puts("cc_links: hardlink write failed");
+        return 1;
+    }
+    close(fd);
+    fd = open(original, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_links: hardlink original open failed");
+        return 1;
+    }
+    char buf[4] = {0};
+    read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (strcmp(buf, "hi") != 0) {
+        puts("cc_links: hardlink read failed");
+        return 1;
+    }
+    struct stat st;
+    if (stat(original, &st) != 0 || st.st_nlink < 2) {
+        puts("cc_links: hardlink stat failed");
+        return 1;
+    }
+    puts("cc_links: hardlink ok");
+
+    if (symlink(original, symlink_path) != 0) {
         puts("cc_links: symlink failed");
         return 1;
     }
     char target[96];
-    ssize_t len = readlink(link, target, sizeof(target) - 1);
+    ssize_t len = readlink(symlink_path, target, sizeof(target) - 1);
     if (len < 0) {
         puts("cc_links: readlink failed");
         return 1;
@@ -38,15 +68,18 @@ int main(void) {
         puts("cc_links: readlink mismatch");
         return 1;
     }
-    fd = open(link, O_RDONLY, 0);
+    fd = open(symlink_path, O_RDONLY, 0);
     if (fd < 0) {
         puts("cc_links: symlink open failed");
         return 1;
     }
-    char buf[4] = {0};
+    buf[0] = 0;
+    buf[1] = 0;
+    buf[2] = 0;
+    buf[3] = 0;
     read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    if (strcmp(buf, "ok") != 0) {
+    if (strcmp(buf, "hi") != 0) {
         puts("cc_links: symlink read failed");
         return 1;
     }
@@ -62,14 +95,13 @@ int main(void) {
         puts("cc_links: chown failed");
         return 1;
     }
-    struct stat st;
     if (stat(moved, &st) != 0 || st.st_uid != 1000 || st.st_gid != 1000) {
         puts("cc_links: chown stat failed");
         return 1;
     }
     puts("cc_links: chown ok");
 
-    if (unlink(link) != 0 || unlink(moved) != 0 || rmdir(dir) != 0) {
+    if (unlink(symlink_path) != 0 || unlink(hard) != 0 || unlink(moved) != 0 || rmdir(dir) != 0) {
         puts("cc_links: cleanup failed");
         return 1;
     }

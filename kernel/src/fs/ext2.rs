@@ -88,6 +88,7 @@ pub struct Ext2Metadata {
     pub kind: Ext2NodeKind,
     pub metadata: FileMetadata,
     pub size: u64,
+    pub links: u16,
 }
 
 impl Ext2Fs {
@@ -199,6 +200,7 @@ impl Ext2Fs {
                 mode: FileMode::new(inode.mode & 0o7777),
             },
             size: inode.size,
+            links: inode.links,
         })
     }
 
@@ -231,6 +233,24 @@ impl Ext2Fs {
 
     pub fn truncate_file(&mut self, path: &str) -> Result<(), Ext2Error> {
         self.write_file(path, &[])
+    }
+
+    pub fn link(&mut self, old_path: &str, new_path: &str) -> Result<(), Ext2Error> {
+        if self.lookup_path(new_path).is_ok() {
+            return Err(Ext2Error::AlreadyExists);
+        }
+        let (source_ino, mut source) = self.lookup_path(old_path)?;
+        if !source.is_file() {
+            return Err(Ext2Error::NotFile);
+        }
+        let (parent_path, name) = split_parent_name(new_path)?;
+        let (parent_ino, parent) = self.lookup_path(&parent_path)?;
+        if !parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        self.insert_dir_entry(parent_ino, &parent, source_ino, &name, EXT2_FT_REG_FILE)?;
+        source.links = source.links.saturating_add(1);
+        self.write_inode(source_ino, &source)
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), Ext2Error> {

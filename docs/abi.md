@@ -100,6 +100,7 @@ The current Linux-like syscall surface is:
 | 82 | `rename` | Same-filesystem VFS rename. |
 | 83 | `mkdir` | Creates directories. |
 | 84 | `rmdir` | Removes empty directories. |
+| 86 | `link` | Creates hard links within the same VFS backend. |
 | 87 | `unlink` | Removes directory entries for files/symlinks. |
 | 88 | `symlink` | Creates symbolic links. |
 | 89 | `readlink` | Reads symlink target bytes. |
@@ -135,8 +136,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
   `dup2`, `fcntl`, `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
-  `access`, `chmod`, `chown`, `umask`, `getdents64`, `symlink`, `readlink`,
-  `chdir`, `getcwd`.
+  `access`, `chmod`, `chown`, `umask`, `getdents64`, `link`, `symlink`,
+  `readlink`, `chdir`, `getcwd`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,

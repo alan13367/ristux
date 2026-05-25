@@ -76,6 +76,10 @@ pub fn symlink_as(target: &str, link_path: &str, creds: Credentials) -> Result<(
     vfs::symlink_as(target, link_path, creds)
 }
 
+pub fn link_as(old_path: &str, new_path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::link_as(old_path, new_path, creds)
+}
+
 pub fn readlink(path: &str) -> Result<alloc::vec::Vec<u8>, vfs::VfsError> {
     vfs::readlink(path)
 }

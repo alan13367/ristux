@@ -53,6 +53,7 @@
 #define SYS_RENAME 82
 #define SYS_MKDIR 83
 #define SYS_RMDIR 84
+#define SYS_LINK 86
 #define SYS_UNLINK 87
 #define SYS_SYMLINK 88
 #define SYS_READLINK 89
@@ -281,6 +282,10 @@ int rmdir(const char *path) {
 
 int rename(const char *oldpath, const char *newpath) {
     return (int)syscall_ret(syscall2(SYS_RENAME, (long)oldpath, (long)newpath));
+}
+
+int link(const char *oldpath, const char *newpath) {
+    return (int)syscall_ret(syscall2(SYS_LINK, (long)oldpath, (long)newpath));
 }
 
 int symlink(const char *target, const char *linkpath) {

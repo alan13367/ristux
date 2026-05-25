@@ -70,6 +70,7 @@ struct Node {
     metadata: FileMetadata,
     timestamps: FileTimestamps,
     data: Vec<u8>,
+    link_target: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -352,6 +353,7 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::new(),
+            link_target: None,
         });
     }
 
@@ -363,6 +365,7 @@ impl Vfs {
             node.timestamps.modified_at = now;
             node.data.clear();
             node.data.extend_from_slice(data);
+            node.link_target = None;
             return;
         }
 
@@ -375,6 +378,7 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::from(data),
+            link_target: None,
         });
     }
 
@@ -420,20 +424,16 @@ impl Vfs {
         }
 
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
-        if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
-            if node.kind != NodeKind::File {
+        if let Some(node) = self.nodes.iter().position(|node| node.path == path) {
+            let target = canonical_node_index(&self.nodes, node);
+            if self.nodes[target].kind != NodeKind::File {
                 return Err(VfsError::NotFile);
             }
-            if !node.metadata.can_access(creds, Access::Write) {
+            if !self.nodes[target].metadata.can_access(creds, Access::Write) {
                 return Err(VfsError::PermissionDenied);
             }
-            node.data.clear();
-            node.timestamps.modified_at = crate::time::filesystem_timestamp();
-            let node = self
-                .nodes
-                .iter()
-                .position(|node| node.path == path)
-                .unwrap();
+            self.nodes[target].data.clear();
+            self.nodes[target].timestamps.modified_at = crate::time::filesystem_timestamp();
             return self.push_open_handle(OpenHandle::Node {
                 node,
                 offset: 0,
@@ -452,6 +452,7 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::new(),
+            link_target: None,
         });
         self.push_open_handle(OpenHandle::Node {
             node,
@@ -471,6 +472,7 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::new(),
+            link_target: None,
         });
     }
 
@@ -506,6 +508,7 @@ impl Vfs {
                     modified_at: crate::time::filesystem_timestamp(),
                 },
                 data: Vec::new(),
+                link_target: None,
             });
             self.nodes.len() - 1
         } else if Self::use_root_ext2(path) {
@@ -539,10 +542,11 @@ impl Vfs {
         } else {
             return Err(VfsError::NotFound);
         };
+        let metadata_node = canonical_node_index(&self.nodes, node);
         if self.nodes[node].kind == NodeKind::Directory && rights.write {
             return Err(VfsError::NotFile);
         }
-        if rights.read && !self.nodes[node].metadata.can_access(creds, Access::Read) {
+        if rights.read && !self.nodes[metadata_node].metadata.can_access(creds, Access::Read) {
             crate::println!(
                 "VFS permission denied: uid {} cannot read {}.",
                 creds.euid,
@@ -550,7 +554,7 @@ impl Vfs {
             );
             return Err(VfsError::PermissionDenied);
         }
-        if rights.write && !self.nodes[node].metadata.can_access(creds, Access::Write) {
+        if rights.write && !self.nodes[metadata_node].metadata.can_access(creds, Access::Write) {
             crate::println!(
                 "VFS permission denied: uid {} cannot write {}.",
                 creds.euid,
@@ -617,6 +621,7 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::new(),
+            link_target: None,
         });
         Ok(())
     }
@@ -635,9 +640,11 @@ impl Vfs {
         }
         let node = self
             .nodes
-            .iter_mut()
-            .find(|node| node.path == path)
+            .iter()
+            .position(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
+        let node = canonical_node_index(&self.nodes, node);
+        let node = &mut self.nodes[node];
         if node.kind != NodeKind::Directory {
             return Err(VfsError::NotFile);
         }
@@ -713,6 +720,57 @@ impl Vfs {
                 modified_at: now,
             },
             data: Vec::from(target.as_bytes()),
+            link_target: None,
+        });
+        Ok(())
+    }
+
+    fn link_as(&mut self, old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let resolved_old = self.resolve_symlink_path(old_path)?;
+        let normalized_new = normalize_path(new_path)?;
+        let old_path = resolved_old.as_str();
+        let new_path = normalized_new.as_str();
+
+        if Self::use_root_ext2(old_path) || Self::use_root_ext2(new_path) {
+            if !Self::use_root_ext2(old_path) || !Self::use_root_ext2(new_path) {
+                return Err(VfsError::NotFound);
+            }
+            let parent_path = parent_path(new_path);
+            let fs = self.root_ext2_mut().ok_or(VfsError::NotFound)?;
+            let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+            if parent.kind != ext2::Ext2NodeKind::Directory {
+                return Err(VfsError::NotFile);
+            }
+            if !parent.metadata.can_access(creds, Access::Write) {
+                return Err(VfsError::PermissionDenied);
+            }
+            return fs.link(old_path, new_path).map_err(map_ext2_error);
+        }
+
+        if self.nodes.iter().any(|node| node.path == new_path) {
+            return Err(VfsError::AlreadyExists);
+        }
+        self.ensure_parent_directory(new_path, Some((creds, Access::Write)))?;
+        let source = self
+            .nodes
+            .iter()
+            .position(|node| node.path == old_path)
+            .ok_or(VfsError::NotFound)?;
+        let target = canonical_node_index(&self.nodes, source);
+        if self.nodes[target].kind != NodeKind::File {
+            return Err(VfsError::NotFile);
+        }
+        let now = crate::time::filesystem_timestamp();
+        self.nodes.push(Node {
+            path: String::from(new_path),
+            kind: NodeKind::File,
+            metadata: self.nodes[target].metadata,
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: self.nodes[target].timestamps.modified_at,
+            },
+            data: Vec::new(),
+            link_target: Some(target),
         });
         Ok(())
     }
@@ -755,9 +813,11 @@ impl Vfs {
         let resolved = self.resolve_symlink_path(path)?;
         let node = self
             .nodes
-            .iter_mut()
-            .find(|node| node.path == resolved)
+            .iter()
+            .position(|node| node.path == resolved)
             .ok_or(VfsError::NotFound)?;
+        let node = canonical_node_index(&self.nodes, node);
+        let node = &mut self.nodes[node];
         if !creds.is_superuser() && creds.euid != node.metadata.owner {
             return Err(VfsError::PermissionDenied);
         }
@@ -844,9 +904,9 @@ impl Vfs {
                     *offset += count;
                     return Ok(count);
                 }
-                let node = &self.nodes[*node];
-                if node.kind != NodeKind::File {
-                    return match node.kind {
+                let kind = self.nodes[*node].kind;
+                if kind != NodeKind::File {
+                    return match kind {
                         NodeKind::Device(DeviceKind::Null) => Ok(0),
                         NodeKind::Device(DeviceKind::Zero) => {
                             output.fill(0);
@@ -879,9 +939,11 @@ impl Vfs {
                     };
                 }
 
-                let remaining = node.data.len().saturating_sub(*offset);
+                let data_node = canonical_node_index(&self.nodes, *node);
+                let data = &self.nodes[data_node].data;
+                let remaining = data.len().saturating_sub(*offset);
                 let count = remaining.min(output.len());
-                output[..count].copy_from_slice(&node.data[*offset..*offset + count]);
+                output[..count].copy_from_slice(&data[*offset..*offset + count]);
                 *offset += count;
                 Ok(count)
             }
@@ -951,9 +1013,9 @@ impl Vfs {
                 if !rights.write {
                     return Err(VfsError::BadFd);
                 }
-                let node = &mut self.nodes[*node];
-                if node.kind != NodeKind::File {
-                    return match node.kind {
+                let kind = self.nodes[*node].kind;
+                if kind != NodeKind::File {
+                    return match kind {
                         NodeKind::Device(DeviceKind::Null) => Ok(input.len()),
                         NodeKind::Device(DeviceKind::Console) => {
                             let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
@@ -980,6 +1042,8 @@ impl Vfs {
                     };
                 }
 
+                let data_node = canonical_node_index(&self.nodes, *node);
+                let node = &mut self.nodes[data_node];
                 if *offset > node.data.len() {
                     node.data.resize(*offset, 0);
                 }
@@ -1126,7 +1190,8 @@ impl Vfs {
                 let size = if let Some(text) = format_proc_virtual(&self.nodes[*node].path) {
                     text.len()
                 } else {
-                    self.nodes[*node].data.len()
+                    let data_node = canonical_node_index(&self.nodes, *node);
+                    self.nodes[data_node].data.len()
                 };
                 (size, cursor)
             }
@@ -1158,8 +1223,10 @@ impl Vfs {
             .ok_or(VfsError::BadFd)?;
         match handle {
             OpenHandle::Node { node, .. } => {
-                let node = &self.nodes[*node];
-                let size = format_proc_virtual(&node.path)
+                let visible_node = &self.nodes[*node];
+                let data_node = canonical_node_index(&self.nodes, *node);
+                let node = &self.nodes[data_node];
+                let size = format_proc_virtual(&visible_node.path)
                     .map(|text| text.len() as u64)
                     .unwrap_or(node.data.len() as u64);
                 Ok(Stat {
@@ -1167,6 +1234,7 @@ impl Vfs {
                     group: node.metadata.group,
                     mode: node.metadata.mode.0,
                     size,
+                    nlink: self.node_link_count(data_node),
                     mtime: node.timestamps.modified_at,
                 })
             }
@@ -1181,6 +1249,7 @@ impl Vfs {
                     group: meta.metadata.group,
                     mode: meta.metadata.mode.0,
                     size: meta.size,
+                    nlink: u64::from(meta.links),
                     mtime: crate::time::filesystem_timestamp(),
                 })
             }
@@ -1195,6 +1264,7 @@ impl Vfs {
                     group: meta.metadata.group,
                     mode: meta.metadata.mode.0,
                     size: meta.size,
+                    nlink: u64::from(meta.links),
                     mtime: crate::time::filesystem_timestamp(),
                 })
             }
@@ -1325,6 +1395,7 @@ impl Vfs {
                     0o444
                 },
                 size,
+                nlink: 1,
                 mtime: crate::time::filesystem_timestamp(),
             });
         }
@@ -1336,21 +1407,25 @@ impl Vfs {
                         group: meta.metadata.group,
                         mode: meta.metadata.mode.0,
                         size: meta.size,
+                        nlink: u64::from(meta.links),
                         mtime: crate::time::filesystem_timestamp(),
                     });
                 }
             }
         }
-        let node = self
+        let node_index = self
             .nodes
             .iter()
-            .find(|node| node.path == path)
+            .position(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
+        let data_node = canonical_node_index(&self.nodes, node_index);
+        let node = &self.nodes[data_node];
         Ok(Stat {
             owner: node.metadata.owner,
             group: node.metadata.group,
             mode: node.metadata.mode.0,
             size: node.data.len() as u64,
+            nlink: self.node_link_count(data_node),
             mtime: node.timestamps.modified_at,
         })
     }
@@ -1372,8 +1447,9 @@ impl Vfs {
         let node = self
             .nodes
             .iter()
-            .find(|node| node.path == path)
+            .position(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
+        let node = &self.nodes[canonical_node_index(&self.nodes, node)];
         Ok(node.metadata.can_access(creds, access))
     }
 
@@ -1390,12 +1466,24 @@ impl Vfs {
                 }
             }
         }
-        let node = self.nodes.iter().find(|node| node.path == path)?;
-        if node.kind == NodeKind::File {
-            Some(node.data.clone())
+        let node = self.nodes.iter().position(|node| node.path == path)?;
+        let data_node = canonical_node_index(&self.nodes, node);
+        if self.nodes[data_node].kind == NodeKind::File {
+            Some(self.nodes[data_node].data.clone())
         } else {
             None
         }
+    }
+
+    fn node_link_count(&self, target: usize) -> u64 {
+        let target = canonical_node_index(&self.nodes, target);
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| !node.path.is_empty() && node.kind == NodeKind::File)
+            .filter(|(index, _)| canonical_node_index(&self.nodes, *index) == target)
+            .count()
+            .max(1) as u64
     }
 
     fn resolve_symlink_path(&self, path: &str) -> Result<String, VfsError> {
@@ -1420,10 +1508,11 @@ impl Vfs {
 
     fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
         let path = normalize_path(path).ok()?;
-        self.nodes
+        let node = self
+            .nodes
             .iter()
-            .find(|node| node.path == path.as_str())
-            .map(|node| node.timestamps)
+            .position(|node| node.path == path.as_str())?;
+        Some(self.nodes[canonical_node_index(&self.nodes, node)].timestamps)
     }
 
     fn directory_entries(&self, fd: usize) -> Result<(Vec<DirectoryEntry>, usize), VfsError> {
@@ -1590,6 +1679,7 @@ pub struct Stat {
     pub group: u32,
     pub mode: u16,
     pub size: u64,
+    pub nlink: u64,
     pub mtime: u64,
 }
 
@@ -1656,6 +1746,10 @@ pub fn symlink_as(target: &str, link_path: &str, creds: Credentials) -> Result<(
     with_vfs(|vfs| vfs.symlink_as(target, link_path, creds))
 }
 
+pub fn link_as(old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.link_as(old_path, new_path, creds))
+}
+
 pub fn readlink(path: &str) -> Result<Vec<u8>, VfsError> {
     with_vfs(|vfs| vfs.readlink(path))
 }
@@ -1711,6 +1805,17 @@ fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
         | ext2::Ext2Error::NoSpace
         | ext2::Ext2Error::DirectoryFull => VfsError::BadFd,
     }
+}
+
+fn canonical_node_index(nodes: &[Node], index: usize) -> usize {
+    let mut current = index;
+    for _ in 0..8 {
+        let Some(next) = nodes.get(current).and_then(|node| node.link_target) else {
+            break;
+        };
+        current = next;
+    }
+    current
 }
 
 fn parent_path(path: &str) -> String {
