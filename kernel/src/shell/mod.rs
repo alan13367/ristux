@@ -12,6 +12,7 @@ pub fn init() {
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
+        "/bin/cat < /tmp/message.txt",
         "/bin/cat /tmp/message.txt",
         "/bin/cat /tmp/message.txt | /bin/cat",
         "true",
@@ -37,6 +38,11 @@ fn run_line(line: &str, cwd: &mut String) {
 
     if let Some((command, target)) = line.split_once('>') {
         run_redirected(command.trim(), target.trim(), cwd);
+        return;
+    }
+
+    if let Some((command, source)) = line.split_once('<') {
+        run_input_redirected(command.trim(), source.trim(), cwd);
         return;
     }
 
@@ -109,6 +115,37 @@ fn run_redirected(command: &str, target: &str, cwd: &mut String) {
 
     let output = run_command(command, cwd);
     fs::write_file(target, output.as_bytes());
+}
+
+fn run_input_redirected(command: &str, source: &str, cwd: &mut String) {
+    if let Some((path, args)) = parse_external_command(command) {
+        let input_fd = fs::open(source).expect("shell input redirection open failed");
+        run_external_with_fds(path, &args, Some(input_fd), None);
+        crate::println!(
+            "Ring 3 input redirection mapped {} to {} stdin.",
+            source,
+            path
+        );
+        return;
+    }
+
+    if command == "cat" {
+        match fs::read_file(source) {
+            Some(bytes) => match core::str::from_utf8(&bytes) {
+                Ok(text) => {
+                    crate::print!("{}", text);
+                }
+                Err(_) => {
+                    crate::println!("<binary>");
+                }
+            },
+            None => {
+                crate::println!("cat: not found");
+            }
+        }
+    } else {
+        run_command(command, cwd);
+    }
 }
 
 fn run_command(command: &str, cwd: &mut String) -> String {

@@ -15,6 +15,10 @@ pub fn create_pipe(capacity: usize) -> Result<(usize, usize), vfs::VfsError> {
     vfs::create_pipe(capacity)
 }
 
+pub fn duplicate_fd(fd: usize) -> Result<usize, vfs::VfsError> {
+    vfs::duplicate_fd(fd)
+}
+
 pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, vfs::VfsError> {
     vfs::read(fd, output)
 }

@@ -292,6 +292,20 @@ impl ActiveUserContext {
         self.fd_count += 1;
     }
 
+    fn replace_fd(&mut self, user_fd: usize, vfs_fd: usize) -> Option<usize> {
+        if let Some(fd) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|fd| fd.user_fd == user_fd)
+        {
+            let old = fd.vfs_fd;
+            fd.vfs_fd = vfs_fd;
+            return Some(old);
+        }
+
+        self.set_fd(user_fd, vfs_fd);
+        None
+    }
+
     fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
         self.fds[..self.fd_count]
             .iter()
@@ -524,6 +538,36 @@ pub fn active_user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     let vfs_fd = fs::open(path)?;
     let mut active = ACTIVE_USER.lock();
     Ok(active.push_fd(vfs_fd))
+}
+
+pub fn active_user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
+    let vfs_fd = ACTIVE_USER
+        .lock()
+        .lookup_fd(user_fd)
+        .ok_or(fs::vfs::VfsError::BadFd)?;
+    let duplicated = fs::duplicate_fd(vfs_fd)?;
+    let mut active = ACTIVE_USER.lock();
+    Ok(active.push_fd(duplicated))
+}
+
+pub fn active_user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::VfsError> {
+    if user_fd == target_fd {
+        if ACTIVE_USER.lock().lookup_fd(user_fd).is_some() {
+            return Ok(target_fd);
+        }
+        return Err(fs::vfs::VfsError::BadFd);
+    }
+
+    let vfs_fd = ACTIVE_USER
+        .lock()
+        .lookup_fd(user_fd)
+        .ok_or(fs::vfs::VfsError::BadFd)?;
+    let duplicated = fs::duplicate_fd(vfs_fd)?;
+    let old = ACTIVE_USER.lock().replace_fd(target_fd, duplicated);
+    if let Some(old) = old {
+        fs::close(old)?;
+    }
+    Ok(target_fd)
 }
 
 pub fn active_user_vfs_fd(user_fd: usize) -> Option<usize> {

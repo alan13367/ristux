@@ -16,6 +16,8 @@ pub const SYS_OPEN: u64 = 8;
 pub const SYS_CLOSE: u64 = 9;
 pub const SYS_GETCWD: u64 = 10;
 pub const SYS_LISTDIR: u64 = 11;
+pub const SYS_DUP: u64 = 12;
+pub const SYS_DUP2: u64 = 13;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
@@ -151,6 +153,18 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_DUP => {
+            frame.rax = match sys_dup_active(frame.rdi as usize) {
+                Ok(fd) => fd,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_DUP2 => {
+            frame.rax = match sys_dup2_active(frame.rdi as usize, frame.rsi as usize) {
+                Ok(fd) => fd,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -262,6 +276,18 @@ fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
 fn sys_close_active(fd: usize) -> SyscallResult {
     userspace::active_user_close(fd)
         .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn sys_dup_active(fd: usize) -> SyscallResult {
+    userspace::active_user_dup(fd)
+        .map(|fd| fd as u64)
+        .map_err(map_vfs_error)
+}
+
+fn sys_dup2_active(fd: usize, target_fd: usize) -> SyscallResult {
+    userspace::active_user_dup2(fd, target_fd)
+        .map(|fd| fd as u64)
         .map_err(map_vfs_error)
 }
 

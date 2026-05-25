@@ -226,6 +226,15 @@ impl Vfs {
         Ok((read_fd, write_fd))
     }
 
+    fn duplicate_fd(&mut self, fd: usize) -> Result<usize, VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| *slot)
+            .ok_or(VfsError::BadFd)?;
+        self.push_open_handle(handle)
+    }
+
     fn read(&mut self, fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
@@ -394,6 +403,10 @@ pub fn create_pipe(capacity: usize) -> Result<(usize, usize), VfsError> {
     with_vfs(|vfs| vfs.create_pipe(capacity))
 }
 
+pub fn duplicate_fd(fd: usize) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.duplicate_fd(fd))
+}
+
 pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.read(fd, output))
 }
@@ -446,9 +459,9 @@ pub fn list_paths(prefix: &str) -> Vec<String> {
 pub fn self_test() {
     let fd = open("/dev/zero").expect("open /dev/zero failed");
     let mut zeros = [1u8; 8];
-    let read = read(fd, &mut zeros).expect("read /dev/zero failed");
+    let zero_read = read(fd, &mut zeros).expect("read /dev/zero failed");
     close(fd).expect("close /dev/zero failed");
-    if read != zeros.len() || zeros != [0; 8] {
+    if zero_read != zeros.len() || zeros != [0; 8] {
         panic!("/dev/zero self-test failed");
     }
 
@@ -457,6 +470,17 @@ pub fn self_test() {
     close(fd).expect("close /dev/null failed");
     if wrote != b"discard me".len() {
         panic!("/dev/null self-test failed");
+    }
+
+    write_file("/tmp/dup.txt", b"dup ok");
+    let fd = open("/tmp/dup.txt").expect("open dup test file failed");
+    let duplicated = duplicate_fd(fd).expect("duplicate fd self-test failed");
+    close(fd).expect("close original dup test fd failed");
+    let mut dup_bytes = [0; 6];
+    let dup_read = read(duplicated, &mut dup_bytes).expect("read duplicated fd failed");
+    close(duplicated).expect("close duplicated fd failed");
+    if dup_read != dup_bytes.len() || &dup_bytes != b"dup ok" {
+        panic!("duplicated fd self-test read wrong data");
     }
 
     let fd = open("/dev/console").expect("open /dev/console failed");

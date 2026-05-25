@@ -3,7 +3,6 @@
 _start:
     mov %rdi, %r14
     mov %rsi, %r15
-    xor %r13, %r13
     cmp $1, %r14
     jle .use_stdin
 
@@ -14,8 +13,17 @@ _start:
     test %rax, %rax
     js .fail
     mov %rax, %r12
-    mov $1, %r13
-    jmp .read_loop
+
+    mov $13, %rax
+    mov %r12, %rdi
+    xor %rsi, %rsi
+    int $0x80
+    test %rax, %rax
+    js .fail_close
+
+    mov $9, %rax
+    mov %r12, %rdi
+    int $0x80
 
 .use_stdin:
     xor %r12, %r12
@@ -38,20 +46,11 @@ _start:
     jmp .read_loop
 
 .done:
-    test %r13, %r13
-    jz .exit_ok
-    mov $9, %rax
-    mov %r12, %rdi
-    int $0x80
-
-.exit_ok:
     mov $3, %rax
     xor %rdi, %rdi
     int $0x80
 
 .fail_close:
-    test %r13, %r13
-    jz .fail
     mov $9, %rax
     mov %r12, %rdi
     int $0x80
