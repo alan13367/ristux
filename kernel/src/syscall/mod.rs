@@ -218,11 +218,18 @@ fn sys_write(process: &UserProcess, fd: usize, ptr: usize, len: usize) -> Syscal
 }
 
 fn sys_write_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
+    let bytes = userspace::active_user_read(ptr, len).ok_or(SyscallError(EFAULT))?;
+
+    if let Some(vfs_fd) = userspace::active_user_vfs_fd(fd) {
+        return crate::fs::write(vfs_fd, bytes)
+            .map(|written| written as u64)
+            .map_err(map_vfs_error);
+    }
+
     if fd != 1 && fd != 2 {
         return Err(SyscallError(EBADF));
     }
 
-    let bytes = userspace::active_user_read(ptr, len).ok_or(SyscallError(EFAULT))?;
     match str::from_utf8(bytes) {
         Ok(text) => crate::print!("{}", text),
         Err(_) => {

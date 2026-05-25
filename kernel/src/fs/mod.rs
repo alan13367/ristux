@@ -15,6 +15,10 @@ pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, vfs::VfsError> {
     vfs::read(fd, output)
 }
 
+pub fn write(fd: usize, input: &[u8]) -> Result<usize, vfs::VfsError> {
+    vfs::write(fd, input)
+}
+
 pub fn close(fd: usize) -> Result<(), vfs::VfsError> {
     vfs::close(fd)
 }
@@ -29,4 +33,8 @@ pub fn with_file_data<T>(path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
 
 pub fn list_paths(prefix: &str) -> alloc::vec::Vec<alloc::string::String> {
     vfs::list_paths(prefix)
+}
+
+pub fn write_file(path: &str, data: &[u8]) {
+    vfs::write_file(path, data);
 }

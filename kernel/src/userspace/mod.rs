@@ -275,6 +275,23 @@ impl ActiveUserContext {
         user_fd
     }
 
+    fn set_fd(&mut self, user_fd: usize, vfs_fd: usize) {
+        if let Some(fd) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|fd| fd.user_fd == user_fd)
+        {
+            fd.vfs_fd = vfs_fd;
+            return;
+        }
+
+        if self.fd_count >= MAX_ACTIVE_FDS {
+            panic!("too many active user file descriptors");
+        }
+
+        self.fds[self.fd_count] = ActiveFd { user_fd, vfs_fd };
+        self.fd_count += 1;
+    }
+
     fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
         self.fds[..self.fd_count]
             .iter()
@@ -411,9 +428,29 @@ pub fn run_user_program_with_args(
     args: &[&str],
     pid: u64,
 ) -> UserProgramResult {
+    run_user_program_with_stdio(path, args, pid, None)
+}
+
+pub fn run_user_program_with_stdio(
+    path: &'static str,
+    args: &[&str],
+    pid: u64,
+    stdout_path: Option<&str>,
+) -> UserProgramResult {
     {
         let mut active = ACTIVE_USER.lock();
         *active = ActiveUserContext::new(pid, path);
+    }
+
+    if let Some(stdout_path) = stdout_path {
+        fs::write_file(stdout_path, b"");
+        let stdout_fd = fs::open(stdout_path).unwrap_or_else(|err| {
+            panic!(
+                "failed to open redirected stdout {}: {}",
+                stdout_path, err
+            )
+        });
+        ACTIVE_USER.lock().set_fd(1, stdout_fd);
     }
 
     let entry = fs::with_file_data(path, |data| map_user_elf_bytes(path, data))

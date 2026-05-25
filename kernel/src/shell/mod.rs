@@ -10,7 +10,7 @@ pub fn init() {
         "/bin/echo hello from argv",
         "/bin/ls /bin",
         "cat /tmp/message.txt",
-        "echo redirected > /tmp/message.txt",
+        "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
         "/bin/cat",
         "cat /tmp/message.txt | cat",
@@ -47,12 +47,28 @@ fn run_line(line: &str, cwd: &mut String) {
     }
 
     if let Some((command, target)) = line.split_once('>') {
-        let output = run_command(command.trim(), cwd);
-        fs::vfs::write_file(target.trim(), output.as_bytes());
+        run_redirected(command.trim(), target.trim(), cwd);
         return;
     }
 
     run_command(line, cwd);
+}
+
+fn run_redirected(command: &str, target: &str, cwd: &mut String) {
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        fs::write_file(target, b"");
+        return;
+    };
+    let args: Vec<&str> = parts.collect();
+
+    if program == "/bin/echo" {
+        run_external_with_redirect("/bin/echo", &args, target);
+        return;
+    }
+
+    let output = run_command(command, cwd);
+    fs::write_file(target, output.as_bytes());
 }
 
 fn run_command(command: &str, cwd: &mut String) -> String {
@@ -113,13 +129,21 @@ fn run_external(path: &'static str) -> String {
 }
 
 fn run_external_with_args(path: &'static str, args: &[&str]) -> String {
+    run_external_with_stdio(path, args, None)
+}
+
+fn run_external_with_redirect(path: &'static str, args: &[&str], stdout_path: &str) -> String {
+    run_external_with_stdio(path, args, Some(stdout_path))
+}
+
+fn run_external_with_stdio(path: &'static str, args: &[&str], stdout_path: Option<&str>) -> String {
     let parent = 1;
     let child = process::fork(parent).expect("shell fork failed");
     process::exec(child, path);
     let mut argv = Vec::new();
     argv.push(path);
     argv.extend_from_slice(args);
-    let result = userspace::run_user_program_with_args(path, &argv, child);
+    let result = userspace::run_user_program_with_stdio(path, &argv, child, stdout_path);
     process::exit(child, result.status);
     let waited = process::wait(parent, child).unwrap_or(-1);
     crate::println!(
