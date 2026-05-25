@@ -1,4 +1,7 @@
-use core::{arch::asm, mem, ptr};
+use core::{
+    arch::{asm, global_asm},
+    mem, ptr,
+};
 
 use super::gdt;
 
@@ -6,6 +9,51 @@ const IDT_ENTRIES: usize = 256;
 const INTERRUPT_GATE: u16 = 0x8e00;
 const USER_INTERRUPT_GATE: u16 = 0xee00;
 const SYSCALL_VECTOR: usize = 0x80;
+
+global_asm!(
+    r#"
+.global syscall_interrupt_stub
+syscall_interrupt_stub:
+    cld
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rax
+    mov rdi, rsp
+    call syscall_interrupt_dispatch
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    iretq
+"#
+);
+
+unsafe extern "C" {
+    fn syscall_interrupt_stub();
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -133,7 +181,7 @@ pub fn trigger_breakpoint() {
 pub fn install_syscall_gate() {
     unsafe {
         let idt = ptr::addr_of_mut!(IDT);
-        (*idt).set_user_handler(SYSCALL_VECTOR, syscall_interrupt_handler as *const () as u64);
+        (*idt).set_user_handler(SYSCALL_VECTOR, syscall_interrupt_stub as *const () as u64);
     }
     crate::println!("IDT syscall gate installed at vector {:#x}.", SYSCALL_VECTOR);
 }
@@ -194,8 +242,4 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     super::interrupts::keyboard_interrupt();
-}
-
-extern "x86-interrupt" fn syscall_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    crate::println!("int 0x80 syscall gate reached without a register frame");
 }

@@ -115,11 +115,12 @@ The smoke script builds the ISO, injects `sendkey a`, exits QEMU, and writes
 the serial log to `/tmp/ristux-smoke-serial.log`. To inspect the log manually:
 
 ```sh
-grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|keyboard scancode|panic" /tmp/ristux-smoke-serial.log
+grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|Ring 3|keyboard scancode|panic" /tmp/ristux-smoke-serial.log
 ```
 
-A passing boot reaches `Kernel self-test harness passed.`, logs the keyboard
-scancode from `sendkey a`, and does not print `kernel panic`.
+A passing boot reaches `Kernel self-test harness passed.`, enters the ring 3
+smoke path, logs the keyboard scancode from `sendkey a`, and does not print
+`kernel panic`.
 
 ## Current Kernel Milestones
 
@@ -133,6 +134,8 @@ scancode from `sendkey a`, and does not print `kernel panic`.
 - Runs a boot-time kernel self-test harness for core APIs.
 - Runs cooperative kernel tasks and timer-driven scheduler dispatch.
 - Loads `/bin/init` from a GRUB Multiboot2 initrd and parses its ELF image.
+- Enters a small CPL3 smoke program that returns through the `int 0x80`
+  syscall gate.
 - Provides a small syscall ABI and process model with `fork`, `exec`, `wait`, and exit statuses.
 - Mounts an initrd-backed VFS with `/dev`, `/proc`, and `/tmp`.
 - Implements basic device files, pipes, redirection, and a scripted shell smoke test.

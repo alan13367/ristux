@@ -1,6 +1,18 @@
 pub mod elf;
 
-use crate::{fs, syscall};
+use core::{arch::asm, ptr};
+
+use crate::{
+    fs,
+    memory::{
+        frame_allocator::{self, FRAME_SIZE},
+        paging::{self, PageFlags},
+    },
+    syscall,
+};
+
+const USER_SMOKE_ENTRY: usize = 0x4100_0000;
+const USER_SMOKE_STACK_TOP: usize = 0x7000_1000;
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
@@ -94,6 +106,50 @@ pub fn stats() -> UserspaceStats {
     unsafe { USERSPACE_STATS }
 }
 
+pub fn enter_ring3_smoke() -> ! {
+    let code_frame =
+        frame_allocator::allocate_frame().expect("ring 3 smoke code frame allocation failed");
+    let stack_frame =
+        frame_allocator::allocate_frame().expect("ring 3 smoke stack frame allocation failed");
+    let stack_bottom = USER_SMOKE_STACK_TOP - FRAME_SIZE;
+    let syscall = syscall::SYS_RING3_DONE as u32;
+    let code = [
+        0x48,
+        0xc7,
+        0xc0,
+        syscall as u8,
+        (syscall >> 8) as u8,
+        (syscall >> 16) as u8,
+        (syscall >> 24) as u8,
+        0xcd,
+        0x80,
+        0xf3,
+        0x90,
+        0xeb,
+        0xfc,
+    ];
+
+    unsafe {
+        ptr::write_bytes(code_frame.start as *mut u8, 0, FRAME_SIZE);
+        ptr::write_bytes(stack_frame.start as *mut u8, 0, FRAME_SIZE);
+        ptr::copy_nonoverlapping(code.as_ptr(), code_frame.start as *mut u8, code.len());
+        paging::map_page(USER_SMOKE_ENTRY, code_frame.start, PageFlags::USER_WRITABLE)
+            .unwrap_or_else(|err| panic!("ring 3 smoke code map failed: {}", err));
+        paging::map_page(stack_bottom, stack_frame.start, PageFlags::USER_WRITABLE)
+            .unwrap_or_else(|err| panic!("ring 3 smoke stack map failed: {}", err));
+    }
+
+    crate::println!(
+        "Entering ring 3 smoke test at {:#x} with stack {:#x}.",
+        USER_SMOKE_ENTRY,
+        USER_SMOKE_STACK_TOP
+    );
+
+    unsafe {
+        enter_user_mode(USER_SMOKE_ENTRY, USER_SMOKE_STACK_TOP);
+    }
+}
+
 fn run_init_process(process: &mut UserProcess) {
     const MESSAGE: &[u8] = b"init: hello from user space\n";
 
@@ -119,5 +175,27 @@ fn run_init_process(process: &mut UserProcess) {
             ProcessState::Exited(status) => Some(status),
             _ => None,
         };
+    }
+}
+
+unsafe fn enter_user_mode(entry: usize, stack_top: usize) -> ! {
+    let user_cs = crate::arch::x86_64::gdt::user_code_selector() as u64;
+    let user_ss = crate::arch::x86_64::gdt::user_data_selector() as u64;
+
+    unsafe {
+        asm!(
+            "push {user_ss}",
+            "push {stack_top}",
+            "pushfq",
+            "or qword ptr [rsp], 0x200",
+            "push {user_cs}",
+            "push {entry}",
+            "iretq",
+            user_ss = in(reg) user_ss,
+            stack_top = in(reg) stack_top as u64,
+            user_cs = in(reg) user_cs,
+            entry = in(reg) entry as u64,
+            options(noreturn)
+        );
     }
 }
