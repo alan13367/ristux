@@ -25,6 +25,9 @@ static int dir_contains(int fd, const char *needle) {
 int main(void) {
     const char *dir = "/tmp/cc_fs";
     const char *path = "/tmp/cc_fs/item";
+    const char *masked = "/tmp/cc_fs/masked";
+    const char *maskdir = "/tmp/cc_fs/maskdir";
+    const char *missing = "/tmp/cc_fs/missing_trunc";
 
     if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
         puts("cc_fs: mkdir failed");
@@ -61,6 +64,44 @@ int main(void) {
     }
     puts("cc_fs: getdents ok");
 
+    mode_t old_mask = umask(0027);
+    fd = open(masked, O_CREAT | O_TRUNC | O_WRONLY, 0666);
+    if (fd < 0) {
+        puts("cc_fs: umask create failed");
+        return 1;
+    }
+    close(fd);
+
+    struct stat st;
+    if (stat(masked, &st) != 0 || (st.st_mode & 0777) != 0640) {
+        puts("cc_fs: umask file mode failed");
+        return 1;
+    }
+    if (mkdir(maskdir, 0777) != 0) {
+        puts("cc_fs: umask mkdir failed");
+        return 1;
+    }
+    if (stat(maskdir, &st) != 0 || (st.st_mode & 0777) != 0750) {
+        puts("cc_fs: umask dir mode failed");
+        return 1;
+    }
+    umask(old_mask);
+    puts("cc_fs: umask ok");
+
+    fd = open(missing, O_WRONLY | O_TRUNC, 0644);
+    if (fd >= 0 || errno != ENOENT) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        puts("cc_fs: trunc missing failed");
+        return 1;
+    }
+    puts("cc_fs: trunc missing ok");
+
+    if (unlink(masked) != 0 || rmdir(maskdir) != 0) {
+        puts("cc_fs: cleanup failed");
+        return 1;
+    }
     if (unlink(path) != 0) {
         puts("cc_fs: unlink failed");
         return 1;

@@ -60,6 +60,7 @@ pub struct Process {
     pub state: ProcessState,
     pub address_space: AddressSpace,
     pub credentials: Credentials,
+    pub umask: u16,
     fd_count: usize,
     fds: [FdEntry; MAX_FDS],
     next_fd: usize,
@@ -123,6 +124,7 @@ impl Process {
             state: ProcessState::Ready,
             address_space,
             credentials,
+            umask: 0o022,
             fd_count: 0,
             fds: [FdEntry {
                 user_fd: 0,
@@ -600,6 +602,7 @@ impl Process {
             state: ProcessState::Ready,
             address_space,
             credentials: self.credentials,
+            umask: self.umask,
             fd_count,
             fds,
             next_fd: self.next_fd,
@@ -912,19 +915,25 @@ pub fn user_open_options(
     truncate: bool,
     append: bool,
     status_flags: u32,
+    create_mode: u16,
 ) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
+        let create_mode = create_mode & !p.umask & 0o7777;
         let vfs_fd = if create {
             match fs::open_with_rights_as(path, p.credentials, read, write) {
                 Ok(fd) if !truncate => fd,
                 Ok(fd) => {
                     let _ = fs::close(fd);
-                    fs::create_file_as(path, p.credentials)?
+                    fs::create_file_with_mode_as(path, p.credentials, create_mode)?
                 }
-                Err(fs::vfs::VfsError::NotFound) => fs::create_file_as(path, p.credentials)?,
+                Err(fs::vfs::VfsError::NotFound) => {
+                    fs::create_file_with_mode_as(path, p.credentials, create_mode)?
+                }
                 Err(err) => return Err(err),
             }
         } else if truncate {
+            let fd = fs::open_with_rights_as(path, p.credentials, read, write)?;
+            let _ = fs::close(fd);
             fs::create_file_as(path, p.credentials)?
         } else {
             fs::open_with_rights_as(path, p.credentials, read, write)?
@@ -939,7 +948,8 @@ pub fn user_open_options(
 
 pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
-        let vfs_fd = fs::create_file_as(path, p.credentials)?;
+        let mode = 0o644 & !p.umask;
+        let vfs_fd = fs::create_file_with_mode_as(path, p.credentials, mode)?;
         Ok(p.push_fd(vfs_fd))
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
@@ -1022,7 +1032,15 @@ pub fn user_set_fd_flags(user_fd: usize, flags: u32) -> Result<(), fs::vfs::VfsE
 }
 
 pub fn user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::mkdir_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    user_mkdir_mode(path, 0o755)
+}
+
+pub fn user_mkdir_mode(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| {
+        let mode = mode & !p.umask & 0o7777;
+        fs::mkdir_with_mode_as(path, p.credentials, mode)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_rmdir(path: &str) -> Result<(), fs::vfs::VfsError> {
@@ -1467,6 +1485,15 @@ pub fn set_current_groups(groups: &[u32]) -> Result<(), ()> {
         Ok(())
     })
     .unwrap_or(Err(()))
+}
+
+pub fn set_current_umask(mask: u16) -> u16 {
+    with_current(|p| {
+        let old = p.umask;
+        p.umask = mask & 0o777;
+        old
+    })
+    .unwrap_or(0o022)
 }
 
 pub fn user_cwd() -> Option<String> {

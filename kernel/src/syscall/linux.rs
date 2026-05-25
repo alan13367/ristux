@@ -212,7 +212,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_readlink => linux_readlink(a0 as usize, a1 as usize, a2 as usize),
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
         NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
-        NR_umask => Ok(0),
+        NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
@@ -464,7 +464,7 @@ fn linux_read(
     }
 }
 
-fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
+fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
     const O_WRONLY: i32 = 1;
     const O_RDWR: i32 = 2;
     const O_CREAT: i32 = 0o100;
@@ -478,9 +478,18 @@ fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
     let truncate = flags & O_TRUNC != 0;
     let status_flags = (flags as u32) & (O_ACCMODE | SETTABLE_STATUS_FLAGS);
     let append = status_flags & O_APPEND != 0;
-    process::user_open_options(&path, read, write, create, truncate, append, status_flags)
-        .map(|fd| fd as u64)
-        .map_err(map_vfs_error)
+    process::user_open_options(
+        &path,
+        read,
+        write,
+        create,
+        truncate,
+        append,
+        status_flags,
+        mode as u16,
+    )
+    .map(|fd| fd as u64)
+    .map_err(map_vfs_error)
 }
 
 fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
@@ -1160,9 +1169,9 @@ fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
 
 fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    process::user_mkdir(&path).map_err(map_vfs_error)?;
-    let _ = process::user_chmod(&path, mode);
-    Ok(0)
+    process::user_mkdir_mode(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
 }
 
 fn linux_rmdir(path_ptr: usize) -> Result<u64, i64> {

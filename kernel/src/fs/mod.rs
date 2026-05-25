@@ -36,6 +36,14 @@ pub fn create_file_as(path: &str, creds: Credentials) -> Result<usize, vfs::VfsE
     vfs::create_file_as(path, creds)
 }
 
+pub fn create_file_with_mode_as(
+    path: &str,
+    creds: Credentials,
+    mode: u16,
+) -> Result<usize, vfs::VfsError> {
+    vfs::create_file_with_mode_as(path, creds, mode)
+}
+
 pub fn duplicate_fd(fd: usize) -> Result<usize, vfs::VfsError> {
     vfs::duplicate_fd(fd)
 }
@@ -56,8 +64,12 @@ pub fn chmod_as(path: &str, mode: u16, creds: Credentials) -> Result<(), vfs::Vf
     vfs::chmod_as(path, mode, creds)
 }
 
-pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
-    vfs::mkdir_as(path, creds)
+pub fn mkdir_with_mode_as(
+    path: &str,
+    creds: Credentials,
+    mode: u16,
+) -> Result<(), vfs::VfsError> {
+    vfs::mkdir_with_mode_as(path, creds, mode)
 }
 
 pub fn rmdir_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {

@@ -387,8 +387,18 @@ impl Vfs {
     }
 
     fn create_file_as(&mut self, path: &str, creds: Credentials) -> Result<usize, VfsError> {
+        self.create_file_with_mode_as(path, creds, 0o644)
+    }
+
+    fn create_file_with_mode_as(
+        &mut self,
+        path: &str,
+        creds: Credentials,
+        mode: u16,
+    ) -> Result<usize, VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
+        let mode = mode & 0o7777;
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2_mut() {
                 match fs.metadata(path) {
@@ -410,7 +420,7 @@ impl Vfs {
                         if !parent.metadata.can_access(creds, Access::Write) {
                             return Err(VfsError::PermissionDenied);
                         }
-                        fs.create_file(path, creds.euid, creds.egid, 0o644)
+                        fs.create_file(path, creds.euid, creds.egid, mode)
                             .map_err(map_ext2_error)?;
                     }
                     Err(err) => return Err(map_ext2_error(err)),
@@ -446,7 +456,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::File,
-            metadata: FileMetadata::new(creds.euid, creds.egid, 0o644),
+            metadata: FileMetadata::new(creds.euid, creds.egid, mode),
             timestamps: FileTimestamps {
                 created_at: now,
                 modified_at: now,
@@ -605,6 +615,15 @@ impl Vfs {
     }
 
     fn mkdir_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        self.mkdir_with_mode_as(path, creds, 0o755)
+    }
+
+    fn mkdir_with_mode_as(
+        &mut self,
+        path: &str,
+        creds: Credentials,
+        mode: u16,
+    ) -> Result<(), VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
         if self.nodes.iter().any(|node| node.path == path) {
@@ -615,7 +634,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Directory,
-            metadata: FileMetadata::new(creds.euid, creds.egid, 0o755),
+            metadata: FileMetadata::new(creds.euid, creds.egid, mode & 0o7777),
             timestamps: FileTimestamps {
                 created_at: now,
                 modified_at: now,
@@ -1657,6 +1676,14 @@ pub fn create_file_as(path: &str, creds: Credentials) -> Result<usize, VfsError>
     with_vfs(|vfs| vfs.create_file_as(path, creds))
 }
 
+pub fn create_file_with_mode_as(
+    path: &str,
+    creds: Credentials,
+    mode: u16,
+) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.create_file_with_mode_as(path, creds, mode))
+}
+
 pub fn duplicate_fd(fd: usize) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.duplicate_fd(fd))
 }
@@ -1722,8 +1749,8 @@ pub fn mkdir(path: &str) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.mkdir(path))
 }
 
-pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
-    with_vfs(|vfs| vfs.mkdir_as(path, creds))
+pub fn mkdir_with_mode_as(path: &str, creds: Credentials, mode: u16) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.mkdir_with_mode_as(path, creds, mode))
 }
 
 pub fn rmdir_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
