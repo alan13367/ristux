@@ -15,6 +15,7 @@ ISO_DIR := iso
 ISO_KERNEL := $(ISO_DIR)/boot/ristux.elf
 ISO_INITRD := $(ISO_DIR)/boot/initrd.bin
 ISO_IMAGE := build/ristux.iso
+DISK_IMAGE := build/disk.img
 USERLAND_RS_TARGET := x86_64-ristux-user
 USERLAND_RS_OUT := userland/target/$(USERLAND_RS_TARGET)/release
 USERLAND_RS_SRC := \
@@ -50,10 +51,11 @@ USER_UDP_ELF := build/userland/udp.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
 ROOTFS_BUILDER := build/build_rootfs
+EXT2_DISK_BUILDER := build/build_ext2_disk
 ROOTFS_MANIFEST := rootfs/manifest.txt
 ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release
 
-.PHONY: all build rootfs check-multiboot iso run run-headless smoke debug test clean
+.PHONY: all build rootfs disk check-multiboot iso run run-headless smoke debug test clean
 
 all: build
 
@@ -145,20 +147,29 @@ $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
+$(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
+	mkdir -p build
+	$(RUSTC) $< -o $@
+
 $(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)
 
+$(DISK_IMAGE): $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(ROOTFS_MANIFEST) $(ROOTFS_INPUTS)
+	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST)
+
+disk: $(DISK_IMAGE)
+
 check-multiboot: $(ISO_KERNEL)
 	$(GRUB_FILE) --is-x86-multiboot2 $(ISO_KERNEL)
 
-iso: check-multiboot $(ISO_INITRD)
+iso: check-multiboot $(ISO_INITRD) $(DISK_IMAGE)
 	mkdir -p build
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_DIR)
 
-run: iso
-	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS) -no-reboot -no-shutdown
+run: iso disk
+	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS) -drive file=$(DISK_IMAGE),if=none,id=hd0,format=raw -device virtio-blk-pci,drive=hd0 -no-reboot -no-shutdown
 
 run-headless: iso
 	scripts/run_qemu.sh --headless

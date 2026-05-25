@@ -13,7 +13,7 @@ jobs:
         with:
           components: rust-src
       - name: Install boot tools
-        run: brew install i686-elf-grub xorriso mtools qemu
+        run: brew install i686-elf-grub xorriso mtools qemu e2fsprogs
       - name: Build kernel
         run: cargo build
       - name: Verify Multiboot2 image

@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 QEMU_BIN="${QEMU:-qemu-system-x86_64}"
 ISO_IMAGE="${ISO_IMAGE:-build/ristux.iso}"
+DISK_IMAGE="${DISK_IMAGE:-build/disk.img}"
 SERIAL_LOG="${RISTUX_SERIAL_LOG:-/tmp/ristux-smoke-serial.log}"
 QEMU_FLAGS="${QEMU_FLAGS:-}"
 if [[ -z "$QEMU_FLAGS" ]]; then
@@ -12,6 +13,13 @@ fi
 
 rm -f "$SERIAL_LOG"
 make iso
+
+QEMU_ARGS=(-cdrom "$ISO_IMAGE")
+QEMU_ARGS+=($QEMU_FLAGS)
+QEMU_ARGS+=(
+  -drive "file=$DISK_IMAGE,if=none,id=hd0,format=raw"
+  -device "virtio-blk-pci,drive=hd0"
+)
 
 send_text() {
   local text="$1"
@@ -45,7 +53,7 @@ send_text() {
   printf 'sendkey ret\n'
   sleep 5
   printf 'quit\n'
-) | "$QEMU_BIN" -cdrom "$ISO_IMAGE" $QEMU_FLAGS -display none -no-reboot \
+) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
 
 grep -q "SMP self-test passed" "$SERIAL_LOG"
