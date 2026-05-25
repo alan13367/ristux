@@ -229,7 +229,13 @@ impl VirtioBlockDriver {
             match self.hardware_read_sectors(sector, count, buf) {
                 Ok(()) => return Ok(()),
                 Err(()) => {
+                    crate::println!(
+                        "VirtIO block hardware read failed at sector {}, count {}; using fallback.",
+                        sector,
+                        count
+                    );
                     self.hardware = false;
+                    self.transport = Transport::Software;
                 }
             }
         }
@@ -380,7 +386,6 @@ impl VirtioBlockDriver {
         } else {
             VIRTQ_DESC_F_NEXT
         };
-        self.legacy_queue.reset();
         self.legacy_queue.set_desc(
             0,
             virt_to_phys(core::ptr::addr_of!(req.header) as usize),
@@ -477,8 +482,8 @@ const fn build_software_disk() -> [u8; 4096] {
 }
 
 pub fn self_test() -> bool {
-    let mut buf = [0u8; 1024];
-    if read_sectors(2, 2, &mut buf).is_err() || buf[56] != 0x53 || buf[57] != 0xEF {
+    let mut buf = [0u8; 512];
+    if read_sectors(2, 1, &mut buf).is_err() || buf[56] != 0x53 || buf[57] != 0xEF {
         return false;
     }
     let hardware = BLOCK_DRIVER
