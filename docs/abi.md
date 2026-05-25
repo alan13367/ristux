@@ -194,6 +194,8 @@ Phase E handler path is guaranteed.
 These are explicit non-guarantees of the current ABI:
 
 - No `select` contract yet.
+- User stacks start with one mapped page and grow downward on page faults within
+  a 1 MiB stack region. The lowest page is an unmapped guard page.
 - `mmap` currently supports `MAP_PRIVATE` anonymous mappings and private
   file-backed reads. `MAP_SHARED`, `MAP_FIXED`, and demand paging are not part
   of the contract yet.

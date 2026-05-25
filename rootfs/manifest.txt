@@ -14,6 +14,7 @@ file /bin/cc_mmap ../build/userland/cc_mmap.elf
 file /bin/cc_poll ../build/userland/cc_poll.elf
 file /bin/cc_proc ../build/userland/cc_proc.elf
 file /bin/cc_signal ../build/userland/cc_signal.elf
+file /bin/cc_stack ../build/userland/cc_stack.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
@@ -45,6 +46,7 @@ package cc_mmap 0.1.0 /bin/cc_mmap
 package cc_poll 0.1.0 /bin/cc_poll
 package cc_proc 0.1.0 /bin/cc_proc
 package cc_signal 0.1.0 /bin/cc_signal
+package cc_stack 0.1.0 /bin/cc_stack
 package chmod 0.1.0 /bin/chmod
 package curl_lite 0.1.0 /bin/curl_lite
 package echo 0.1.0 /bin/echo

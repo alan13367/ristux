@@ -388,6 +388,9 @@ impl Process {
         let mut page = paging::align_down(addr, FRAME_SIZE);
         let page_end = paging::align_up(end, FRAME_SIZE);
         while page < page_end {
+            if page <= paging::USER_STACK_GUARD || page + FRAME_SIZE > paging::USER_STACK_TOP {
+                panic!("user stack exhausted");
+            }
             if !self.address_space.allows(page, FRAME_SIZE) {
                 self.address_space
                     .map_zero_page(page)
@@ -1141,9 +1144,7 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
         if present {
             return false;
         }
-        if fault_addr >= process.address_space.stack_bottom
-            && fault_addr < process.address_space.stack_top
-        {
+        if process.address_space.can_grow_stack(fault_addr) {
             process.address_space.grow_stack(fault_addr).is_ok()
         } else if fault_addr >= paging::USER_HEAP_START
             && fault_addr < process.address_space.heap_break + FRAME_SIZE

@@ -229,17 +229,22 @@ impl AddressSpace {
 
     pub fn grow_stack(&mut self, fault_addr: usize) -> Result<(), PagingError> {
         let page = paging::align_down(fault_addr, FRAME_SIZE);
-        if page < self.stack_bottom || page + FRAME_SIZE > self.stack_top {
+        if !self.can_grow_stack(fault_addr) {
             return Err(PagingError::NotMapped);
         }
         if self.user_mappings.iter().any(|(virt, _)| *virt == page) {
             return Ok(());
         }
         self.map_zero_page(page)?;
-        if page < self.stack_bottom + FRAME_SIZE {
+        if page < self.stack_bottom {
             self.stack_bottom = page;
         }
         Ok(())
+    }
+
+    pub fn can_grow_stack(&self, fault_addr: usize) -> bool {
+        let page = paging::align_down(fault_addr, FRAME_SIZE);
+        page > paging::USER_STACK_GUARD && page + FRAME_SIZE <= self.stack_top
     }
 
     pub fn grow_heap(&mut self, new_break: usize) -> Result<(), PagingError> {
