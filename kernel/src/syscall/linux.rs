@@ -19,6 +19,7 @@ pub const NR_open: u64 = 2;
 pub const NR_close: u64 = 3;
 pub const NR_stat: u64 = 4;
 pub const NR_fstat: u64 = 5;
+pub const NR_lstat: u64 = 6;
 pub const NR_lseek: u64 = 8;
 pub const NR_brk: u64 = 12;
 pub const NR_rt_sigaction: u64 = 13;
@@ -47,9 +48,14 @@ pub const NR_kill: u64 = 62;
 pub const NR_getdents: u64 = 78;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
+pub const NR_rename: u64 = 82;
 pub const NR_mkdir: u64 = 83;
+pub const NR_rmdir: u64 = 84;
 pub const NR_unlink: u64 = 87;
+pub const NR_symlink: u64 = 88;
+pub const NR_readlink: u64 = 89;
 pub const NR_chmod: u64 = 90;
+pub const NR_chown: u64 = 92;
 pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
 pub const NR_getuid: u64 = 102;
@@ -154,15 +160,21 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
+        NR_rename => linux_rename(a0 as usize, a1 as usize),
         NR_mkdir => linux_mkdir(a0 as usize, a1 as u16),
+        NR_rmdir => linux_rmdir(a0 as usize),
         NR_unlink => linux_unlink(a0 as usize),
+        NR_symlink => linux_symlink(a0 as usize, a1 as usize),
+        NR_readlink => linux_readlink(a0 as usize, a1 as usize, a2 as usize),
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
+        NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
         NR_umask => Ok(0),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
         NR_stat => linux_stat(a0 as usize, a1 as usize),
         NR_fstat => linux_fstat(a0 as usize, a1 as usize),
+        NR_lstat => linux_lstat(a0 as usize, a1 as usize),
         NR_kill => linux_kill(a0 as i64, a1 as u8),
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
@@ -777,9 +789,31 @@ fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
     Ok(0)
 }
 
+fn linux_rmdir(path_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_rmdir(&path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_rename(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
+    let old_path = read_user_cstr(old_ptr).ok_or(EFAULT)?;
+    let new_path = read_user_cstr(new_ptr).ok_or(EFAULT)?;
+    process::user_rename(&old_path, &new_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     process::user_chmod(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)
 }
@@ -789,6 +823,23 @@ fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
     process::user_unlink(&path)
         .map(|_| 0)
         .map_err(map_vfs_error)
+}
+
+fn linux_symlink(target_ptr: usize, link_ptr: usize) -> Result<u64, i64> {
+    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
+    let link_path = read_user_cstr(link_ptr).ok_or(EFAULT)?;
+    process::user_symlink(&target, &link_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_readlink(path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let target = fs::readlink(&path).map_err(map_vfs_error)?;
+    let count = target.len().min(len);
+    let out = process::write_user_buffer(buf, count).ok_or(EFAULT)?;
+    out.copy_from_slice(&target[..count]);
+    Ok(count as u64)
 }
 
 fn linux_brk(new_break: usize) -> Result<u64, i64> {
@@ -919,6 +970,7 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
     const DT_CHR: u8 = 2;
     const DT_DIR: u8 = 4;
     const DT_REG: u8 = 8;
+    const DT_LNK: u8 = 10;
     const DIRENT64_HEADER: usize = 19;
 
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
@@ -944,6 +996,7 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
         slot[18] = match entry.kind {
             fs::vfs::NodeKind::Directory => DT_DIR,
             fs::vfs::NodeKind::File => DT_REG,
+            fs::vfs::NodeKind::Symlink => DT_LNK,
             fs::vfs::NodeKind::Device(_) => DT_CHR,
         };
         let name = entry.name.as_bytes();
@@ -958,6 +1011,12 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
+}
+
+fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let meta = fs::lstat(&path).map_err(|_| ENOENT)?;
     write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
 }
 

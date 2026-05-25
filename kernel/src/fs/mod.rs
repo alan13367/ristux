@@ -60,8 +60,28 @@ pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
     vfs::mkdir_as(path, creds)
 }
 
+pub fn rmdir_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::rmdir_as(path, creds)
+}
+
 pub fn unlink_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
     vfs::unlink_as(path, creds)
+}
+
+pub fn rename_as(old_path: &str, new_path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::rename_as(old_path, new_path, creds)
+}
+
+pub fn symlink_as(target: &str, link_path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::symlink_as(target, link_path, creds)
+}
+
+pub fn readlink(path: &str) -> Result<alloc::vec::Vec<u8>, vfs::VfsError> {
+    vfs::readlink(path)
+}
+
+pub fn chown_as(path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::chown_as(path, uid, gid, creds)
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, vfs::VfsError> {
@@ -106,6 +126,10 @@ pub fn mount_hybrid_ext2() {
 
 pub fn stat(path: &str) -> Result<Stat, vfs::VfsError> {
     vfs::stat(path)
+}
+
+pub fn lstat(path: &str) -> Result<Stat, vfs::VfsError> {
+    vfs::lstat(path)
 }
 
 pub fn fstat(fd: usize) -> Result<Stat, vfs::VfsError> {

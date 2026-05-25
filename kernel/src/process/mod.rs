@@ -898,8 +898,27 @@ pub fn user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
     with_current(|p| fs::mkdir_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
+pub fn user_rmdir(path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::rmdir_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
     with_current(|p| fs::unlink_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_rename(old_path: &str, new_path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::rename_as(old_path, new_path, p.credentials))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_symlink(target: &str, link_path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::symlink_as(target, link_path, p.credentials))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_chown(path: &str, uid: u32, gid: u32) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::chown_as(path, uid, gid, p.credentials))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {

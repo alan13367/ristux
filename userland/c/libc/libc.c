@@ -21,6 +21,7 @@
 #define SYS_CLOSE 3
 #define SYS_STAT 4
 #define SYS_FSTAT 5
+#define SYS_LSTAT 6
 #define SYS_LSEEK 8
 #define SYS_BRK 12
 #define SYS_RT_SIGACTION 13
@@ -39,9 +40,14 @@
 #define SYS_GETDENTS 78
 #define SYS_GETCWD 79
 #define SYS_CHDIR 80
+#define SYS_RENAME 82
 #define SYS_MKDIR 83
+#define SYS_RMDIR 84
 #define SYS_UNLINK 87
+#define SYS_SYMLINK 88
+#define SYS_READLINK 89
 #define SYS_CHMOD 90
+#define SYS_CHOWN 92
 #define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
 #define SYS_GETPPID 110
@@ -166,6 +172,26 @@ int unlink(const char *path) {
     return (int)syscall_ret(syscall1(SYS_UNLINK, (long)path));
 }
 
+int rmdir(const char *path) {
+    return (int)syscall_ret(syscall1(SYS_RMDIR, (long)path));
+}
+
+int rename(const char *oldpath, const char *newpath) {
+    return (int)syscall_ret(syscall2(SYS_RENAME, (long)oldpath, (long)newpath));
+}
+
+int symlink(const char *target, const char *linkpath) {
+    return (int)syscall_ret(syscall2(SYS_SYMLINK, (long)target, (long)linkpath));
+}
+
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall_ret(syscall3(SYS_READLINK, (long)path, (long)buf, (long)bufsiz));
+}
+
+int chown(const char *path, uid_t owner, gid_t group) {
+    return (int)syscall_ret(syscall3(SYS_CHOWN, (long)path, owner, group));
+}
+
 char *getcwd(char *buf, size_t size) {
     long ret = syscall_ret(syscall2(SYS_GETCWD, (long)buf, (long)size));
     return ret < 0 ? NULL : (char *)ret;
@@ -177,6 +203,10 @@ int stat(const char *path, struct stat *buf) {
 
 int fstat(int fd, struct stat *buf) {
     return (int)syscall_ret(syscall2(SYS_FSTAT, fd, (long)buf));
+}
+
+int lstat(const char *path, struct stat *buf) {
+    return (int)syscall_ret(syscall2(SYS_LSTAT, (long)path, (long)buf));
 }
 
 int mkdir(const char *path, mode_t mode) {

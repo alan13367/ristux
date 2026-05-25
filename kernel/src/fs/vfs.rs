@@ -16,6 +16,7 @@ static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
 pub enum NodeKind {
     File,
     Directory,
+    Symlink,
     Device(DeviceKind),
 }
 
@@ -458,6 +459,8 @@ impl Vfs {
         creds: Credentials,
         rights: OpenRights,
     ) -> Result<usize, VfsError> {
+        let resolved = self.resolve_symlink_path(path)?;
+        let path = resolved.as_str();
         let node = if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
             index
         } else if proc_status_pid(path).is_some() {
@@ -583,6 +586,28 @@ impl Vfs {
         Ok(())
     }
 
+    fn rmdir_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        if path == "/" {
+            return Err(VfsError::PermissionDenied);
+        }
+        self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
+        if self.nodes.iter().any(|node| {
+            !node.path.is_empty() && node.path != path && parent_path(&node.path) == path
+        }) {
+            return Err(VfsError::PermissionDenied);
+        }
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        if node.kind != NodeKind::Directory {
+            return Err(VfsError::NotFile);
+        }
+        node.path.clear();
+        Ok(())
+    }
+
     fn unlink(&mut self, path: &str) -> Result<(), VfsError> {
         self.unlink_as(path, Credentials::root())
     }
@@ -594,18 +619,95 @@ impl Vfs {
             .iter_mut()
             .find(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
-        if node.kind != NodeKind::File {
+        if matches!(node.kind, NodeKind::Directory | NodeKind::Device(_)) {
             return Err(VfsError::NotFile);
         }
         node.path.clear();
         Ok(())
     }
 
-    fn chmod_as(&mut self, path: &str, mode: u16, creds: Credentials) -> Result<(), VfsError> {
+    fn rename_as(&mut self, old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+        if old_path == "/" || new_path == "/" {
+            return Err(VfsError::PermissionDenied);
+        }
+        self.ensure_parent_directory(old_path, Some((creds, Access::Write)))?;
+        self.ensure_parent_directory(new_path, Some((creds, Access::Write)))?;
+        let old_index = self
+            .nodes
+            .iter()
+            .position(|node| node.path == old_path)
+            .ok_or(VfsError::NotFound)?;
+        if let Some(new_index) = self.nodes.iter().position(|node| node.path == new_path) {
+            if new_index != old_index {
+                self.nodes[new_index].path.clear();
+            }
+        }
+        let old_prefix = format!("{}/", old_path.trim_end_matches('/'));
+        let new_prefix = format!("{}/", new_path.trim_end_matches('/'));
+        self.nodes[old_index].path = String::from(new_path);
+        for node in &mut self.nodes {
+            if node.path.starts_with(&old_prefix) {
+                node.path = format!("{}{}", new_prefix, &node.path[old_prefix.len()..]);
+            }
+        }
+        Ok(())
+    }
+
+    fn symlink_as(&mut self, target: &str, link_path: &str, creds: Credentials) -> Result<(), VfsError> {
+        if self.nodes.iter().any(|node| node.path == link_path) {
+            return Err(VfsError::AlreadyExists);
+        }
+        self.ensure_parent_directory(link_path, Some((creds, Access::Write)))?;
+        let now = crate::time::filesystem_timestamp();
+        self.nodes.push(Node {
+            path: String::from(link_path),
+            kind: NodeKind::Symlink,
+            metadata: FileMetadata::new(creds.euid, creds.egid, 0o777),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
+            data: Vec::from(target.as_bytes()),
+        });
+        Ok(())
+    }
+
+    fn readlink(&self, path: &str) -> Result<Vec<u8>, VfsError> {
+        let node = self
+            .nodes
+            .iter()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        if node.kind != NodeKind::Symlink {
+            return Err(VfsError::NotFile);
+        }
+        Ok(node.data.clone())
+    }
+
+    fn chown_as(&mut self, path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
         let node = self
             .nodes
             .iter_mut()
             .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        if !creds.is_superuser() {
+            return Err(VfsError::PermissionDenied);
+        }
+        if uid != u32::MAX {
+            node.metadata.owner = uid;
+        }
+        if gid != u32::MAX {
+            node.metadata.group = gid;
+        }
+        Ok(())
+    }
+
+    fn chmod_as(&mut self, path: &str, mode: u16, creds: Credentials) -> Result<(), VfsError> {
+        let resolved = self.resolve_symlink_path(path)?;
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.path == resolved)
             .ok_or(VfsError::NotFound)?;
         if !creds.is_superuser() && creds.euid != node.metadata.owner {
             return Err(VfsError::PermissionDenied);
@@ -720,6 +822,7 @@ impl Vfs {
                         NodeKind::Device(DeviceKind::Console) => Ok(0),
                         NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),
+                        NodeKind::Symlink => Err(VfsError::NotFile),
                         NodeKind::File => unreachable!(),
                     };
                 }
@@ -815,6 +918,7 @@ impl Vfs {
                         }
                         NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),
+                        NodeKind::Symlink => Err(VfsError::NotFile),
                         NodeKind::File => unreachable!(),
                     };
                 }
@@ -1052,6 +1156,21 @@ impl Vfs {
     }
 
     fn stat(&self, path: &str) -> Result<Stat, VfsError> {
+        self.stat_inner(path, true)
+    }
+
+    fn lstat(&self, path: &str) -> Result<Stat, VfsError> {
+        self.stat_inner(path, false)
+    }
+
+    fn stat_inner(&self, path: &str, follow_symlink: bool) -> Result<Stat, VfsError> {
+        let resolved;
+        let path = if follow_symlink {
+            resolved = self.resolve_symlink_path(path)?;
+            resolved.as_str()
+        } else {
+            path
+        };
         if let Some(pid) = proc_status_pid(path) {
             return Ok(Stat {
                 owner: 0,
@@ -1093,6 +1212,8 @@ impl Vfs {
     }
 
     fn can_access(&self, path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
+        let resolved = self.resolve_symlink_path(path)?;
+        let path = resolved.as_str();
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2() {
                 if let Ok(meta) = fs.metadata(path) {
@@ -1109,6 +1230,8 @@ impl Vfs {
     }
 
     fn read_file(&self, path: &str) -> Option<Vec<u8>> {
+        let resolved = self.resolve_symlink_path(path).ok()?;
+        let path = resolved.as_str();
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2() {
                 if let Ok(data) = fs.read_file(path) {
@@ -1122,6 +1245,25 @@ impl Vfs {
         } else {
             None
         }
+    }
+
+    fn resolve_symlink_path(&self, path: &str) -> Result<String, VfsError> {
+        let mut current = String::from(path);
+        for _ in 0..8 {
+            let Some(node) = self.nodes.iter().find(|node| node.path == current) else {
+                return Ok(current);
+            };
+            if node.kind != NodeKind::Symlink {
+                return Ok(current);
+            }
+            let target = str::from_utf8(&node.data).map_err(|_| VfsError::Utf8)?;
+            current = if target.starts_with('/') {
+                String::from(target)
+            } else {
+                join_path(&parent_path(&current), target)
+            };
+        }
+        Err(VfsError::NotFound)
     }
 
     fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
@@ -1293,6 +1435,10 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.stat(path))
 }
 
+pub fn lstat(path: &str) -> Result<Stat, VfsError> {
+    with_vfs(|vfs| vfs.lstat(path))
+}
+
 pub fn fstat(fd: usize) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.fstat(fd))
 }
@@ -1318,12 +1464,32 @@ pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.mkdir_as(path, creds))
 }
 
+pub fn rmdir_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.rmdir_as(path, creds))
+}
+
 pub fn unlink(path: &str) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.unlink(path))
 }
 
 pub fn unlink_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.unlink_as(path, creds))
+}
+
+pub fn rename_as(old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.rename_as(old_path, new_path, creds))
+}
+
+pub fn symlink_as(target: &str, link_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.symlink_as(target, link_path, creds))
+}
+
+pub fn readlink(path: &str) -> Result<Vec<u8>, VfsError> {
+    with_vfs(|vfs| vfs.readlink(path))
+}
+
+pub fn chown_as(path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.chown_as(path, uid, gid, creds))
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
