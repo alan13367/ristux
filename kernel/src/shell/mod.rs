@@ -7,6 +7,7 @@ pub fn init() {
         "help",
         "pwd",
         "echo hello from shell",
+        "/bin/echo hello from argv",
         "ls /bin",
         "cat /tmp/message.txt",
         "echo redirected > /tmp/message.txt",
@@ -103,6 +104,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "true" => run_external("/bin/true"),
         "false" => run_external("/bin/false"),
         "/bin/cat" => run_external("/bin/cat"),
+        "/bin/echo" => run_external_with_args("/bin/echo", &args),
         other => {
             let mut text = String::from(other);
             text.push_str(": not found\n");
@@ -117,10 +119,17 @@ fn output(text: &str) -> String {
 }
 
 fn run_external(path: &'static str) -> String {
+    run_external_with_args(path, &[])
+}
+
+fn run_external_with_args(path: &'static str, args: &[&str]) -> String {
     let parent = 1;
     let child = process::fork(parent).expect("shell fork failed");
     process::exec(child, path);
-    let result = userspace::run_user_program(path, child);
+    let mut argv = Vec::new();
+    argv.push(path);
+    argv.extend_from_slice(args);
+    let result = userspace::run_user_program_with_args(path, &argv, child);
     process::exit(child, result.status);
     let waited = process::wait(parent, child).unwrap_or(-1);
     crate::println!(

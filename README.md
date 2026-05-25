@@ -141,6 +141,8 @@ not print `kernel panic`.
 - Implements basic device files, pipes, redirection, and a scripted shell smoke test.
 - Supports ring-3 `open`, `read`, and `close` over the VFS, and runs
   shell-launched `/bin/cat`, `/bin/true`, and `/bin/false` as real CPL3 ELFs.
+- Passes `argc`/`argv` into CPL3 programs and exercises shell-launched
+  `/bin/echo` with user-space arguments.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

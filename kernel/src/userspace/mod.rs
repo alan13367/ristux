@@ -16,6 +16,7 @@ const USER_INIT_STACK_TOP: usize = 0x7000_2000;
 const MAX_USER_RANGES: usize = 16;
 const MAX_USER_MAPPINGS: usize = 32;
 const MAX_ACTIVE_FDS: usize = 8;
+const MAX_USER_ARGS: usize = 8;
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
 global_asm!(
@@ -23,20 +24,23 @@ global_asm!(
 .global user_enter_with_return
 .type user_enter_with_return, @function
 user_enter_with_return:
-    mov [r8], rsp
+    mov r10, [rsp + 8]
+    mov [rdi], rsp
     lea rax, [rip + .Luser_enter_return]
-    mov [r8 + 8], rax
-    mov [r8 + 16], rbx
-    mov [r8 + 24], rbp
-    mov [r8 + 32], r12
-    mov [r8 + 40], r13
-    mov [r8 + 48], r14
-    mov [r8 + 56], r15
+    mov [rdi + 8], rax
+    mov [rdi + 16], rbx
+    mov [rdi + 24], rbp
+    mov [rdi + 32], r12
+    mov [rdi + 40], r13
+    mov [rdi + 48], r14
+    mov [rdi + 56], r15
+    push r8
+    push rdx
+    pushfq
     push rcx
     push rsi
-    pushfq
-    push rdx
-    push rdi
+    mov rdi, r9
+    mov rsi, r10
     iretq
 .Luser_enter_return:
     ret
@@ -57,11 +61,13 @@ user_exit_to_kernel:
 
 unsafe extern "C" {
     fn user_enter_with_return(
+        context: *mut UserReturnContext,
         entry: u64,
         stack_top: u64,
         user_cs: u64,
         user_ss: u64,
-        context: *mut UserReturnContext,
+        argc: u64,
+        argv: u64,
     );
     fn user_exit_to_kernel(context: *const UserReturnContext) -> !;
 }
@@ -378,7 +384,12 @@ pub fn stats() -> UserspaceStats {
 pub fn enter_userland_sequence() -> ! {
     USER_RUN_STATE.lock().reset();
     for (index, path) in USER_PROGRAMS.iter().enumerate() {
-        run_user_program(path, (index + 1) as u64);
+        let pid = (index + 1) as u64;
+        if *path == "/bin/echo" {
+            run_user_program_with_args(path, &["/bin/echo", "hello", "from", "sequence"], pid);
+        } else {
+            run_user_program(path, pid);
+        }
         USER_RUN_STATE.lock().completed += 1;
     }
 
@@ -392,6 +403,14 @@ pub fn enter_userland_sequence() -> ! {
 }
 
 pub fn run_user_program(path: &'static str, pid: u64) -> UserProgramResult {
+    run_user_program_with_args(path, &[path], pid)
+}
+
+pub fn run_user_program_with_args(
+    path: &'static str,
+    args: &[&str],
+    pid: u64,
+) -> UserProgramResult {
     {
         let mut active = ACTIVE_USER.lock();
         *active = ActiveUserContext::new(pid, path);
@@ -400,6 +419,7 @@ pub fn run_user_program(path: &'static str, pid: u64) -> UserProgramResult {
     let entry = fs::with_file_data(path, |data| map_user_elf_bytes(path, data))
         .unwrap_or_else(|| panic!("{} missing from VFS", path));
     map_user_stack(USER_INIT_STACK_TOP);
+    let argv = write_user_argv(args, USER_INIT_STACK_TOP);
 
     unsafe {
         USERSPACE_STATS.processes_loaded += 1;
@@ -414,7 +434,7 @@ pub fn run_user_program(path: &'static str, pid: u64) -> UserProgramResult {
     );
 
     unsafe {
-        enter_user_mode_returning(entry as usize, USER_INIT_STACK_TOP);
+        enter_user_mode_returning(entry as usize, USER_INIT_STACK_TOP, args.len(), argv);
     }
 
     *LAST_USER_RESULT.lock()
@@ -617,6 +637,50 @@ fn map_user_segment(segment: elf::SegmentView<'_>) {
     ACTIVE_USER.lock().push_range(segment_start, segment_end);
 }
 
+fn write_user_argv(args: &[&str], stack_top: usize) -> usize {
+    if args.len() > MAX_USER_ARGS {
+        panic!("too many user arguments");
+    }
+
+    let stack_bottom = stack_top - FRAME_SIZE;
+    let mut cursor = stack_top;
+    let mut pointers = [0usize; MAX_USER_ARGS];
+
+    for (index, arg) in args.iter().enumerate().rev() {
+        let bytes = arg.as_bytes();
+        cursor = cursor
+            .checked_sub(bytes.len() + 1)
+            .expect("user argv stack underflow");
+        if cursor < stack_bottom {
+            panic!("user argv does not fit on stack");
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), cursor as *mut u8, bytes.len());
+            ptr::write((cursor + bytes.len()) as *mut u8, 0);
+        }
+        pointers[index] = cursor;
+    }
+
+    cursor = align_down(cursor, 8);
+    cursor = cursor
+        .checked_sub((args.len() + 1) * core::mem::size_of::<u64>())
+        .expect("user argv pointer stack underflow");
+    if cursor < stack_bottom {
+        panic!("user argv pointers do not fit on stack");
+    }
+
+    unsafe {
+        let argv = cursor as *mut u64;
+        for (index, pointer) in pointers[..args.len()].iter().enumerate() {
+            ptr::write(argv.add(index), *pointer as u64);
+        }
+        ptr::write(argv.add(args.len()), 0);
+    }
+
+    cursor
+}
+
 fn map_user_stack(stack_top: usize) {
     let stack_bottom = stack_top - FRAME_SIZE;
     let frame =
@@ -640,17 +704,19 @@ const fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-unsafe fn enter_user_mode_returning(entry: usize, stack_top: usize) {
+unsafe fn enter_user_mode_returning(entry: usize, stack_top: usize, argc: usize, argv: usize) {
     let user_cs = crate::arch::x86_64::gdt::user_code_selector() as u64;
     let user_ss = crate::arch::x86_64::gdt::user_data_selector() as u64;
 
     unsafe {
         user_enter_with_return(
+            ptr::addr_of_mut!(USER_RETURN_CONTEXT),
             entry as u64,
             stack_top as u64,
             user_cs,
             user_ss,
-            ptr::addr_of_mut!(USER_RETURN_CONTEXT),
+            argc as u64,
+            argv as u64,
         );
     }
 }
