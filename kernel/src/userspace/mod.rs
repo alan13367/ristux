@@ -8,6 +8,7 @@ use crate::{
         frame_allocator::{self, FRAME_SIZE},
         paging::{self, PageFlags},
     },
+    security::Credentials,
     syscall,
     sync::spinlock::SpinLock,
 };
@@ -157,6 +158,7 @@ impl ActiveFd {
 struct ActiveUserContext {
     pid: u64,
     name: &'static str,
+    credentials: Credentials,
     range_count: usize,
     ranges: [UserRange; MAX_USER_RANGES],
     mapping_count: usize,
@@ -211,6 +213,7 @@ impl ActiveUserContext {
         Self {
             pid: 0,
             name: "",
+            credentials: Credentials::root(),
             range_count: 0,
             ranges: [UserRange::empty(); MAX_USER_RANGES],
             mapping_count: 0,
@@ -223,10 +226,11 @@ impl ActiveUserContext {
         }
     }
 
-    const fn new(pid: u64, name: &'static str) -> Self {
+    const fn new(pid: u64, name: &'static str, credentials: Credentials) -> Self {
         Self {
             pid,
             name,
+            credentials,
             range_count: 0,
             ranges: [UserRange::empty(); MAX_USER_RANGES],
             mapping_count: 0,
@@ -471,9 +475,27 @@ pub fn run_user_program_with_fds(
     stdin_vfs_fd: Option<usize>,
     stdout_vfs_fd: Option<usize>,
 ) -> UserProgramResult {
+    run_user_program_with_fds_as(
+        path,
+        args,
+        pid,
+        stdin_vfs_fd,
+        stdout_vfs_fd,
+        Credentials::root(),
+    )
+}
+
+pub fn run_user_program_with_fds_as(
+    path: &'static str,
+    args: &[&str],
+    pid: u64,
+    stdin_vfs_fd: Option<usize>,
+    stdout_vfs_fd: Option<usize>,
+    credentials: Credentials,
+) -> UserProgramResult {
     {
         let mut active = ACTIVE_USER.lock();
-        *active = ActiveUserContext::new(pid, path);
+        *active = ActiveUserContext::new(pid, path, credentials);
     }
 
     {
@@ -535,23 +557,27 @@ pub fn active_user_write_buffer(addr: usize, len: usize) -> Option<&'static mut 
 }
 
 pub fn active_user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
-    let vfs_fd = fs::open(path)?;
+    let vfs_fd = fs::open_read_as(path, active_user_credentials())?;
     let mut active = ACTIVE_USER.lock();
     Ok(active.push_fd(vfs_fd))
 }
 
 pub fn active_user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
-    let vfs_fd = fs::create_file(path)?;
+    let vfs_fd = fs::create_file_as(path, active_user_credentials())?;
     let mut active = ACTIVE_USER.lock();
     Ok(active.push_fd(vfs_fd))
 }
 
 pub fn active_user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
-    fs::mkdir(path)
+    fs::mkdir_as(path, active_user_credentials())
 }
 
 pub fn active_user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
-    fs::unlink(path)
+    fs::unlink_as(path, active_user_credentials())
+}
+
+pub fn active_user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
+    fs::chmod_as(path, mode, active_user_credentials())
 }
 
 pub fn active_user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
@@ -598,6 +624,10 @@ pub fn active_user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
 
 pub fn active_user_pid() -> u64 {
     ACTIVE_USER.lock().pid
+}
+
+fn active_user_credentials() -> Credentials {
+    ACTIVE_USER.lock().credentials
 }
 
 pub fn record_active_syscall() {

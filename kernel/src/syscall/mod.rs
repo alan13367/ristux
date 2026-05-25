@@ -21,7 +21,9 @@ pub const SYS_DUP2: u64 = 13;
 pub const SYS_CREATE: u64 = 14;
 pub const SYS_MKDIR: u64 = 15;
 pub const SYS_UNLINK: u64 = 16;
+pub const SYS_CHMOD: u64 = 17;
 
+const EACCES: i64 = -13;
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
 const EEXIST: i64 = -17;
@@ -187,6 +189,12 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_CHMOD => {
+            frame.rax = match sys_chmod_active(frame.rdi as usize, frame.rsi as u16) {
+                Ok(status) => status,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -311,6 +319,14 @@ fn sys_unlink_active(path_ptr: usize) -> SyscallResult {
         .map_err(map_vfs_error)
 }
 
+fn sys_chmod_active(path_ptr: usize, mode: u16) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    userspace::active_user_chmod(path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
     let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
@@ -393,6 +409,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
         VfsError::BadFd => SyscallError(EBADF),
         VfsError::NotFile | VfsError::Utf8 => SyscallError(EFAULT),
         VfsError::AlreadyExists => SyscallError(EEXIST),
+        VfsError::PermissionDenied => SyscallError(EACCES),
     }
 }
 

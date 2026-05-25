@@ -29,6 +29,8 @@ USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
 USER_PWD_ELF := build/userland/pwd.elf
+USER_CHMOD_OBJ := build/userland/chmod.o
+USER_CHMOD_ELF := build/userland/chmod.elf
 USER_TOUCH_OBJ := build/userland/touch.o
 USER_TOUCH_ELF := build/userland/touch.elf
 USER_MKDIR_OBJ := build/userland/mkdir.o
@@ -100,6 +102,13 @@ $(USER_PWD_OBJ): userland/pwd.S
 $(USER_PWD_ELF): $(USER_PWD_OBJ) userland/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_PWD_OBJ)
 
+$(USER_CHMOD_OBJ): userland/chmod.S
+	mkdir -p build/userland
+	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+
+$(USER_CHMOD_ELF): $(USER_CHMOD_OBJ) userland/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_CHMOD_OBJ)
+
 $(USER_TOUCH_OBJ): userland/touch.S
 	mkdir -p build/userland
 	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
@@ -132,7 +141,7 @@ $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

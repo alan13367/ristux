@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::{fs, process, userspace};
+use crate::{fs, process, security::Credentials, userspace};
 
 pub fn init() {
     run_script(&[
@@ -15,6 +15,10 @@ pub fn init() {
         "/bin/rm /tmp/work/empty.txt",
         "/bin/cat /tmp/work/empty.txt",
         "/bin/ls /tmp/work",
+        "/bin/chmod 000 /tmp/message.txt",
+        "user /bin/cat /tmp/message.txt",
+        "/bin/chmod 644 /tmp/message.txt",
+        "/bin/cat /tmp/message.txt",
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
@@ -97,6 +101,7 @@ fn parse_external_command(command: &str) -> Option<(&'static str, Vec<&str>)> {
 fn external_path(program: &str) -> Option<&'static str> {
     match program {
         "cat" | "/bin/cat" => Some("/bin/cat"),
+        "chmod" | "/bin/chmod" => Some("/bin/chmod"),
         "/bin/echo" => Some("/bin/echo"),
         "ls" | "/bin/ls" => Some("/bin/ls"),
         "mkdir" | "/bin/mkdir" => Some("/bin/mkdir"),
@@ -165,7 +170,9 @@ fn run_command(command: &str, cwd: &mut String) -> String {
     let args: Vec<&str> = parts.collect();
 
     match program {
-        "help" => output("builtins: help clear echo pwd cd exit ls cat mkdir rm touch true false\n"),
+        "help" => {
+            output("builtins: help clear echo pwd cd exit ls cat chmod mkdir rm touch user true false\n")
+        }
         "clear" => output("\x0c"),
         "echo" => {
             let mut text = args.join(" ");
@@ -179,9 +186,11 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         }
         "exit" => output("exit\n"),
         "ls" => run_external_with_args("/bin/ls", &args),
+        "chmod" => run_external_with_args("/bin/chmod", &args),
         "mkdir" => run_external_with_args("/bin/mkdir", &args),
         "rm" => run_external_with_args("/bin/rm", &args),
         "touch" => run_external_with_args("/bin/touch", &args),
+        "user" => run_as_user(&args),
         "cat" => {
             let Some(path) = args.first() else {
                 return String::new();
@@ -197,6 +206,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "true" => run_external("/bin/true"),
         "false" => run_external("/bin/false"),
         "/bin/cat" => run_external_with_args("/bin/cat", &args),
+        "/bin/chmod" => run_external_with_args("/bin/chmod", &args),
         "/bin/echo" => run_external_with_args("/bin/echo", &args),
         "/bin/ls" => run_external_with_args("/bin/ls", &args),
         "/bin/mkdir" => run_external_with_args("/bin/mkdir", &args),
@@ -211,6 +221,20 @@ fn run_command(command: &str, cwd: &mut String) -> String {
     }
 }
 
+fn run_as_user(args: &[&str]) -> String {
+    let Some((program, rest)) = args.split_first() else {
+        return output("user: missing command\n");
+    };
+    let Some(path) = external_path(program) else {
+        let mut text = String::from(*program);
+        text.push_str(": not found\n");
+        return output(&text);
+    };
+
+    crate::println!("Running {} as uid 1000 gid 1000.", path);
+    run_external_with_credentials(path, rest, Credentials::user(1000, 1000))
+}
+
 fn output(text: &str) -> String {
     crate::print!("{}", text);
     String::from(text)
@@ -222,6 +246,14 @@ fn run_external(path: &'static str) -> String {
 
 fn run_external_with_args(path: &'static str, args: &[&str]) -> String {
     run_external_with_fds(path, args, None, None)
+}
+
+fn run_external_with_credentials(
+    path: &'static str,
+    args: &[&str],
+    credentials: Credentials,
+) -> String {
+    run_external_with_fds_as(path, args, None, None, credentials)
 }
 
 fn run_external_with_redirect(path: &'static str, args: &[&str], stdout_path: &str) -> String {
@@ -240,8 +272,31 @@ fn run_external_with_fds(
     stdin_vfs_fd: Option<usize>,
     stdout_vfs_fd: Option<usize>,
 ) -> String {
+    run_external_with_fds_as(
+        path,
+        args,
+        stdin_vfs_fd,
+        stdout_vfs_fd,
+        Credentials::root(),
+    )
+}
+
+fn run_external_with_fds_as(
+    path: &'static str,
+    args: &[&str],
+    stdin_vfs_fd: Option<usize>,
+    stdout_vfs_fd: Option<usize>,
+    credentials: Credentials,
+) -> String {
     run_external_with_process(path, args, |argv, child| {
-        userspace::run_user_program_with_fds(path, argv, child, stdin_vfs_fd, stdout_vfs_fd)
+        userspace::run_user_program_with_fds_as(
+            path,
+            argv,
+            child,
+            stdin_vfs_fd,
+            stdout_vfs_fd,
+            credentials,
+        )
     })
 }
 

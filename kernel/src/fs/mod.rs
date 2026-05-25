@@ -1,6 +1,6 @@
 pub mod vfs;
 
-use crate::initrd::Initrd;
+use crate::{initrd::Initrd, security::Credentials};
 
 pub fn init(initrd: &Initrd) {
     vfs::init(initrd);
@@ -11,12 +11,16 @@ pub fn open(path: &str) -> Result<usize, vfs::VfsError> {
     vfs::open(path)
 }
 
+pub fn open_read_as(path: &str, creds: Credentials) -> Result<usize, vfs::VfsError> {
+    vfs::open_read_as(path, creds)
+}
+
 pub fn create_pipe(capacity: usize) -> Result<(usize, usize), vfs::VfsError> {
     vfs::create_pipe(capacity)
 }
 
-pub fn create_file(path: &str) -> Result<usize, vfs::VfsError> {
-    vfs::create_file(path)
+pub fn create_file_as(path: &str, creds: Credentials) -> Result<usize, vfs::VfsError> {
+    vfs::create_file_as(path, creds)
 }
 
 pub fn duplicate_fd(fd: usize) -> Result<usize, vfs::VfsError> {
@@ -35,12 +39,16 @@ pub fn close(fd: usize) -> Result<(), vfs::VfsError> {
     vfs::close(fd)
 }
 
-pub fn mkdir(path: &str) -> Result<(), vfs::VfsError> {
-    vfs::mkdir(path)
+pub fn chmod_as(path: &str, mode: u16, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::chmod_as(path, mode, creds)
 }
 
-pub fn unlink(path: &str) -> Result<(), vfs::VfsError> {
-    vfs::unlink(path)
+pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::mkdir_as(path, creds)
+}
+
+pub fn unlink_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::unlink_as(path, creds)
 }
 
 pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {

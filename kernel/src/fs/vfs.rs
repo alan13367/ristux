@@ -39,6 +39,7 @@ pub enum VfsError {
     BadFd,
     Utf8,
     AlreadyExists,
+    PermissionDenied,
 }
 
 impl fmt::Display for VfsError {
@@ -49,6 +50,7 @@ impl fmt::Display for VfsError {
             Self::BadFd => f.write_str("bad file descriptor"),
             Self::Utf8 => f.write_str("invalid utf-8"),
             Self::AlreadyExists => f.write_str("already exists"),
+            Self::PermissionDenied => f.write_str("permission denied"),
         }
     }
 }
@@ -63,9 +65,35 @@ struct Node {
 
 #[derive(Clone, Copy)]
 enum OpenHandle {
-    Node { node: usize, offset: usize },
+    Node {
+        node: usize,
+        offset: usize,
+        rights: OpenRights,
+    },
     PipeRead { pipe: usize },
     PipeWrite { pipe: usize },
+}
+
+#[derive(Clone, Copy)]
+struct OpenRights {
+    read: bool,
+    write: bool,
+}
+
+impl OpenRights {
+    const fn read_only() -> Self {
+        Self {
+            read: true,
+            write: false,
+        }
+    }
+
+    const fn read_write() -> Self {
+        Self {
+            read: true,
+            write: true,
+        }
+    }
 }
 
 struct PipeState {
@@ -128,6 +156,7 @@ impl Vfs {
         vfs.add_directory("/pkg");
         vfs.add_directory("/proc");
         vfs.add_directory("/tmp");
+        vfs.chmod("/tmp", 0o777).expect("failed to make /tmp writable");
         vfs.add_device("/dev/null", DeviceKind::Null);
         vfs.add_device("/dev/zero", DeviceKind::Zero);
         vfs.add_device("/dev/console", DeviceKind::Console);
@@ -182,14 +211,45 @@ impl Vfs {
     }
 
     fn create_file(&mut self, path: &str) -> Result<usize, VfsError> {
-        self.ensure_parent_directory(path)?;
-        if let Some(node) = self.nodes.iter().find(|node| node.path == path) {
+        self.create_file_as(path, Credentials::root())
+    }
+
+    fn create_file_as(&mut self, path: &str, creds: Credentials) -> Result<usize, VfsError> {
+        self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
+        if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
             if node.kind != NodeKind::File {
                 return Err(VfsError::NotFile);
             }
+            if !node.metadata.can_access(creds, Access::Write) {
+                return Err(VfsError::PermissionDenied);
+            }
+            node.data.clear();
+            node.timestamps.modified_at = crate::time::filesystem_timestamp();
+            let node = self.nodes.iter().position(|node| node.path == path).unwrap();
+            return self.push_open_handle(OpenHandle::Node {
+                node,
+                offset: 0,
+                rights: OpenRights::read_write(),
+            });
         }
-        self.add_file(path, b"");
-        self.open(path)
+
+        let now = crate::time::filesystem_timestamp();
+        let node = self.nodes.len();
+        self.nodes.push(Node {
+            path: String::from(path),
+            kind: NodeKind::File,
+            metadata: FileMetadata::new(creds.uid, creds.gid, 0o644),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
+            data: Vec::new(),
+        });
+        self.push_open_handle(OpenHandle::Node {
+            node,
+            offset: 0,
+            rights: OpenRights::read_write(),
+        })
     }
 
     fn add_device(&mut self, path: &str, kind: DeviceKind) {
@@ -207,6 +267,15 @@ impl Vfs {
     }
 
     fn open(&mut self, path: &str) -> Result<usize, VfsError> {
+        self.open_as(path, Credentials::root(), OpenRights::read_write())
+    }
+
+    fn open_as(
+        &mut self,
+        path: &str,
+        creds: Credentials,
+        rights: OpenRights,
+    ) -> Result<usize, VfsError> {
         let node = self
             .nodes
             .iter()
@@ -215,8 +284,28 @@ impl Vfs {
         if self.nodes[node].kind == NodeKind::Directory {
             return Err(VfsError::NotFile);
         }
+        if rights.read && !self.nodes[node].metadata.can_access(creds, Access::Read) {
+            crate::println!(
+                "VFS permission denied: uid {} cannot read {}.",
+                creds.uid,
+                path
+            );
+            return Err(VfsError::PermissionDenied);
+        }
+        if rights.write && !self.nodes[node].metadata.can_access(creds, Access::Write) {
+            crate::println!(
+                "VFS permission denied: uid {} cannot write {}.",
+                creds.uid,
+                path
+            );
+            return Err(VfsError::PermissionDenied);
+        }
 
-        self.push_open_handle(OpenHandle::Node { node, offset: 0 })
+        self.push_open_handle(OpenHandle::Node {
+            node,
+            offset: 0,
+            rights,
+        })
     }
 
     fn push_open_handle(&mut self, handle: OpenHandle) -> Result<usize, VfsError> {
@@ -249,15 +338,34 @@ impl Vfs {
     }
 
     fn mkdir(&mut self, path: &str) -> Result<(), VfsError> {
+        self.mkdir_as(path, Credentials::root())
+    }
+
+    fn mkdir_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
         if self.nodes.iter().any(|node| node.path == path) {
             return Err(VfsError::AlreadyExists);
         }
-        self.ensure_parent_directory(path)?;
-        self.add_directory(path);
+        self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
+        let now = crate::time::filesystem_timestamp();
+        self.nodes.push(Node {
+            path: String::from(path),
+            kind: NodeKind::Directory,
+            metadata: FileMetadata::new(creds.uid, creds.gid, 0o755),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
+            data: Vec::new(),
+        });
         Ok(())
     }
 
     fn unlink(&mut self, path: &str) -> Result<(), VfsError> {
+        self.unlink_as(path, Credentials::root())
+    }
+
+    fn unlink_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         let node = self
             .nodes
             .iter_mut()
@@ -270,7 +378,24 @@ impl Vfs {
         Ok(())
     }
 
-    fn ensure_parent_directory(&self, path: &str) -> Result<(), VfsError> {
+    fn chmod_as(&mut self, path: &str, mode: u16, creds: Credentials) -> Result<(), VfsError> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        if !creds.is_superuser() && creds.uid != node.metadata.owner {
+            return Err(VfsError::PermissionDenied);
+        }
+        node.metadata.mode = crate::security::FileMode::new(mode);
+        Ok(())
+    }
+
+    fn ensure_parent_directory(
+        &self,
+        path: &str,
+        required: Option<(Credentials, Access)>,
+    ) -> Result<(), VfsError> {
         if !path.starts_with('/') || path == "/" {
             return Err(VfsError::NotFound);
         }
@@ -285,6 +410,11 @@ impl Vfs {
         if parent.kind != NodeKind::Directory {
             return Err(VfsError::NotFile);
         }
+        if let Some((creds, access)) = required {
+            if !parent.metadata.can_access(creds, access) {
+                return Err(VfsError::PermissionDenied);
+            }
+        }
         Ok(())
     }
 
@@ -294,7 +424,14 @@ impl Vfs {
         };
 
         match handle {
-            OpenHandle::Node { node, offset } => {
+            OpenHandle::Node {
+                node,
+                offset,
+                rights,
+            } => {
+                if !rights.read {
+                    return Err(VfsError::BadFd);
+                }
                 let node = &self.nodes[*node];
                 if node.kind != NodeKind::File {
                     return match node.kind {
@@ -341,7 +478,14 @@ impl Vfs {
         };
 
         match handle {
-            OpenHandle::Node { node, offset } => {
+            OpenHandle::Node {
+                node,
+                offset,
+                rights,
+            } => {
+                if !rights.write {
+                    return Err(VfsError::BadFd);
+                }
                 let node = &mut self.nodes[*node];
                 if node.kind != NodeKind::File {
                     return match node.kind {
@@ -389,13 +533,7 @@ impl Vfs {
     }
 
     fn chmod(&mut self, path: &str, mode: u16) -> Result<(), VfsError> {
-        let node = self
-            .nodes
-            .iter_mut()
-            .find(|node| node.path == path)
-            .ok_or(VfsError::NotFound)?;
-        node.metadata.mode = crate::security::FileMode::new(mode);
-        Ok(())
+        self.chmod_as(path, mode, Credentials::root())
     }
 
     fn can_access(&self, path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
@@ -452,12 +590,20 @@ pub fn open(path: &str) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.open(path))
 }
 
+pub fn open_read_as(path: &str, creds: Credentials) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.open_as(path, creds, OpenRights::read_only()))
+}
+
 pub fn create_pipe(capacity: usize) -> Result<(usize, usize), VfsError> {
     with_vfs(|vfs| vfs.create_pipe(capacity))
 }
 
 pub fn create_file(path: &str) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.create_file(path))
+}
+
+pub fn create_file_as(path: &str, creds: Credentials) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.create_file_as(path, creds))
 }
 
 pub fn duplicate_fd(fd: usize) -> Result<usize, VfsError> {
@@ -480,12 +626,24 @@ pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.chmod(path, mode))
 }
 
+pub fn chmod_as(path: &str, mode: u16, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.chmod_as(path, mode, creds))
+}
+
 pub fn mkdir(path: &str) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.mkdir(path))
 }
 
+pub fn mkdir_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.mkdir_as(path, creds))
+}
+
 pub fn unlink(path: &str) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.unlink(path))
+}
+
+pub fn unlink_as(path: &str, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.unlink_as(path, creds))
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
