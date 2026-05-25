@@ -137,9 +137,11 @@ fn run() -> KernelResult<()> {
         linker.relocations_applied
     );
     crate::println!(
-        "SMP stats: {} CPU(s), {} started, {} IPI(s), {} dispatch(es)",
+        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, {} IPI(s), {} dispatch(es)",
         smp.cpu_count,
+        smp.firmware_cpu_count,
         smp.started_cpus,
+        smp.local_apic_addr,
         smp.ipis_sent,
         smp.scheduled_tasks
     );

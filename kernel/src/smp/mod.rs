@@ -1,4 +1,5 @@
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
+use core::ptr;
 
 use crate::sync::spinlock::SpinLock;
 
@@ -37,6 +38,9 @@ struct PerCpu {
 
 struct SmpSystem {
     cpus: Vec<PerCpu>,
+    discovery_source: &'static str,
+    firmware_cpu_count: usize,
+    local_apic_addr: u32,
     ipis_sent: usize,
     scheduled_tasks: usize,
     shared_lock_audit_passed: bool,
@@ -46,6 +50,9 @@ struct SmpSystem {
 pub struct SmpStats {
     pub cpu_count: usize,
     pub started_cpus: usize,
+    pub firmware_cpu_count: usize,
+    pub local_apic_addr: u32,
+    pub firmware_detected: bool,
     pub ipis_sent: usize,
     pub scheduled_tasks: usize,
     pub shared_lock_audit_passed: bool,
@@ -53,21 +60,32 @@ pub struct SmpStats {
 
 impl SmpSystem {
     fn discover() -> Self {
-        let mut cpus = Vec::new();
-        cpus.push(PerCpu {
-            id: CpuId(0),
-            apic_id: 0,
-            state: CpuState::Bootstrap,
-            current_task: None,
-            run_count: 0,
-            ipi_inbox: Vec::new(),
+        let mut discovery = discover_mp_table().unwrap_or_else(|| CpuDiscovery {
+            source: "fallback topology",
+            firmware_cpu_count: 0,
+            local_apic_addr: 0xfee0_0000,
+            apic_ids: vec![0, 1, 2, 3],
         });
-
-        for apic_id in 1..4 {
+        let firmware_cpu_count = discovery.firmware_cpu_count;
+        if discovery.apic_ids.len() < 4 {
+            let mut next_apic = 0u8;
+            while discovery.apic_ids.len() < 4 {
+                if !discovery.apic_ids.contains(&next_apic) {
+                    discovery.apic_ids.push(next_apic);
+                }
+                next_apic = next_apic.wrapping_add(1);
+            }
+        }
+        let mut cpus = Vec::new();
+        for (index, apic_id) in discovery.apic_ids.iter().copied().enumerate() {
             cpus.push(PerCpu {
-                id: CpuId(apic_id as usize),
+                id: CpuId(index),
                 apic_id,
-                state: CpuState::Started,
+                state: if index == 0 {
+                    CpuState::Bootstrap
+                } else {
+                    CpuState::Started
+                },
                 current_task: None,
                 run_count: 0,
                 ipi_inbox: Vec::new(),
@@ -76,6 +94,9 @@ impl SmpSystem {
 
         Self {
             cpus,
+            discovery_source: discovery.source,
+            firmware_cpu_count,
+            local_apic_addr: discovery.local_apic_addr,
             ipis_sent: 0,
             scheduled_tasks: 0,
             shared_lock_audit_passed: false,
@@ -131,6 +152,9 @@ impl SmpSystem {
                 .iter()
                 .filter(|cpu| matches!(cpu.state, CpuState::Bootstrap | CpuState::Started))
                 .count(),
+            firmware_cpu_count: self.firmware_cpu_count,
+            local_apic_addr: self.local_apic_addr,
+            firmware_detected: self.firmware_cpu_count > 0,
             ipis_sent: self.ipis_sent,
             scheduled_tasks: self.scheduled_tasks,
             shared_lock_audit_passed: self.shared_lock_audit_passed,
@@ -141,14 +165,17 @@ impl SmpSystem {
 pub fn init() {
     let mut system = SmpSystem::discover();
     crate::println!(
-        "SMP CPU discovery initialized: {} CPU(s), boot APIC {}.",
+        "SMP CPU discovery initialized from {}: {} firmware CPU(s), {} scheduler CPU(s), boot APIC {}, LAPIC {:#x}.",
+        system.discovery_source,
+        system.firmware_cpu_count,
         system.cpus.len(),
-        system.cpus[0].apic_id
+        system.cpus[0].apic_id,
+        system.local_apic_addr
     );
 
     for cpu in system.cpus.iter().skip(1) {
         crate::println!(
-            "Application processor {} started with local APIC {}.",
+            "Application processor {} prepared with local APIC {}.",
             cpu.id.0,
             cpu.apic_id
         );
@@ -166,6 +193,9 @@ pub fn stats() -> SmpStats {
         .unwrap_or(SmpStats {
             cpu_count: 0,
             started_cpus: 0,
+            firmware_cpu_count: 0,
+            local_apic_addr: 0,
+            firmware_detected: false,
             ipis_sent: 0,
             scheduled_tasks: 0,
             shared_lock_audit_passed: false,
@@ -220,4 +250,123 @@ fn self_test(system: &mut SmpSystem) {
             cpu.run_count
         );
     }
+}
+
+struct CpuDiscovery {
+    source: &'static str,
+    firmware_cpu_count: usize,
+    local_apic_addr: u32,
+    apic_ids: Vec<u8>,
+}
+
+fn discover_mp_table() -> Option<CpuDiscovery> {
+    let floating = find_mp_floating_pointer()?;
+    let config_addr = read_u32(floating + 4) as usize;
+    if read_bytes(config_addr, 4) != *b"PCMP" {
+        return None;
+    }
+
+    let table_len = read_u16(config_addr + 4) as usize;
+    if table_len < 44 || !checksum_ok(config_addr, table_len) {
+        return None;
+    }
+
+    let entry_count = read_u16(config_addr + 34) as usize;
+    let local_apic_addr = read_u32(config_addr + 36);
+    let mut entry = config_addr + 44;
+    let end = config_addr + table_len;
+    let mut apic_ids = Vec::new();
+    let mut boot_apic = None;
+
+    for _ in 0..entry_count {
+        if entry >= end {
+            break;
+        }
+
+        let typ = read_u8(entry);
+        match typ {
+            0 => {
+                if entry + 20 > end {
+                    return None;
+                }
+                let apic_id = read_u8(entry + 1);
+                let flags = read_u8(entry + 3);
+                if flags & 0x01 != 0 {
+                    if flags & 0x02 != 0 {
+                        boot_apic = Some(apic_id);
+                    }
+                    apic_ids.push(apic_id);
+                }
+                entry += 20;
+            }
+            1 => entry += 8,
+            2 => entry += 8,
+            3 | 4 => entry += 8,
+            _ => return None,
+        }
+    }
+
+    if apic_ids.is_empty() {
+        return None;
+    }
+    if let Some(boot_apic) = boot_apic {
+        if let Some(index) = apic_ids.iter().position(|id| *id == boot_apic) {
+            apic_ids.swap(0, index);
+        }
+    }
+
+    Some(CpuDiscovery {
+        source: "Intel MP table",
+        firmware_cpu_count: apic_ids.len(),
+        local_apic_addr,
+        apic_ids,
+    })
+}
+
+fn find_mp_floating_pointer() -> Option<usize> {
+    let mut addr = 0x000f_0000usize;
+    while addr < 0x0010_0000 {
+        if read_bytes(addr, 4) == *b"_MP_" {
+            let len = read_u8(addr + 8) as usize * 16;
+            if len >= 16 && checksum_ok(addr, len) {
+                return Some(addr);
+            }
+        }
+        addr += 16;
+    }
+    None
+}
+
+fn checksum_ok(addr: usize, len: usize) -> bool {
+    let mut sum = 0u8;
+    for offset in 0..len {
+        sum = sum.wrapping_add(read_u8(addr + offset));
+    }
+    sum == 0
+}
+
+fn read_bytes<const N: usize>(addr: usize, len: usize) -> [u8; N] {
+    let mut bytes = [0u8; N];
+    let count = len.min(N);
+    for (offset, byte) in bytes.iter_mut().take(count).enumerate() {
+        *byte = read_u8(addr + offset);
+    }
+    bytes
+}
+
+fn read_u8(addr: usize) -> u8 {
+    unsafe { ptr::read_volatile(addr as *const u8) }
+}
+
+fn read_u16(addr: usize) -> u16 {
+    u16::from_le_bytes([read_u8(addr), read_u8(addr + 1)])
+}
+
+fn read_u32(addr: usize) -> u32 {
+    u32::from_le_bytes([
+        read_u8(addr),
+        read_u8(addr + 1),
+        read_u8(addr + 2),
+        read_u8(addr + 3),
+    ])
 }
