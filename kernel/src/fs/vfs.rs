@@ -41,6 +41,7 @@ pub enum VfsError {
     Utf8,
     AlreadyExists,
     PermissionDenied,
+    WouldBlock,
 }
 
 impl fmt::Display for VfsError {
@@ -52,6 +53,7 @@ impl fmt::Display for VfsError {
             Self::Utf8 => f.write_str("invalid utf-8"),
             Self::AlreadyExists => f.write_str("already exists"),
             Self::PermissionDenied => f.write_str("permission denied"),
+            Self::WouldBlock => f.write_str("would block"),
         }
     }
 }
@@ -278,11 +280,23 @@ impl Vfs {
         creds: Credentials,
         rights: OpenRights,
     ) -> Result<usize, VfsError> {
-        let node = self
-            .nodes
-            .iter()
-            .position(|node| node.path == path)
-            .ok_or(VfsError::NotFound)?;
+        let node = if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
+            index
+        } else if proc_status_pid(path).is_some() {
+            self.nodes.push(Node {
+                path: String::from(path),
+                kind: NodeKind::File,
+                metadata: FileMetadata::new(0o444, 0, 0),
+                timestamps: FileTimestamps {
+                    created_at: crate::time::filesystem_timestamp(),
+                    modified_at: crate::time::filesystem_timestamp(),
+                },
+                data: Vec::new(),
+            });
+            self.nodes.len() - 1
+        } else {
+            return Err(VfsError::NotFound);
+        };
         if self.nodes[node].kind == NodeKind::Directory {
             return Err(VfsError::NotFile);
         }
@@ -434,6 +448,12 @@ impl Vfs {
                 if !rights.read {
                     return Err(VfsError::BadFd);
                 }
+                let path = self.nodes[*node].path.clone();
+                if let Some(pid) = proc_status_pid(&path) {
+                    let count = read_proc_status(pid, *offset, output)?;
+                    *offset += count;
+                    return Ok(count);
+                }
                 let node = &self.nodes[*node];
                 if node.kind != NodeKind::File {
                     return match node.kind {
@@ -450,6 +470,9 @@ impl Vfs {
                                 };
                                 *byte = scancode;
                                 count += 1;
+                            }
+                            if count == 0 && !output.is_empty() {
+                                return Err(VfsError::WouldBlock);
                             }
                             Ok(count)
                         }
@@ -540,6 +563,56 @@ impl Vfs {
         Ok(())
     }
 
+    fn lseek(&mut self, fd: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
+        let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
+            return Err(VfsError::BadFd);
+        };
+        let OpenHandle::Node {
+            node,
+            offset: cursor,
+            ..
+        } = handle
+        else {
+            return Err(VfsError::BadFd);
+        };
+        let size = if let Some(pid) = proc_status_pid(&self.nodes[*node].path) {
+            format_proc_status(pid).len()
+        } else {
+            self.nodes[*node].data.len()
+        };
+        let new_offset = match whence {
+            0 => offset,
+            1 => *cursor as isize + offset,
+            2 => size as isize + offset,
+            _ => return Err(VfsError::BadFd),
+        };
+        if new_offset < 0 {
+            return Err(VfsError::BadFd);
+        }
+        *cursor = new_offset as usize;
+        Ok(*cursor)
+    }
+
+    fn stat(&self, path: &str) -> Result<Stat, VfsError> {
+        if let Some(pid) = proc_status_pid(path) {
+            return Ok(Stat {
+                mode: 0o444,
+                size: format_proc_status(pid).len() as u64,
+                mtime: crate::time::filesystem_timestamp(),
+            });
+        }
+        let node = self
+            .nodes
+            .iter()
+            .find(|node| node.path == path)
+            .ok_or(VfsError::NotFound)?;
+        Ok(Stat {
+            mode: node.metadata.mode.0,
+            size: node.data.len() as u64,
+            mtime: node.timestamps.modified_at,
+        })
+    }
+
     fn chmod(&mut self, path: &str, mode: u16) -> Result<(), VfsError> {
         self.chmod_as(path, mode, Credentials::root())
     }
@@ -557,15 +630,6 @@ impl Vfs {
         let node = self.nodes.iter().find(|node| node.path == path)?;
         if node.kind == NodeKind::File {
             Some(node.data.clone())
-        } else {
-            None
-        }
-    }
-
-    fn with_file_data<T>(&self, path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
-        let node = self.nodes.iter().find(|node| node.path == path)?;
-        if node.kind == NodeKind::File {
-            Some(f(&node.data))
         } else {
             None
         }
@@ -630,6 +694,21 @@ pub fn close(fd: usize) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.close(fd))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Stat {
+    pub mode: u16,
+    pub size: u64,
+    pub mtime: u64,
+}
+
+pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.lseek(fd, offset, whence))
+}
+
+pub fn stat(path: &str) -> Result<Stat, VfsError> {
+    with_vfs(|vfs| vfs.stat(path))
+}
+
 pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.chmod(path, mode))
 }
@@ -665,11 +744,6 @@ pub fn read_file(path: &str) -> Option<Vec<u8>> {
     guard.as_ref().and_then(|vfs| vfs.read_file(path))
 }
 
-pub fn with_file_data<T>(path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
-    let guard = VFS.lock();
-    guard.as_ref().and_then(|vfs| vfs.with_file_data(path, f))
-}
-
 pub fn write_file(path: &str, data: &[u8]) {
     with_vfs(|vfs| vfs.add_file(path, data));
 }
@@ -685,6 +759,45 @@ pub fn list_paths(prefix: &str) -> Vec<String> {
         .as_ref()
         .map(|vfs| vfs.list_paths(prefix))
         .unwrap_or_default()
+}
+
+fn proc_status_pid(path: &str) -> Option<u64> {
+    let rest = path.strip_prefix("/proc/")?;
+    let pid_text = rest.strip_suffix("/status")?;
+    pid_text.parse().ok()
+}
+
+fn format_proc_status(pid: u64) -> alloc::string::String {
+    let Some((name, state, parent, exit_status)) = crate::process::get_process_info(pid) else {
+        return alloc::format!("pid: {}\nstate: not found\n", pid);
+    };
+    let state_text = match state {
+        crate::process::ProcessState::Ready => "ready",
+        crate::process::ProcessState::Running => "running",
+        crate::process::ProcessState::Blocked(_) => "blocked",
+        crate::process::ProcessState::Zombie(_) => "zombie",
+    };
+    alloc::format!(
+        "pid: {}\nname: {}\nstate: {}\nparent: {}\nexit: {}\n",
+        pid,
+        name,
+        state_text,
+        parent
+            .map(|p| alloc::format!("{}", p))
+            .unwrap_or_else(|| alloc::string::String::from("-")),
+        exit_status
+            .map(|status| alloc::format!("{}", status))
+            .unwrap_or_else(|| alloc::string::String::from("-"))
+    )
+}
+
+fn read_proc_status(pid: u64, offset: usize, output: &mut [u8]) -> Result<usize, VfsError> {
+    let text = format_proc_status(pid);
+    let bytes = text.as_bytes();
+    let remaining = bytes.len().saturating_sub(offset);
+    let count = remaining.min(output.len());
+    output[..count].copy_from_slice(&bytes[offset..offset + count]);
+    Ok(count)
 }
 
 pub fn self_test() {

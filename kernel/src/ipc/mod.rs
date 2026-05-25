@@ -1,6 +1,3 @@
-pub mod pipe;
-
 pub fn init() {
-    pipe::self_test();
+    crate::println!("IPC consolidated into VFS pipe implementation.");
 }
-

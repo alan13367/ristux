@@ -1,23 +1,15 @@
 pub mod elf;
 
-use core::{arch::global_asm, cmp, ptr, slice};
+use core::{arch::global_asm, ptr};
 
 use crate::{
     fs,
-    memory::{
-        frame_allocator::{self, FRAME_SIZE},
-        paging::{self, PageFlags},
-    },
+    process,
     security::Credentials,
     syscall,
     sync::spinlock::SpinLock,
 };
 
-const USER_INIT_STACK_TOP: usize = 0x7000_2000;
-const MAX_USER_RANGES: usize = 16;
-const MAX_USER_MAPPINGS: usize = 32;
-const MAX_ACTIVE_FDS: usize = 8;
-const MAX_USER_ARGS: usize = 8;
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
 global_asm!(
@@ -79,8 +71,6 @@ static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     init_exit_status: None,
     last_exit_status: None,
 };
-static ACTIVE_USER: SpinLock<ActiveUserContext> = SpinLock::new(ActiveUserContext::empty());
-static USER_RUN_STATE: SpinLock<UserRunState> = SpinLock::new(UserRunState::new());
 static LAST_USER_RESULT: SpinLock<UserProgramResult> = SpinLock::new(UserProgramResult::empty());
 static mut USER_RETURN_CONTEXT: UserReturnContext = UserReturnContext::empty();
 
@@ -112,68 +102,7 @@ impl UserReturnContext {
 }
 
 #[derive(Clone, Copy)]
-struct UserRange {
-    start: usize,
-    end: usize,
-}
-
-#[derive(Clone, Copy)]
-struct UserMapping {
-    virt: usize,
-    phys: usize,
-}
-
-#[derive(Clone, Copy)]
-struct ActiveFd {
-    user_fd: usize,
-    vfs_fd: usize,
-}
-
-impl UserRange {
-    const fn empty() -> Self {
-        Self { start: 0, end: 0 }
-    }
-
-    fn contains(&self, addr: usize, len: usize) -> bool {
-        let Some(end) = addr.checked_add(len) else {
-            return false;
-        };
-
-        addr >= self.start && end <= self.end
-    }
-}
-
-impl UserMapping {
-    const fn empty() -> Self {
-        Self { virt: 0, phys: 0 }
-    }
-}
-
-impl ActiveFd {
-    const fn empty() -> Self {
-        Self { user_fd: 0, vfs_fd: 0 }
-    }
-}
-
-struct ActiveUserContext {
-    pid: u64,
-    name: &'static str,
-    credentials: Credentials,
-    range_count: usize,
-    ranges: [UserRange; MAX_USER_RANGES],
-    mapping_count: usize,
-    mappings: [UserMapping; MAX_USER_MAPPINGS],
-    fd_count: usize,
-    next_fd: usize,
-    fds: [ActiveFd; MAX_ACTIVE_FDS],
-    exited: bool,
-    exit_status: i32,
-}
-
-#[derive(Clone, Copy)]
 pub struct UserProgramResult {
-    pub name: &'static str,
-    pub pid: u64,
     pub status: i32,
     pub unmapped_pages: usize,
 }
@@ -181,151 +110,9 @@ pub struct UserProgramResult {
 impl UserProgramResult {
     const fn empty() -> Self {
         Self {
-            name: "",
-            pid: 0,
             status: 0,
             unmapped_pages: 0,
         }
-    }
-}
-
-struct UserRunState {
-    next_index: usize,
-    completed: usize,
-}
-
-impl UserRunState {
-    const fn new() -> Self {
-        Self {
-            next_index: 0,
-            completed: 0,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.next_index = 0;
-        self.completed = 0;
-    }
-}
-
-impl ActiveUserContext {
-    const fn empty() -> Self {
-        Self {
-            pid: 0,
-            name: "",
-            credentials: Credentials::root(),
-            range_count: 0,
-            ranges: [UserRange::empty(); MAX_USER_RANGES],
-            mapping_count: 0,
-            mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
-            fd_count: 0,
-            next_fd: 3,
-            fds: [ActiveFd::empty(); MAX_ACTIVE_FDS],
-            exited: false,
-            exit_status: 0,
-        }
-    }
-
-    const fn new(pid: u64, name: &'static str, credentials: Credentials) -> Self {
-        Self {
-            pid,
-            name,
-            credentials,
-            range_count: 0,
-            ranges: [UserRange::empty(); MAX_USER_RANGES],
-            mapping_count: 0,
-            mappings: [UserMapping::empty(); MAX_USER_MAPPINGS],
-            fd_count: 0,
-            next_fd: 3,
-            fds: [ActiveFd::empty(); MAX_ACTIVE_FDS],
-            exited: false,
-            exit_status: 0,
-        }
-    }
-
-    fn push_range(&mut self, start: usize, end: usize) {
-        if self.range_count >= MAX_USER_RANGES {
-            panic!("too many active user memory ranges");
-        }
-
-        self.ranges[self.range_count] = UserRange { start, end };
-        self.range_count += 1;
-    }
-
-    fn push_mapping(&mut self, virt: usize, phys: usize) {
-        if self.mapping_count >= MAX_USER_MAPPINGS {
-            panic!("too many active user page mappings");
-        }
-
-        self.mappings[self.mapping_count] = UserMapping { virt, phys };
-        self.mapping_count += 1;
-    }
-
-    fn allows(&self, addr: usize, len: usize) -> bool {
-        self.ranges[..self.range_count]
-            .iter()
-            .any(|range| range.contains(addr, len))
-    }
-
-    fn push_fd(&mut self, vfs_fd: usize) -> usize {
-        if self.fd_count >= MAX_ACTIVE_FDS {
-            panic!("too many active user file descriptors");
-        }
-
-        let user_fd = self.next_fd;
-        self.next_fd += 1;
-        self.fds[self.fd_count] = ActiveFd { user_fd, vfs_fd };
-        self.fd_count += 1;
-        user_fd
-    }
-
-    fn set_fd(&mut self, user_fd: usize, vfs_fd: usize) {
-        if let Some(fd) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|fd| fd.user_fd == user_fd)
-        {
-            fd.vfs_fd = vfs_fd;
-            return;
-        }
-
-        if self.fd_count >= MAX_ACTIVE_FDS {
-            panic!("too many active user file descriptors");
-        }
-
-        self.fds[self.fd_count] = ActiveFd { user_fd, vfs_fd };
-        self.fd_count += 1;
-    }
-
-    fn replace_fd(&mut self, user_fd: usize, vfs_fd: usize) -> Option<usize> {
-        if let Some(fd) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|fd| fd.user_fd == user_fd)
-        {
-            let old = fd.vfs_fd;
-            fd.vfs_fd = vfs_fd;
-            return Some(old);
-        }
-
-        self.set_fd(user_fd, vfs_fd);
-        None
-    }
-
-    fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
-        self.fds[..self.fd_count]
-            .iter()
-            .find(|fd| fd.user_fd == user_fd)
-            .map(|fd| fd.vfs_fd)
-    }
-
-    fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {
-        let index = self.fds[..self.fd_count]
-            .iter()
-            .position(|fd| fd.user_fd == user_fd)?;
-        let vfs_fd = self.fds[index].vfs_fd;
-        self.fd_count -= 1;
-        self.fds[index] = self.fds[self.fd_count];
-        self.fds[self.fd_count] = ActiveFd::empty();
-        Some(vfs_fd)
     }
 }
 
@@ -416,25 +203,31 @@ pub fn stats() -> UserspaceStats {
     unsafe { USERSPACE_STATS }
 }
 
-pub fn enter_userland_sequence() -> ! {
-    USER_RUN_STATE.lock().reset();
+pub fn run_userland_program_sequence() {
     for (index, path) in USER_PROGRAMS.iter().enumerate() {
-        let pid = (index + 1) as u64;
-        if *path == "/bin/echo" {
-            run_user_program_with_args(path, &["/bin/echo", "hello", "from", "sequence"], pid);
+        let pid = if index == 0 {
+            1
         } else {
-            run_user_program(path, pid);
-        }
-        USER_RUN_STATE.lock().completed += 1;
+            process::fork(1).unwrap_or(1)
+        };
+        let result = if *path == "/bin/echo" {
+            run_user_program_with_args(path, &["/bin/echo", "hello", "from", "sequence"], pid)
+        } else {
+            run_user_program(path, pid)
+        };
+        crate::println!(
+            "Ring 3 ELF program {} pid {} exited with status {}.",
+            path,
+            pid,
+            result.status
+        );
+        let _ = process::wait(1, pid);
     }
 
-    let completed = USER_RUN_STATE.lock().completed;
     crate::println!(
         "Ring 3 user program sequence passed: {} program(s).",
-        completed
+        USER_PROGRAMS.len()
     );
-    crate::arch::x86_64::instructions::enable_interrupts();
-    crate::halt_loop();
 }
 
 pub fn run_user_program(path: &'static str, pid: u64) -> UserProgramResult {
@@ -493,25 +286,17 @@ pub fn run_user_program_with_fds_as(
     stdout_vfs_fd: Option<usize>,
     credentials: Credentials,
 ) -> UserProgramResult {
-    {
-        let mut active = ACTIVE_USER.lock();
-        *active = ActiveUserContext::new(pid, path, credentials);
-    }
+    let (entry, stack_top, argc, argv) = process::prepare_user_run(
+        pid,
+        path,
+        args,
+        stdin_vfs_fd,
+        stdout_vfs_fd,
+        credentials,
+    )
+    .unwrap_or_else(|| panic!("{} missing from VFS", path));
 
-    {
-        let mut active = ACTIVE_USER.lock();
-        if let Some(stdin_vfs_fd) = stdin_vfs_fd {
-            active.set_fd(0, stdin_vfs_fd);
-        }
-        if let Some(stdout_vfs_fd) = stdout_vfs_fd {
-            active.set_fd(1, stdout_vfs_fd);
-        }
-    }
-
-    let entry = fs::with_file_data(path, |data| map_user_elf_bytes(path, data))
-        .unwrap_or_else(|| panic!("{} missing from VFS", path));
-    map_user_stack(USER_INIT_STACK_TOP);
-    let argv = write_user_argv(args, USER_INIT_STACK_TOP);
+    process::set_current(pid);
 
     unsafe {
         USERSPACE_STATS.processes_loaded += 1;
@@ -522,164 +307,79 @@ pub fn run_user_program_with_fds_as(
         path,
         pid,
         entry,
-        USER_INIT_STACK_TOP
+        stack_top
     );
 
     unsafe {
-        enter_user_mode_returning(entry as usize, USER_INIT_STACK_TOP, args.len(), argv);
+        enter_user_mode_returning(entry as usize, stack_top, argc, argv);
     }
 
     *LAST_USER_RESULT.lock()
 }
 
 pub fn active_user_read(addr: usize, len: usize) -> Option<&'static [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-
-    if !ACTIVE_USER.lock().allows(addr, len) {
-        return None;
-    }
-
-    Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
+    process::read_user(addr, len)
 }
 
 pub fn active_user_write_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
-    if len == 0 {
-        return Some(&mut []);
-    }
-
-    if !ACTIVE_USER.lock().allows(addr, len) {
-        return None;
-    }
-
-    Some(unsafe { slice::from_raw_parts_mut(addr as *mut u8, len) })
+    process::write_user_buffer(addr, len)
 }
 
 pub fn active_user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
-    let vfs_fd = fs::open_read_as(path, active_user_credentials())?;
-    let mut active = ACTIVE_USER.lock();
-    Ok(active.push_fd(vfs_fd))
+    process::user_open(path)
 }
 
 pub fn active_user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
-    let vfs_fd = fs::create_file_as(path, active_user_credentials())?;
-    let mut active = ACTIVE_USER.lock();
-    Ok(active.push_fd(vfs_fd))
+    process::user_create(path)
 }
 
 pub fn active_user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
-    fs::mkdir_as(path, active_user_credentials())
+    process::user_mkdir(path)
 }
 
 pub fn active_user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
-    fs::unlink_as(path, active_user_credentials())
+    process::user_unlink(path)
 }
 
 pub fn active_user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
-    fs::chmod_as(path, mode, active_user_credentials())
+    process::user_chmod(path, mode)
 }
 
 pub fn active_user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
-    let vfs_fd = ACTIVE_USER
-        .lock()
-        .lookup_fd(user_fd)
-        .ok_or(fs::vfs::VfsError::BadFd)?;
-    let duplicated = fs::duplicate_fd(vfs_fd)?;
-    let mut active = ACTIVE_USER.lock();
-    Ok(active.push_fd(duplicated))
+    process::user_dup(user_fd)
 }
 
 pub fn active_user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::VfsError> {
-    if user_fd == target_fd {
-        if ACTIVE_USER.lock().lookup_fd(user_fd).is_some() {
-            return Ok(target_fd);
-        }
-        return Err(fs::vfs::VfsError::BadFd);
-    }
-
-    let vfs_fd = ACTIVE_USER
-        .lock()
-        .lookup_fd(user_fd)
-        .ok_or(fs::vfs::VfsError::BadFd)?;
-    let duplicated = fs::duplicate_fd(vfs_fd)?;
-    let old = ACTIVE_USER.lock().replace_fd(target_fd, duplicated);
-    if let Some(old) = old {
-        fs::close(old)?;
-    }
-    Ok(target_fd)
+    process::user_dup2(user_fd, target_fd)
 }
 
 pub fn active_user_vfs_fd(user_fd: usize) -> Option<usize> {
-    ACTIVE_USER.lock().lookup_fd(user_fd)
+    process::user_vfs_fd(user_fd)
 }
 
 pub fn active_user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
-    let Some(vfs_fd) = ACTIVE_USER.lock().remove_fd(user_fd) else {
-        return Err(fs::vfs::VfsError::BadFd);
-    };
-
-    fs::close(vfs_fd)
+    process::user_close(user_fd)
 }
 
 pub fn active_user_pid() -> u64 {
-    ACTIVE_USER.lock().pid
+    process::current_pid().unwrap_or(0)
 }
 
-fn active_user_credentials() -> Credentials {
-    ACTIVE_USER.lock().credentials
+pub fn record_user_exit(pid: u64, status: i32, unmapped_pages: usize) {
+    let _ = pid;
+    unsafe {
+        USERSPACE_STATS.last_exit_status = Some(status);
+    }
+    *LAST_USER_RESULT.lock() = UserProgramResult {
+        status,
+        unmapped_pages,
+    };
 }
 
 pub fn record_active_syscall() {
     unsafe {
         USERSPACE_STATS.syscalls_handled += 1;
     }
-}
-
-pub fn finish_active_exit(status: i32) -> UserProgramResult {
-    let mut active = ACTIVE_USER.lock();
-    active.exited = true;
-    active.exit_status = status;
-    let name = active.name;
-    let pid = active.pid;
-    let mut unmapped_pages = 0;
-
-    for index in 0..active.fd_count {
-        let _ = fs::close(active.fds[index].vfs_fd);
-    }
-    active.fd_count = 0;
-    active.next_fd = 3;
-
-    for index in 0..active.mapping_count {
-        let mapping = active.mappings[index];
-        let unmapped = unsafe {
-            paging::unmap_page(mapping.virt)
-                .unwrap_or_else(|err| panic!("ring 3 ELF unmap failed: {}", err))
-        };
-        if unmapped != mapping.phys {
-            panic!("ring 3 ELF unmap returned unexpected frame {:#x}", unmapped);
-        }
-
-        frame_allocator::free_frame(frame_allocator::Frame {
-            start: mapping.phys,
-        });
-        unmapped_pages += 1;
-    }
-
-    active.range_count = 0;
-    active.mapping_count = 0;
-    unsafe {
-        USERSPACE_STATS.last_exit_status = Some(status);
-    }
-
-    let result = UserProgramResult {
-        name,
-        pid,
-        status,
-        unmapped_pages,
-    };
-    *LAST_USER_RESULT.lock() = result;
-    result
 }
 
 pub fn return_from_active_user() -> ! {
@@ -715,137 +415,6 @@ fn run_init_process(process: &mut UserProcess) {
         };
         USERSPACE_STATS.last_exit_status = USERSPACE_STATS.init_exit_status;
     }
-}
-
-fn map_user_elf_bytes(path: &str, data: &[u8]) -> u64 {
-    let mut segments = 0;
-    let entry = elf::for_each_load_segment(data, |segment| {
-        map_user_segment(segment);
-        segments += 1;
-    })
-    .unwrap_or_else(|err| panic!("failed to load {} ELF for ring 3: {}", path, err));
-
-    if segments == 0 {
-        panic!("{} ELF has no loadable segments", path);
-    }
-
-    crate::println!(
-        "Ring 3 ELF loader: {} entry {:#x}, {} loadable segment(s)",
-        path,
-        entry,
-        segments
-    );
-
-    entry
-}
-
-fn map_user_segment(segment: elf::SegmentView<'_>) {
-    let segment_start = segment.vaddr;
-    let segment_end = segment_start
-        .checked_add(segment.mem_size)
-        .expect("ELF segment end overflow");
-    if segment_start == segment_end {
-        return;
-    }
-
-    let file_end = segment_start
-        .checked_add(segment.file_bytes.len())
-        .expect("ELF file segment end overflow");
-    let map_start = align_down(segment_start, FRAME_SIZE);
-    let map_end = align_up(segment_end, FRAME_SIZE);
-
-    for page in (map_start..map_end).step_by(FRAME_SIZE) {
-        let frame =
-            frame_allocator::allocate_frame().expect("ring 3 ELF segment frame allocation failed");
-        unsafe {
-            ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
-            let page_end = page + FRAME_SIZE;
-            let copy_start = cmp::max(page, segment_start);
-            let copy_end = cmp::min(page_end, file_end);
-            if copy_start < copy_end {
-                let source_offset = copy_start - segment_start;
-                let target_offset = copy_start - page;
-                ptr::copy_nonoverlapping(
-                    segment.file_bytes.as_ptr().add(source_offset),
-                    (frame.start + target_offset) as *mut u8,
-                    copy_end - copy_start,
-                );
-            }
-
-            paging::map_page(page, frame.start, PageFlags::USER_WRITABLE)
-                .unwrap_or_else(|err| panic!("ring 3 ELF segment map failed: {}", err));
-        }
-        ACTIVE_USER.lock().push_mapping(page, frame.start);
-    }
-
-    ACTIVE_USER.lock().push_range(segment_start, segment_end);
-}
-
-fn write_user_argv(args: &[&str], stack_top: usize) -> usize {
-    if args.len() > MAX_USER_ARGS {
-        panic!("too many user arguments");
-    }
-
-    let stack_bottom = stack_top - FRAME_SIZE;
-    let mut cursor = stack_top;
-    let mut pointers = [0usize; MAX_USER_ARGS];
-
-    for (index, arg) in args.iter().enumerate().rev() {
-        let bytes = arg.as_bytes();
-        cursor = cursor
-            .checked_sub(bytes.len() + 1)
-            .expect("user argv stack underflow");
-        if cursor < stack_bottom {
-            panic!("user argv does not fit on stack");
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), cursor as *mut u8, bytes.len());
-            ptr::write((cursor + bytes.len()) as *mut u8, 0);
-        }
-        pointers[index] = cursor;
-    }
-
-    cursor = align_down(cursor, 8);
-    cursor = cursor
-        .checked_sub((args.len() + 1) * core::mem::size_of::<u64>())
-        .expect("user argv pointer stack underflow");
-    if cursor < stack_bottom {
-        panic!("user argv pointers do not fit on stack");
-    }
-
-    unsafe {
-        let argv = cursor as *mut u64;
-        for (index, pointer) in pointers[..args.len()].iter().enumerate() {
-            ptr::write(argv.add(index), *pointer as u64);
-        }
-        ptr::write(argv.add(args.len()), 0);
-    }
-
-    cursor
-}
-
-fn map_user_stack(stack_top: usize) {
-    let stack_bottom = stack_top - FRAME_SIZE;
-    let frame =
-        frame_allocator::allocate_frame().expect("ring 3 ELF stack frame allocation failed");
-
-    unsafe {
-        ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
-        paging::map_page(stack_bottom, frame.start, PageFlags::USER_WRITABLE)
-            .unwrap_or_else(|err| panic!("ring 3 ELF stack map failed: {}", err));
-    }
-
-    ACTIVE_USER.lock().push_mapping(stack_bottom, frame.start);
-    ACTIVE_USER.lock().push_range(stack_bottom, stack_top);
-}
-
-const fn align_down(value: usize, align: usize) -> usize {
-    value & !(align - 1)
-}
-
-const fn align_up(value: usize, align: usize) -> usize {
-    (value + align - 1) & !(align - 1)
 }
 
 unsafe fn enter_user_mode_returning(entry: usize, stack_top: usize, argc: usize, argv: usize) {

@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::sync::spinlock::SpinLock;
+use crate::{
+    drivers::virtio_net::VirtioNetDriver,
+    sync::spinlock::SpinLock,
+};
 
 const ETHERTYPE_IPV4: u16 = 0x0800;
 const ETHERTYPE_ARP: u16 = 0x0806;
@@ -68,52 +71,10 @@ struct UdpDatagram {
     payload: Vec<u8>,
 }
 
-struct VirtioNetDevice {
-    link_up: bool,
-    rx_queue: Vec<EthernetFrame>,
-    tx_queue: Vec<EthernetFrame>,
-}
-
-impl VirtioNetDevice {
-    fn new() -> Self {
-        Self {
-            link_up: true,
-            rx_queue: Vec::new(),
-            tx_queue: Vec::new(),
-        }
-    }
-
-    fn receive(&mut self, frame: EthernetFrame) {
-        self.rx_queue.push(frame);
-    }
-
-    fn transmit(&mut self, frame: EthernetFrame) {
-        if self.link_up {
-            self.tx_queue.push(frame);
-        }
-    }
-
-    fn pop_rx(&mut self) -> Option<EthernetFrame> {
-        if self.rx_queue.is_empty() {
-            None
-        } else {
-            Some(self.rx_queue.remove(0))
-        }
-    }
-
-    fn pop_tx(&mut self) -> Option<EthernetFrame> {
-        if self.tx_queue.is_empty() {
-            None
-        } else {
-            Some(self.tx_queue.remove(0))
-        }
-    }
-}
-
 struct NetworkStack {
     mac: MacAddr,
     ip: Ipv4Addr,
-    device: VirtioNetDevice,
+    device: VirtioNetDriver,
     arp_cache: Vec<ArpEntry>,
     udp_sockets: Vec<UdpSocket>,
     rx_frames: usize,
@@ -121,11 +82,12 @@ struct NetworkStack {
 }
 
 impl NetworkStack {
-    fn new(mac: MacAddr, ip: Ipv4Addr) -> Self {
+    fn new(device: VirtioNetDriver, ip: Ipv4Addr) -> Self {
+        let mac = device.mac();
         Self {
             mac,
             ip,
-            device: VirtioNetDevice::new(),
+            device,
             arp_cache: Vec::new(),
             udp_sockets: Vec::new(),
             rx_frames: 0,
@@ -142,11 +104,14 @@ impl NetworkStack {
     }
 
     fn inject_rx(&mut self, frame: EthernetFrame) {
-        self.device.receive(frame);
+        self.device.inject_rx(frame);
     }
 
     fn poll(&mut self) {
-        while let Some(frame) = self.device.pop_rx() {
+        loop {
+            let Some(frame) = self.device.poll_rx() else {
+                break;
+            };
             self.rx_frames += 1;
             if frame.dst != self.mac && frame.dst != MacAddr([0xff; 6]) {
                 continue;
@@ -197,6 +162,12 @@ impl NetworkStack {
 
     fn pop_tx(&mut self) -> Option<EthernetFrame> {
         self.device.pop_tx()
+    }
+
+    fn transmit(&mut self, frame: EthernetFrame) {
+        self.tx_frames += 1;
+        self.device.transmit(frame);
+        self.poll();
     }
 
     fn handle_arp(&mut self, frame: EthernetFrame) {
@@ -268,6 +239,7 @@ impl NetworkStack {
             src_port,
             payload: Vec::from(&packet.payload[4..]),
         });
+        crate::process::wake_io_waiters();
     }
 
     fn transmit_ipv4(&mut self, dst_mac: MacAddr, dst_ip: Ipv4Addr, protocol: u8, body: &[u8]) {
@@ -278,11 +250,6 @@ impl NetworkStack {
             ethertype: ETHERTYPE_IPV4,
             payload,
         });
-    }
-
-    fn transmit(&mut self, frame: EthernetFrame) {
-        self.tx_frames += 1;
-        self.device.transmit(frame);
     }
 
     fn cache_arp(&mut self, ip: Ipv4Addr, mac: MacAddr) {
@@ -351,9 +318,9 @@ pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -
         return false;
     };
     let socket = SocketId(socket);
-    let Some(local_port) = stack.udp_sockets.get(socket.0).map(|socket| socket.local_port) else {
+    if stack.udp_sockets.get(socket.0).is_none() {
         return false;
-    };
+    }
     let dst_ip = Ipv4Addr(dst_ip);
     if !stack.send_udp(socket, dst_ip, dst_port, payload) {
         return false;
@@ -369,29 +336,13 @@ pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -
         dst_ip.0[3],
         dst_port
     );
-
-    let peer_mac = stack
-        .resolve_mac(dst_ip)
-        .unwrap_or(MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]));
-    let mut udp_body = Vec::new();
-    udp_body.extend_from_slice(&dst_port.to_be_bytes());
-    udp_body.extend_from_slice(&local_port.to_be_bytes());
-    udp_body.extend_from_slice(b"udp-reply");
-    let local_ip = stack.ip;
-    let local_mac = stack.mac;
-    stack.inject_rx(EthernetFrame {
-        dst: local_mac,
-        src: peer_mac,
-        ethertype: ETHERTYPE_IPV4,
-        payload: build_ipv4(IP_PROTO_UDP, dst_ip, local_ip, &udp_body),
-    });
-    stack.poll();
     true
 }
 
 pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
     let mut guard = NET_STACK.lock();
     let stack = guard.as_mut()?;
+    stack.poll();
     let datagram = stack.recv_udp(SocketId(socket))?;
     let count = datagram.payload.len().min(output.len());
     output[..count].copy_from_slice(&datagram.payload[..count]);
@@ -409,11 +360,12 @@ pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
 }
 
 fn runtime_stack() -> NetworkStack {
-    let local_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
-    let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    let device =
+        VirtioNetDriver::probe().unwrap_or_else(VirtioNetDriver::software_fallback);
     let local_ip = Ipv4Addr([10, 0, 2, 15]);
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
-    let mut stack = NetworkStack::new(local_mac, local_ip);
+    let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    let mut stack = NetworkStack::new(device, local_ip);
     stack.cache_arp(peer_ip, peer_mac);
     stack
 }
@@ -447,32 +399,60 @@ fn parse_arp(payload: &[u8]) -> Option<ArpPacket> {
 }
 
 fn build_ipv4(protocol: u8, src: Ipv4Addr, dst: Ipv4Addr, body: &[u8]) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.push(protocol);
-    payload.extend_from_slice(&src.0);
-    payload.extend_from_slice(&dst.0);
-    payload.extend_from_slice(body);
-    payload
+    let mut packet = Vec::with_capacity(20 + body.len());
+    let total = (20 + body.len()) as u16;
+    packet.push(0x45);
+    packet.push(0);
+    packet.extend_from_slice(&total.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0x4000u16.to_be_bytes());
+    packet.push(64);
+    packet.push(protocol);
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&src.0);
+    packet.extend_from_slice(&dst.0);
+    let checksum = ipv4_checksum(&packet);
+    packet[10] = (checksum >> 8) as u8;
+    packet[11] = (checksum & 0xff) as u8;
+    packet.extend_from_slice(body);
+    packet
+}
+
+fn ipv4_checksum(header: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut index = 0;
+    while index + 1 < header.len() {
+        sum += u32::from(u16::from_be_bytes([header[index], header[index + 1]]));
+        index += 2;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !sum as u16
 }
 
 fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
-    if payload.len() < 9 {
+    if payload.len() < 20 || payload[0] >> 4 != 4 {
+        return None;
+    }
+    let ihl = (payload[0] & 0x0f) as usize * 4;
+    if payload.len() < ihl {
         return None;
     }
     Some(Ipv4Packet {
-        protocol: payload[0],
-        src: Ipv4Addr(payload[1..5].try_into().ok()?),
-        dst: Ipv4Addr(payload[5..9].try_into().ok()?),
-        payload: Vec::from(&payload[9..]),
+        protocol: payload[9],
+        src: Ipv4Addr(payload[12..16].try_into().ok()?),
+        dst: Ipv4Addr(payload[16..20].try_into().ok()?),
+        payload: Vec::from(&payload[ihl..]),
     })
 }
 
 fn self_test() {
-    let local_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
     let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
     let local_ip = Ipv4Addr([10, 0, 2, 15]);
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
-    let mut stack = NetworkStack::new(local_mac, local_ip);
+    let mut stack = NetworkStack::new(VirtioNetDriver::software_fallback(), local_ip);
+    let local_mac = stack.mac;
 
     stack.inject_rx(EthernetFrame {
         dst: MacAddr([0xff; 6]),
@@ -525,21 +505,10 @@ fn self_test() {
         panic!("UDP send self-test failed");
     }
 
-    let mut udp_body = Vec::new();
-    udp_body.extend_from_slice(&9001u16.to_be_bytes());
-    udp_body.extend_from_slice(&9000u16.to_be_bytes());
-    udp_body.extend_from_slice(b"reply");
-    stack.inject_rx(EthernetFrame {
-        dst: local_mac,
-        src: peer_mac,
-        ethertype: ETHERTYPE_IPV4,
-        payload: build_ipv4(IP_PROTO_UDP, peer_ip, local_ip, &udp_body),
-    });
-    stack.poll();
     let received = stack
         .recv_udp(socket)
         .expect("UDP socket inbox stayed empty");
-    if received.src != peer_ip || received.src_port != 9001 || received.payload != b"reply" {
+    if received.src != peer_ip || received.src_port != 9001 || received.payload != b"udp-reply" {
         panic!("UDP receive self-test failed");
     }
 

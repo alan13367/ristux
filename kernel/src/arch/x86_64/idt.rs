@@ -223,16 +223,38 @@ extern "x86-interrupt" fn general_protection_fault_handler(
 }
 
 extern "x86-interrupt" fn page_fault_handler(
-    _stack_frame: InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
     let fault_addr: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_addr, options(nomem, nostack, preserves_flags));
     }
+
+    if crate::process::handle_page_fault(fault_addr as usize, error_code) {
+        return;
+    }
+
+    let user_fault = error_code & 0x4 != 0;
+    if user_fault {
+        let had_user = crate::process::current_pid().is_some();
+        crate::process::kill_current(128 + 11);
+        crate::println!(
+            "User page fault at {:#x}, error code {:#x}, killing process",
+            fault_addr,
+            error_code
+        );
+        if had_user {
+            crate::userspace::return_from_active_user();
+        }
+        return;
+    }
+
     panic!(
-        "page fault exception at {:#x}, error code {:#x}",
-        fault_addr, error_code
+        "page fault exception at {:#x}, error code {:#x}, rip {:#x}",
+        fault_addr,
+        error_code,
+        stack_frame.instruction_pointer
     );
 }
 

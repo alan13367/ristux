@@ -1,37 +1,245 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
+use core::{cmp, ptr, slice};
 
-use crate::sync::spinlock::SpinLock;
+use crate::{
+    fs,
+    memory::{
+        address_space::AddressSpace,
+        frame_allocator::{self, FRAME_SIZE},
+        paging::{self, PageFlags},
+    },
+    security::Credentials,
+    sync::spinlock::SpinLock,
+    task::scheduler,
+    userspace::elf,
+};
 
 static PROCESS_TABLE: SpinLock<Option<ProcessTable>> = SpinLock::new(None);
+static CURRENT_PID: SpinLock<Option<Pid>> = SpinLock::new(None);
 
 pub type Pid = u64;
+
+const MAX_FDS: usize = 16;
+const MAX_USER_ARGS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
     Ready,
     Running,
-    Exited(i32),
+    Blocked(BlockReason),
+    Zombie(i32),
 }
 
-#[derive(Clone)]
-pub struct FileDescriptor {
-    pub fd: usize,
-    pub path: String,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockReason {
+    WaitChild(Pid),
+    WaitIo,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+struct FdEntry {
+    user_fd: usize,
+    vfs_fd: usize,
+}
+
 pub struct Process {
     pub pid: Pid,
     pub parent: Option<Pid>,
     pub name: String,
     pub cwd: String,
     pub state: ProcessState,
-    pub fds: Vec<FileDescriptor>,
+    pub address_space: AddressSpace,
+    pub credentials: Credentials,
+    fd_count: usize,
+    fds: [FdEntry; MAX_FDS],
+    next_fd: usize,
+    pub entry: u64,
+    pub stack_top: usize,
+    pub argc: usize,
+    pub argv_ptr: usize,
+    exit_status: Option<i32>,
+    waiters: Vec<Pid>,
+    is_user: bool,
 }
 
 pub struct ProcessTable {
     processes: Vec<Process>,
     next_pid: Pid,
+}
+
+impl Process {
+    fn new_user(pid: Pid, parent: Option<Pid>, name: &str, credentials: Credentials) -> Self {
+        let address_space = AddressSpace::new_kernel_clone()
+            .expect("failed to create user address space");
+        Self {
+            pid,
+            parent,
+            name: String::from(name),
+            cwd: String::from("/"),
+            state: ProcessState::Ready,
+            address_space,
+            credentials,
+            fd_count: 0,
+            fds: [FdEntry {
+                user_fd: 0,
+                vfs_fd: 0,
+            }; MAX_FDS],
+            next_fd: 3,
+            entry: 0,
+            stack_top: paging::USER_STACK_TOP,
+            argc: 0,
+            argv_ptr: 0,
+            exit_status: None,
+            waiters: Vec::new(),
+            is_user: true,
+        }
+    }
+
+    fn init_stdio(&mut self) {
+        let keyboard = fs::open("/dev/keyboard").unwrap_or(0);
+        let console = fs::open("/dev/console").unwrap_or(1);
+        self.set_fd(0, keyboard);
+        self.set_fd(1, console);
+        self.set_fd(2, console);
+    }
+
+    fn set_fd(&mut self, user_fd: usize, vfs_fd: usize) {
+        if let Some(entry) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|e| e.user_fd == user_fd)
+        {
+            entry.vfs_fd = vfs_fd;
+            return;
+        }
+        if self.fd_count >= MAX_FDS {
+            panic!("too many file descriptors");
+        }
+        self.fds[self.fd_count] = FdEntry { user_fd, vfs_fd };
+        self.fd_count += 1;
+        if user_fd >= self.next_fd {
+            self.next_fd = user_fd + 1;
+        }
+    }
+
+    fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
+        self.fds[..self.fd_count]
+            .iter()
+            .find(|e| e.user_fd == user_fd)
+            .map(|e| e.vfs_fd)
+    }
+
+    fn push_fd(&mut self, vfs_fd: usize) -> usize {
+        let user_fd = self.next_fd;
+        self.next_fd += 1;
+        self.set_fd(user_fd, vfs_fd);
+        user_fd
+    }
+
+    fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {
+        let index = self.fds[..self.fd_count]
+            .iter()
+            .position(|e| e.user_fd == user_fd)?;
+        let vfs_fd = self.fds[index].vfs_fd;
+        self.fd_count -= 1;
+        self.fds[index] = self.fds[self.fd_count];
+        Some(vfs_fd)
+    }
+
+    fn replace_fd(&mut self, user_fd: usize, vfs_fd: usize) -> Option<usize> {
+        if let Some(entry) = self.fds[..self.fd_count]
+            .iter_mut()
+            .find(|e| e.user_fd == user_fd)
+        {
+            let old = entry.vfs_fd;
+            entry.vfs_fd = vfs_fd;
+            return Some(old);
+        }
+        self.set_fd(user_fd, vfs_fd);
+        None
+    }
+
+    fn allows(&self, addr: usize, len: usize) -> bool {
+        self.address_space.allows(addr, len)
+    }
+
+    fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, elf::ElfError> {
+        let old = core::mem::replace(
+            &mut self.address_space,
+            AddressSpace::new_kernel_clone().map_err(|_| elf::ElfError::Unsupported)?,
+        );
+        old.destroy();
+        self.address_space.activate();
+        let mut segments = 0;
+        let entry = elf::for_each_load_segment(data, |segment| {
+            map_elf_segment(&mut self.address_space, segment);
+            segments += 1;
+        })?;
+        if segments == 0 {
+            return Err(elf::ElfError::Unsupported);
+        }
+        self.name = String::from(path);
+        self.entry = entry;
+        Ok(entry)
+    }
+
+    fn setup_stack(&mut self, args: &[&str]) {
+        self.address_space.activate();
+        if args.len() > MAX_USER_ARGS {
+            panic!("too many user arguments");
+        }
+        let stack_top = paging::USER_STACK_TOP;
+        let stack_bottom = stack_top - FRAME_SIZE;
+        self.address_space
+            .map_zero_page(stack_bottom)
+            .expect("user stack map failed");
+        self.address_space.stack_bottom = stack_bottom;
+        self.address_space.stack_top = stack_top;
+
+        let mut sp = stack_top;
+        let mut arg_ptrs = [0usize; MAX_USER_ARGS];
+        for (index, arg) in args.iter().enumerate() {
+            let bytes = arg.as_bytes();
+            sp -= bytes.len() + 1;
+            sp &= !0xf;
+            let page = paging::align_down(sp, FRAME_SIZE);
+            if !self.address_space.allows(page, FRAME_SIZE) {
+                self.address_space
+                    .map_zero_page(page)
+                    .expect("argv stack map failed");
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), sp as *mut u8, bytes.len());
+                *(sp as *mut u8).add(bytes.len()) = 0;
+            }
+            arg_ptrs[index] = sp;
+        }
+
+        sp &= !0xf;
+        sp -= (args.len() + 1) * 8;
+        sp -= 8;
+        unsafe {
+            for index in 0..args.len() {
+                *(sp as *mut u64).add(index) = arg_ptrs[index] as u64;
+            }
+            *(sp as *mut u64).add(args.len()) = 0;
+        }
+
+        self.stack_top = sp;
+        self.argc = args.len();
+        self.argv_ptr = sp;
+    }
+
+    fn destroy(&mut self) {
+        for index in 0..self.fd_count {
+            let _ = fs::close(self.fds[index].vfs_fd);
+        }
+        self.fd_count = 0;
+        let old = core::mem::replace(
+            &mut self.address_space,
+            AddressSpace::new_kernel_clone().expect("address space"),
+        );
+        old.destroy();
+    }
 }
 
 impl ProcessTable {
@@ -43,104 +251,168 @@ impl ProcessTable {
     }
 
     fn spawn_init(&mut self) -> Pid {
-        self.spawn(None, "init")
-    }
-
-    fn spawn(&mut self, parent: Option<Pid>, name: &str) -> Pid {
         let pid = self.next_pid;
         self.next_pid += 1;
-        let fds = vec![
-            FileDescriptor {
-                fd: 0,
-                path: String::from("/dev/keyboard"),
-            },
-            FileDescriptor {
-                fd: 1,
-                path: String::from("/dev/console"),
-            },
-            FileDescriptor {
-                fd: 2,
-                path: String::from("/dev/console"),
-            },
-        ];
-        self.processes.push(Process {
-            pid,
-            parent,
-            name: String::from(name),
-            cwd: String::from("/"),
-            state: ProcessState::Ready,
-            fds,
-        });
+        let mut process = Process::new_user(pid, None, "init", Credentials::root());
+        process.init_stdio();
+        self.processes.push(process);
         pid
     }
 
+    fn get_mut(&mut self, pid: Pid) -> Option<&mut Process> {
+        self.processes.iter_mut().find(|p| p.pid == pid)
+    }
+
+    fn get(&self, pid: Pid) -> Option<&Process> {
+        self.processes.iter().find(|p| p.pid == pid)
+    }
+
     fn fork(&mut self, parent: Pid) -> Option<Pid> {
-        let parent_process = self.processes.iter().find(|process| process.pid == parent)?.clone();
+        let parent_proc = self.get(parent)?.clone_process()?;
         let pid = self.next_pid;
         self.next_pid += 1;
-        let mut child = parent_process;
+        let mut child = parent_proc;
         child.pid = pid;
         child.parent = Some(parent);
-        child.name.push_str("-child");
         child.state = ProcessState::Ready;
+        child.waiters.clear();
+        child.exit_status = None;
         self.processes.push(child);
         Some(pid)
     }
 
-    fn exec(&mut self, pid: Pid, path: &str) -> bool {
-        let Some(process) = self.processes.iter_mut().find(|process| process.pid == pid) else {
+    fn exec(&mut self, pid: Pid, path: &str, args: &[&str]) -> bool {
+        let Some(data) = fs::read_file(path) else {
             return false;
         };
-        process.name = String::from(path);
-        process.state = ProcessState::Running;
+        let index = match self.processes.iter().position(|p| p.pid == pid) {
+            Some(i) => i,
+            None => return false,
+        };
+        {
+            let process = &mut self.processes[index];
+            for i in 0..process.fd_count {
+                let _ = fs::close(process.fds[i].vfs_fd);
+            }
+            process.fd_count = 0;
+            process.next_fd = 3;
+        }
+        let process = &mut self.processes[index];
+        process.init_stdio();
+        if process.load_elf(path, &data).is_err() {
+            return false;
+        }
+        process.setup_stack(args);
+        process.state = ProcessState::Ready;
+        clear_current();
         true
     }
 
     fn exit(&mut self, pid: Pid, status: i32) {
-        if let Some(process) = self.processes.iter_mut().find(|process| process.pid == pid) {
-            process.state = ProcessState::Exited(status);
+        let was_current = current_pid() == Some(pid);
+        let waiters = {
+            let process = match self.get_mut(pid) {
+                Some(p) => p,
+                None => return,
+            };
+            process.state = ProcessState::Zombie(status);
+            process.exit_status = Some(status);
+            if was_current {
+                process.address_space.activate();
+            }
+            let mut old = AddressSpace::new_kernel_clone().expect("address space");
+            core::mem::swap(&mut process.address_space, &mut old);
+            old.destroy();
+            if was_current {
+                clear_current();
+            }
+            core::mem::take(&mut process.waiters)
+        };
+        for waiter in waiters {
+            if let Some(parent) = self.get_mut(waiter) {
+                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
+                {
+                    parent.state = ProcessState::Ready;
+                    scheduler::wake_blocked(waiter);
+                }
+            }
+        }
+        if let Some(parent) = self.get(pid).and_then(|p| p.parent) {
+            if let Some(parent_proc) = self.get_mut(parent) {
+                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
+                {
+                    parent_proc.state = ProcessState::Ready;
+                    scheduler::wake_blocked(parent);
+                }
+            }
         }
     }
 
-    fn wait(&self, parent: Pid, child: Pid) -> Option<i32> {
-        self.processes
-            .iter()
-            .find(|process| process.pid == child && process.parent == Some(parent))
-            .and_then(|process| match process.state {
-                ProcessState::Exited(status) => Some(status),
-                _ => None,
-            })
+    fn wait(&mut self, parent: Pid, child: Pid) -> Option<i32> {
+        let state = self.get(child).map(|p| p.state);
+        match state {
+            Some(ProcessState::Zombie(status)) => {
+                if self.get(child).map(|p| p.parent) == Some(Some(parent)) {
+                    self.reap(child);
+                    Some(status)
+                } else {
+                    None
+                }
+            }
+            Some(_) => {
+                self.get_mut(parent)?.state = ProcessState::Blocked(BlockReason::WaitChild(child));
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn reap(&mut self, pid: Pid) {
+        if let Some(index) = self.processes.iter().position(|p| p.pid == pid) {
+            let mut process = self.processes.remove(index);
+            process.destroy();
+        }
     }
 
     fn signal(&mut self, pid: Pid, status: i32) -> bool {
-        let Some(process) = self.processes.iter_mut().find(|process| process.pid == pid) else {
-            return false;
-        };
-        process.state = ProcessState::Exited(status);
-        true
+        if self.get(pid).is_some() {
+            self.exit(pid, status);
+            true
+        } else {
+            false
+        }
     }
+}
 
-    fn count(&self) -> usize {
-        self.processes.len()
-    }
-
-    fn fd_count(&self) -> usize {
-        self.processes.iter().map(|process| process.fds.len()).sum()
-    }
-
-    fn cwd_count(&self) -> usize {
-        self.processes
-            .iter()
-            .filter(|process| !process.cwd.is_empty())
-            .count()
-    }
-
-    fn fd_path_checksum(&self) -> usize {
-        self.processes
-            .iter()
-            .flat_map(|process| &process.fds)
-            .map(|fd| fd.fd + fd.path.len())
-            .sum()
+impl Process {
+    fn clone_process(&self) -> Option<Self> {
+        let address_space = self.address_space.clone_full_copy().ok()?;
+        let mut fds = self.fds;
+        let fd_count = self.fd_count;
+        for i in 0..fd_count {
+            if let Ok(dup) = fs::duplicate_fd(fds[i].vfs_fd) {
+                fds[i].vfs_fd = dup;
+            }
+        }
+        Some(Self {
+            pid: self.pid,
+            parent: self.parent,
+            name: self.name.clone(),
+            cwd: self.cwd.clone(),
+            state: ProcessState::Ready,
+            address_space,
+            credentials: self.credentials,
+            fd_count,
+            fds,
+            next_fd: self.next_fd,
+            entry: self.entry,
+            stack_top: self.stack_top,
+            argc: self.argc,
+            argv_ptr: self.argv_ptr,
+            exit_status: None,
+            waiters: Vec::new(),
+            is_user: self.is_user,
+        })
     }
 }
 
@@ -157,7 +429,7 @@ pub fn fork(parent: Pid) -> Option<Pid> {
 }
 
 pub fn exec(pid: Pid, path: &str) -> bool {
-    with_table(|table| table.exec(pid, path))
+    with_table(|table| table.exec(pid, path, &[path]))
 }
 
 pub fn exit(pid: Pid, status: i32) {
@@ -172,13 +444,266 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     with_table(|table| table.signal(pid, status))
 }
 
+pub fn set_current(pid: Pid) {
+    *CURRENT_PID.lock() = Some(pid);
+    let p4 = with_table(|table| {
+        for process in &mut table.processes {
+            if process.pid == pid {
+                process.state = ProcessState::Running;
+            } else if matches!(process.state, ProcessState::Running) {
+                process.state = ProcessState::Ready;
+            }
+        }
+        table.get(pid).map(|p| p.address_space.p4_phys())
+    });
+    if let Some(p4) = p4 {
+        unsafe {
+            paging::switch_cr3(p4);
+        }
+    }
+}
+
+pub fn clear_current() {
+    *CURRENT_PID.lock() = None;
+    unsafe {
+        paging::switch_cr3(paging::boot_root_table() as usize);
+    }
+}
+
+pub fn current_pid() -> Option<Pid> {
+    *CURRENT_PID.lock()
+}
+
+pub fn with_current<T>(f: impl FnOnce(&mut Process) -> T) -> Option<T> {
+    let pid = current_pid()?;
+    Some(with_table(|table| {
+        let process = table.get_mut(pid).expect("current process missing");
+        f(process)
+    }))
+}
+
+pub fn with_current_read<T>(f: impl FnOnce(&Process) -> T) -> Option<T> {
+    let pid = current_pid()?;
+    Some(with_table(|table| {
+        let process = table.get(pid).expect("current process missing");
+        f(process)
+    }))
+}
+
+pub fn read_user(addr: usize, len: usize) -> Option<&'static [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    with_current_read(|p| {
+        if !p.allows(addr, len) {
+            return None;
+        }
+        Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
+    })?
+}
+
+pub fn write_user_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+    with_current(|p| {
+        if !p.allows(addr, len) {
+            return None;
+        }
+        Some(unsafe { slice::from_raw_parts_mut(addr as *mut u8, len) })
+    })?
+}
+
+pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        let vfs_fd = fs::open_read_as(path, p.credentials)?;
+        Ok(p.push_fd(vfs_fd))
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        let vfs_fd = fs::create_file_as(path, p.credentials)?;
+        Ok(p.push_fd(vfs_fd))
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_vfs_fd(user_fd: usize) -> Option<usize> {
+    with_current_read(|p| p.lookup_fd(user_fd)).flatten()
+}
+
+pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| {
+        let Some(vfs_fd) = p.remove_fd(user_fd) else {
+            return Err(fs::vfs::VfsError::BadFd);
+        };
+        fs::close(vfs_fd)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
+        let dup = fs::duplicate_fd(vfs_fd)?;
+        Ok(p.push_fd(dup))
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        if user_fd == target_fd {
+            if p.lookup_fd(user_fd).is_some() {
+                return Ok(target_fd);
+            }
+            return Err(fs::vfs::VfsError::BadFd);
+        }
+        let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
+        let dup = fs::duplicate_fd(vfs_fd)?;
+        let old = p.replace_fd(target_fd, dup);
+        if let Some(old) = old {
+            fs::close(old)?;
+        }
+        Ok(target_fd)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::mkdir_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::unlink_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| fs::chmod_as(path, mode, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
+    let user_fault = error_code & 0x4 != 0;
+    let present = error_code & 0x1 != 0;
+
+    if !user_fault {
+        return false;
+    }
+
+    with_current(|process| {
+        if present {
+            return false;
+        }
+        if fault_addr >= process.address_space.stack_bottom
+            && fault_addr < process.address_space.stack_top
+        {
+            process
+                .address_space
+                .grow_stack(fault_addr)
+                .is_ok()
+        } else if fault_addr >= paging::USER_HEAP_START
+            && fault_addr < process.address_space.heap_break + FRAME_SIZE
+        {
+            process
+                .address_space
+                .grow_heap(process.address_space.heap_break + FRAME_SIZE)
+                .is_ok()
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+pub fn wake_io_waiters() {
+    with_table(|table| {
+        for process in &mut table.processes {
+            if matches!(process.state, ProcessState::Blocked(BlockReason::WaitIo)) {
+                process.state = ProcessState::Ready;
+            }
+        }
+    });
+}
+
+pub fn block_current(reason: BlockReason) {
+    if let Some(pid) = current_pid() {
+        with_table(|table| {
+            if let Some(process) = table.get_mut(pid) {
+                process.state = ProcessState::Blocked(reason);
+            }
+        });
+    }
+}
+
+pub fn wait_pid_blocking(parent: Pid, child: Pid) -> Option<i32> {
+    loop {
+        if let Some(status) = wait(parent, child) {
+            return Some(status);
+        }
+        block_current(BlockReason::WaitChild(child));
+        crate::arch::x86_64::instructions::halt();
+    }
+}
+
+pub fn kill_current(status: i32) {
+    if let Some(pid) = current_pid() {
+        exit(pid, status);
+    }
+}
+
 pub fn stats() -> ProcessStats {
     with_table(|table| ProcessStats {
-        process_count: table.count(),
-        fd_count: table.fd_count(),
-        cwd_count: table.cwd_count(),
-        fd_path_checksum: table.fd_path_checksum(),
+        process_count: table.processes.len(),
+        fd_count: table.processes.iter().map(|p| p.fd_count).sum(),
+        cwd_count: table
+            .processes
+            .iter()
+            .filter(|p| !p.cwd.is_empty())
+            .count(),
+        fd_path_checksum: table.processes.iter().map(|p| p.fd_count + p.pid as usize).sum(),
     })
+}
+
+fn map_elf_segment(address_space: &mut AddressSpace, segment: elf::SegmentView<'_>) {
+    address_space.activate();
+    let segment_start = segment.vaddr;
+    let segment_end = segment_start
+        .checked_add(segment.mem_size)
+        .expect("ELF segment end overflow");
+    if segment_start == segment_end {
+        return;
+    }
+
+    let file_end = segment_start
+        .checked_add(segment.file_bytes.len())
+        .expect("ELF file segment end overflow");
+    let map_start = paging::align_down(segment_start, FRAME_SIZE);
+    let map_end = paging::align_up(segment_end, FRAME_SIZE);
+
+    for page in (map_start..map_end).step_by(FRAME_SIZE) {
+        let frame =
+            frame_allocator::allocate_frame().expect("ELF segment frame allocation failed");
+        unsafe {
+            ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+            let page_end = page + FRAME_SIZE;
+            let copy_start = cmp::max(page, segment_start);
+            let copy_end = cmp::min(page_end, file_end);
+            if copy_start < copy_end {
+                let source_offset = copy_start - segment_start;
+                let target_offset = copy_start - page;
+                ptr::copy_nonoverlapping(
+                    segment.file_bytes.as_ptr().add(source_offset),
+                    (frame.start + target_offset) as *mut u8,
+                    copy_end - copy_start,
+                );
+            }
+            address_space
+                .map_owned_user_page(page, frame, PageFlags::USER_WRITABLE)
+                .expect("ELF segment map failed");
+        }
+    }
 }
 
 fn self_test() {
@@ -187,10 +712,12 @@ fn self_test() {
     if !exec(child, "/bin/echo") {
         panic!("exec self-test failed");
     }
+    clear_current();
     exit(child, 0);
     if wait(parent, child) != Some(0) {
         panic!("wait self-test failed");
     }
+    clear_current();
     crate::println!("Process model self-test passed: fork exec wait.");
 }
 
@@ -209,3 +736,58 @@ pub struct ProcessStats {
     pub cwd_count: usize,
     pub fd_path_checksum: usize,
 }
+
+// Re-export for userspace integration
+pub fn prepare_user_run(
+    pid: Pid,
+    path: &str,
+    args: &[&str],
+    stdin_vfs_fd: Option<usize>,
+    stdout_vfs_fd: Option<usize>,
+    credentials: Credentials,
+) -> Option<(u64, usize, usize, usize)> {
+    with_table(|table| {
+        if !table.exec(pid, path, args) {
+            return None;
+        }
+        let process = table.get_mut(pid)?;
+        process.credentials = credentials;
+        if let Some(fd) = stdin_vfs_fd {
+            process.set_fd(0, fd);
+        }
+        if let Some(fd) = stdout_vfs_fd {
+            process.set_fd(1, fd);
+            process.set_fd(2, fd);
+        }
+        Some((process.entry, process.stack_top, process.argc, process.argv_ptr))
+    })
+}
+
+pub fn finish_user_run(pid: Pid) -> (i32, usize) {
+    let unmapped = with_table(|table| {
+        table.get(pid).map(|p| p.address_space.mapping_count()).unwrap_or(0)
+    });
+    clear_current();
+    (0, unmapped)
+}
+
+pub fn brk(new_break: usize) -> Result<usize, ()> {
+    with_current(|p| {
+        p.address_space.grow_heap(new_break).map_err(|_| ())?;
+        Ok(p.address_space.heap_break)
+    })
+    .ok_or(())?
+}
+
+pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, Option<i32>)> {
+    with_table(|table| {
+        let p = table.get(pid)?;
+        Some((
+            p.name.clone(),
+            p.state,
+            p.parent,
+            p.exit_status,
+        ))
+    })
+}
+

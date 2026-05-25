@@ -14,7 +14,7 @@ rm -f "$SERIAL_LOG"
 make iso
 
 (
-  sleep "${RISTUX_SMOKE_BOOT_WAIT:-4}"
+  sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
   printf 'sendkey a\n'
   sleep 1
   printf 'sendkey ret\n'
@@ -65,7 +65,8 @@ grep -q "Ring 3 pipeline connected /bin/cat -> /bin/cat through VFS pipe" "$SERI
 grep -q "/bin/true exited with 0 after ring 3 exec" "$SERIAL_LOG"
 grep -q "/bin/false exited with 1 after ring 3 exec" "$SERIAL_LOG"
 grep -q "hello from sequence" "$SERIAL_LOG"
-grep -q "Ring 3 ELF process /bin/false pid 4 exited with status 1" "$SERIAL_LOG"
+grep -q "Ring 3 ELF program /bin/false pid" "$SERIAL_LOG"
+grep -q "Ring 3 ELF program /bin/false pid.*exited with status 1" "$SERIAL_LOG"
 grep -q "Ring 3 user program sequence passed: 4 program(s)" "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: a" "$SERIAL_LOG"

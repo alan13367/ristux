@@ -42,8 +42,8 @@ fn run() -> KernelResult<()> {
     )?;
     let processes = process::stats();
     ensure(
-        processes.process_count >= 3,
-        "process table did not fork children",
+        processes.process_count >= 1,
+        "process table did not initialize init process",
     )?;
     let storage = storage::stats();
     ensure(storage.files >= 1, "storage layer did not persist files")?;

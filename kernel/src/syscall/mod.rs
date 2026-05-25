@@ -2,6 +2,7 @@ use core::{fmt, str};
 
 use crate::{
     fs::vfs::VfsError,
+    process,
     userspace::{self, ProcessState, UserProcess},
 };
 
@@ -26,6 +27,14 @@ pub const SYS_KILL: u64 = 18;
 pub const SYS_UDP_BIND: u64 = 19;
 pub const SYS_UDP_SEND: u64 = 20;
 pub const SYS_UDP_RECV: u64 = 21;
+pub const SYS_WAITPID: u64 = 22;
+pub const SYS_BRK: u64 = 23;
+pub const SYS_LSEEK: u64 = 24;
+pub const SYS_STAT: u64 = 25;
+pub const SYS_SIGACTION: u64 = 26;
+pub const SYS_SIGRETURN: u64 = 27;
+
+const EAGAIN: i64 = -11;
 
 const EACCES: i64 = -13;
 const EBADF: i64 = -9;
@@ -117,18 +126,26 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         }
         SYS_EXIT => {
             let status = frame.rdi as i32;
-            let exit = userspace::finish_active_exit(status);
+            let pid = process::current_pid().unwrap_or(0);
+            process::exit(pid, status);
+            let unmapped = process::finish_user_run(pid).1;
             crate::println!(
-                "Ring 3 ELF process {} pid {} exited with status {} from rip {:#x}; unmapped {} page(s).",
-                exit.name,
-                exit.pid,
-                exit.status,
+                "Ring 3 ELF process pid {} exited with status {} from rip {:#x}; unmapped {} page(s).",
+                pid,
+                status,
                 frame.rip,
-                exit.unmapped_pages
+                unmapped
             );
+            userspace::record_user_exit(pid, status, unmapped);
             userspace::return_from_active_user();
         }
-        SYS_YIELD | SYS_SLEEP => {
+        SYS_YIELD => {
+            crate::task::yield_current();
+            frame.rax = 0;
+        }
+        SYS_SLEEP => {
+            let tick = crate::arch::x86_64::interrupts::timer_ticks();
+            crate::task::sleep_current(tick, frame.rdi);
             frame.rax = 0;
         }
         SYS_GETPID => {
@@ -234,6 +251,36 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Ok(read) => read,
                 Err(err) => err.0 as u64,
             };
+        }
+        SYS_WAITPID => {
+            let parent = process::current_pid().unwrap_or(0);
+            let child = frame.rsi as process::Pid;
+            frame.rax = process::wait_pid_blocking(parent, child).unwrap_or(-1) as u64;
+        }
+        SYS_BRK => {
+            frame.rax = match process::brk(frame.rdi as usize) {
+                Ok(addr) => addr as u64,
+                Err(()) => u64::MAX,
+            };
+        }
+        SYS_LSEEK => {
+            frame.rax = match sys_lseek_active(
+                frame.rdi as usize,
+                frame.rsi as isize,
+                frame.rdx as u32,
+            ) {
+                Ok(offset) => offset as u64,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_STAT => {
+            frame.rax = match sys_stat_active(frame.rdi as usize, frame.rsi as usize) {
+                Ok(value) => value,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_SIGACTION | SYS_SIGRETURN => {
+            frame.rax = 0;
         }
         _ => {
             crate::println!(
@@ -400,15 +447,28 @@ fn sys_udp_send_active(
 
 fn sys_udp_recv_active(socket: usize, ptr: usize, len: usize) -> SyscallResult {
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
-    Ok(crate::net::udp_recv(socket, buffer).unwrap_or(0) as u64)
+    loop {
+        if let Some(read) = crate::net::udp_recv(socket, buffer) {
+            return Ok(read as u64);
+        }
+        process::block_current(process::BlockReason::WaitIo);
+        crate::arch::x86_64::instructions::halt();
+    }
 }
 
 fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
     let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
     let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
-    crate::fs::read(vfs_fd, buffer)
-        .map(|read| read as u64)
-        .map_err(map_vfs_error)
+    loop {
+        match crate::fs::read(vfs_fd, buffer) {
+            Ok(read) => return Ok(read as u64),
+            Err(crate::fs::vfs::VfsError::WouldBlock) => {
+                process::block_current(process::BlockReason::WaitIo);
+                crate::arch::x86_64::instructions::halt();
+            }
+            Err(err) => return Err(map_vfs_error(err)),
+        }
+    }
 }
 
 fn sys_close_active(fd: usize) -> SyscallResult {
@@ -479,6 +539,24 @@ fn read_user_cstr<'a>(ptr: usize, buffer: &'a mut [u8]) -> Result<&'a str, Sysca
     Err(SyscallError(EFAULT))
 }
 
+fn sys_lseek_active(fd: usize, offset: isize, whence: u32) -> SyscallResult {
+    let vfs_fd = userspace::active_user_vfs_fd(fd).ok_or(SyscallError(EBADF))?;
+    crate::fs::lseek(vfs_fd, offset, whence)
+        .map(|offset| offset as u64)
+        .map_err(map_vfs_error)
+}
+
+fn sys_stat_active(path_ptr: usize, stat_ptr: usize) -> SyscallResult {
+    let mut path = [0u8; 128];
+    let path = read_user_cstr(path_ptr, &mut path)?;
+    let stat = crate::fs::stat(path).map_err(map_vfs_error)?;
+    let buffer = userspace::active_user_write_buffer(stat_ptr, 18).ok_or(SyscallError(EFAULT))?;
+    buffer[0..2].copy_from_slice(&stat.mode.to_le_bytes());
+    buffer[2..10].copy_from_slice(&stat.size.to_le_bytes());
+    buffer[10..18].copy_from_slice(&stat.mtime.to_le_bytes());
+    Ok(0)
+}
+
 fn map_vfs_error(err: VfsError) -> SyscallError {
     match err {
         VfsError::NotFound => SyscallError(ENOENT),
@@ -486,6 +564,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
         VfsError::NotFile | VfsError::Utf8 => SyscallError(EFAULT),
         VfsError::AlreadyExists => SyscallError(EEXIST),
         VfsError::PermissionDenied => SyscallError(EACCES),
+        VfsError::WouldBlock => SyscallError(EAGAIN),
     }
 }
 

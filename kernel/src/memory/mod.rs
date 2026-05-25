@@ -1,3 +1,4 @@
+pub mod address_space;
 pub mod frame_allocator;
 pub mod heap;
 pub mod paging;
@@ -16,6 +17,8 @@ pub fn init(boot_info: &BootInfo) {
     paging::init();
     heap::init();
     heap::self_test();
+    crate::sync::spinlock::self_test();
+    address_space::self_test();
 }
 
 pub fn stats() -> MemoryStats {

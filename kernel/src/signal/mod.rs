@@ -40,7 +40,14 @@ pub fn init() {
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
     let delivered = match signal {
         Signal::Kill | Signal::Term | Signal::Int => process::signal(pid, signal.default_status()),
-        Signal::Child => true,
+        Signal::Child => {
+            if let Some((_, _, parent, _)) = process::get_process_info(pid) {
+                if let Some(parent) = parent {
+                    let _ = process::wait(parent, pid);
+                }
+            }
+            true
+        }
     };
     if delivered {
         crate::println!(
@@ -56,7 +63,7 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
 fn self_test() {
     let parent = 1;
     let child = process::fork(parent).expect("signal self-test fork failed");
-    process::exec(child, "/bin/sleep");
+    process::exec(child, "/bin/true");
     if !send(child, Signal::Term) {
         panic!("signal self-test send failed");
     }

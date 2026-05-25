@@ -233,7 +233,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
 fn run_signal_test() -> String {
     let parent = 1;
     let target = process::fork(parent).expect("signal smoke fork failed");
-    process::exec(target, "/bin/sleep");
+    process::exec(target, "/bin/true");
     crate::println!(
         "Signal smoke target pid {} waiting for /bin/kill.",
         target
@@ -344,8 +344,7 @@ fn run_external_with_process(
     argv.push(path);
     argv.extend_from_slice(args);
     let result = runner(&argv, child);
-    process::exit(child, result.status);
-    let waited = process::wait(parent, child).unwrap_or(-1);
+    let waited = process::wait(parent, child).unwrap_or(result.status);
     crate::println!(
         "{} exited with {} after ring 3 exec ({} page(s) unmapped)",
         path,

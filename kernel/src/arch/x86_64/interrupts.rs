@@ -21,12 +21,13 @@ const PIT_BASE_FREQUENCY: u32 = 1_193_182;
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 pub fn init() {
-    instructions::without_interrupts(|| unsafe {
+    instructions::disable_interrupts();
+    unsafe {
         remap_pic();
         init_pit(config::PIT_TARGET_HZ);
         unmask_irq(0);
         unmask_irq(1);
-    });
+    }
 
     instructions::enable_interrupts();
     crate::println!("PIC remapped; PIT and keyboard interrupts enabled.");
@@ -47,6 +48,7 @@ pub fn keyboard_interrupt() {
     let scancode = unsafe { port::inb(0x60) };
     crate::drivers::keyboard::push_scancode(scancode);
     crate::tty::input_scancode(scancode);
+    crate::process::wake_io_waiters();
     crate::println!("keyboard scancode {:#04x}", scancode);
     unsafe {
         end_of_interrupt(1);

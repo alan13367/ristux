@@ -56,3 +56,33 @@ listdir:
     mov $11, %rax
     int $0x80
     ret
+
+.global brk
+.type brk, @function
+brk:
+    mov $23, %rax
+    int $0x80
+    ret
+
+.global waitpid
+.type waitpid, @function
+waitpid:
+    mov $22, %rax
+    mov %rdi, %rsi
+    xor %rdi, %rdi
+    int $0x80
+    ret
+
+.global lseek
+.type lseek, @function
+lseek:
+    mov $24, %rax
+    int $0x80
+    ret
+
+.global stat
+.type stat, @function
+stat:
+    mov $25, %rax
+    int $0x80
+    ret

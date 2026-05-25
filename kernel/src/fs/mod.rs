@@ -55,14 +55,20 @@ pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
     vfs::read_file(path)
 }
 
-pub fn with_file_data<T>(path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
-    vfs::with_file_data(path, f)
-}
-
 pub fn list_paths(prefix: &str) -> alloc::vec::Vec<alloc::string::String> {
     vfs::list_paths(prefix)
 }
 
 pub fn write_file(path: &str, data: &[u8]) {
     vfs::write_file(path, data);
+}
+
+pub use vfs::Stat;
+
+pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, vfs::VfsError> {
+    vfs::lseek(fd, offset, whence)
+}
+
+pub fn stat(path: &str) -> Result<Stat, vfs::VfsError> {
+    vfs::stat(path)
 }

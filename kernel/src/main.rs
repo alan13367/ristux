@@ -76,8 +76,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     storage::init();
     shell::init();
     task::init();
-    smp::init(boot_info.acpi_rsdp());
-    testing::run_kernel_self_tests();
+    userspace::run_userland_program_sequence();
 
     arch::x86_64::interrupts::init();
     println!(
@@ -85,7 +84,10 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
         arch::x86_64::interrupts::timer_ticks()
     );
 
-    userspace::enter_userland_sequence()
+    smp::init(boot_info.acpi_rsdp());
+    testing::run_kernel_self_tests();
+
+    crate::halt_loop();
 }
 
 #[inline(always)]

@@ -1,7 +1,9 @@
 pub mod framebuffer;
 pub mod keyboard;
+pub mod pci;
 pub mod serial;
 pub mod vga;
+pub mod virtio_net;
 
 pub struct DriverInfo {
     pub name: &'static str,
@@ -24,6 +26,10 @@ const REGISTERED_DRIVERS: &[DriverInfo] = &[
     DriverInfo {
         name: "framebuffer",
         kind: "graphics-output",
+    },
+    DriverInfo {
+        name: "virtio-net",
+        kind: "network",
     },
 ];
 
