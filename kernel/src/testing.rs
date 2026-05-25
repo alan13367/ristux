@@ -1,7 +1,7 @@
 use crate::{
     drivers, dynamic_linker,
     error::{KernelError, KernelResult},
-    memory, net, process, storage, task, time, userspace,
+    memory, net, process, smp, storage, task, time, userspace,
 };
 
 pub fn run_kernel_self_tests() {
@@ -53,6 +53,12 @@ fn run() -> KernelResult<()> {
     ensure(
         linker.libraries_loaded >= 1 && linker.relocations_applied >= 4,
         "dynamic linker did not load and relocate shared objects",
+    )?;
+    let smp = smp::stats();
+    ensure(smp.started_cpus >= 2, "SMP did not start application CPUs")?;
+    ensure(
+        smp.shared_lock_audit_passed,
+        "SMP lock audit did not pass",
     )?;
 
     crate::println!(
@@ -114,6 +120,13 @@ fn run() -> KernelResult<()> {
         linker.libraries_loaded,
         linker.symbols_exported,
         linker.relocations_applied
+    );
+    crate::println!(
+        "SMP stats: {} CPU(s), {} started, {} IPI(s), {} dispatch(es)",
+        smp.cpu_count,
+        smp.started_cpus,
+        smp.ipis_sent,
+        smp.scheduled_tasks
     );
 
     Ok(())
