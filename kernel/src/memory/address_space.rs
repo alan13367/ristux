@@ -10,8 +10,8 @@ unsafe impl Send for AddressSpace {}
 
 pub struct AddressSpace {
     p4_frame: Frame,
-    p4: *mut PageTable,
-    user_mappings: Vec<(usize, Frame)>,
+    pub p4: *mut PageTable,
+    pub user_mappings: Vec<(usize, Frame)>,
     pub heap_break: usize,
     pub stack_bottom: usize,
     pub stack_top: usize,
@@ -19,8 +19,7 @@ pub struct AddressSpace {
 
 impl AddressSpace {
     pub fn new_kernel_clone() -> Result<Self, PagingError> {
-        let boot = paging::boot_root_table();
-        let p4_frame = unsafe { paging::clone_p4_table(boot)? };
+        let p4_frame = unsafe { paging::create_p4_table()? };
         Ok(Self {
             p4_frame,
             p4: p4_frame.start as *mut PageTable,
@@ -84,16 +83,24 @@ impl AddressSpace {
             if frame.start != phys {
                 panic!("address space unmap frame mismatch");
             }
-            frame_allocator::free_frame(frame);
+            if super::refcount::decrement(frame.start) == 0 {
+                frame_allocator::free_frame(frame);
+            }
         } else {
-            frame_allocator::free_frame(Frame { start: phys });
+            if super::refcount::decrement(phys) == 0 {
+                frame_allocator::free_frame(Frame { start: phys });
+            }
         }
+        crate::smp::send_tlb_shootdown();
         Ok(())
     }
 
     pub fn destroy(mut self) {
         while let Some((virt, _)) = self.user_mappings.pop() {
             let _ = self.unmap_user_page(virt);
+        }
+        unsafe {
+            paging::free_user_page_tables(self.p4);
         }
         frame_allocator::free_frame(self.p4_frame);
     }
@@ -117,17 +124,21 @@ impl AddressSpace {
     pub fn clone_full_copy(&self) -> Result<Self, PagingError> {
         let mut clone = Self::new_kernel_clone()?;
         for &(virt, ref frame) in &self.user_mappings {
-            let new_frame =
-                frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
             unsafe {
-                ptr::copy_nonoverlapping(
-                    frame.start as *const u8,
-                    new_frame.start as *mut u8,
-                    FRAME_SIZE,
-                );
-                clone.map_user_page(virt, new_frame.start, PageFlags::USER_WRITABLE)?;
+                if let Some(pte) = paging::get_pte_mut(self.p4, virt) {
+                    let mut flags = *pte & !paging::ADDR_MASK;
+                    if flags & paging::WRITABLE_FLAG != 0 {
+                        flags &= !paging::WRITABLE_FLAG;
+                        flags |= paging::COW_FLAG;
+                        *pte = (*pte & paging::ADDR_MASK) | flags;
+                        paging::flush(virt);
+                        crate::smp::send_tlb_shootdown();
+                    }
+                    clone.map_user_page(virt, frame.start, PageFlags::from_raw(flags))?;
+                    super::refcount::increment(frame.start);
+                }
             }
-            clone.user_mappings.push((virt, new_frame));
+            clone.user_mappings.push((virt, *frame));
         }
         clone.heap_break = self.heap_break;
         clone.stack_bottom = self.stack_bottom;

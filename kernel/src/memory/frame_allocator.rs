@@ -52,20 +52,23 @@ impl FrameAllocator {
             for entry in memory_map {
                 let start = entry.base_addr as usize;
                 let end = start.saturating_add(entry.length as usize);
-                self.max_frame = self.max_frame.max(frame_index(align_down(end, FRAME_SIZE)));
 
                 if entry.is_available() {
+                    self.max_frame = self.max_frame.max(frame_index(align_down(end, FRAME_SIZE)));
                     self.mark_range(start, end, false);
                 }
             }
         }
 
-        let kernel_start = core::ptr::addr_of!(__kernel_start) as usize;
-        let kernel_end = core::ptr::addr_of!(__kernel_end) as usize;
+        let mut kernel_phys_end = core::ptr::addr_of!(__kernel_end) as usize;
+        if kernel_phys_end >= 0xffffffff80000000 {
+            kernel_phys_end -= 0xffffffff80000000;
+        }
+
         let (boot_start, boot_end) = boot_info.range();
 
         self.mark_range(0, 0x100000, true);
-        self.mark_range(kernel_start, kernel_end, true);
+        self.mark_range(0x100000, kernel_phys_end, true);
         self.mark_range(boot_start, boot_end, true);
 
         for module in boot_info.modules() {
@@ -183,7 +186,11 @@ pub fn init(boot_info: &BootInfo) {
 }
 
 pub fn allocate_frame() -> Option<Frame> {
-    FRAME_ALLOCATOR.lock().allocate()
+    let frame = FRAME_ALLOCATOR.lock().allocate();
+    if let Some(ref f) = frame {
+        super::refcount::set(f.start, 1);
+    }
+    frame
 }
 
 pub fn free_frame(frame: Frame) {
@@ -192,6 +199,10 @@ pub fn free_frame(frame: Frame) {
 
 pub fn stats() -> Stats {
     FRAME_ALLOCATOR.lock().stats()
+}
+
+pub fn max_frame() -> usize {
+    FRAME_ALLOCATOR.lock().max_frame
 }
 
 #[allow(dead_code)]

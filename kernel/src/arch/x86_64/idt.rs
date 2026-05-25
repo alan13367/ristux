@@ -160,6 +160,10 @@ pub fn init() {
             super::interrupts::KEYBOARD_VECTOR as usize,
             keyboard_interrupt_handler as *const () as u64,
         );
+        (*idt).set_handler(
+            0xf0,
+            tlb_shootdown_interrupt_handler as *const () as u64,
+        );
 
         let pointer = DescriptorTablePointer {
             limit: (mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
@@ -264,4 +268,13 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     super::interrupts::keyboard_interrupt();
+}
+
+extern "x86-interrupt" fn tlb_shootdown_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    unsafe {
+        let cr3: usize;
+        asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+        asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+        crate::smp::signal_eoi();
+    }
 }

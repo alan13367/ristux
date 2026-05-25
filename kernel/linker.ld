@@ -6,7 +6,6 @@ KERNEL_LOAD_ADDR = 1M;
 SECTIONS
 {
     . = KERNEL_LOAD_ADDR;
-    __kernel_start = .;
 
     .boot ALIGN(8) :
     {
@@ -16,22 +15,31 @@ SECTIONS
         KEEP(*(.ap_trampoline))
     }
 
-    .text ALIGN(4K) :
+    .bss.boot ALIGN(4K) :
+    {
+        *(.bss.boot)
+    }
+
+    /* Transition VMA to higher-half, keeping LMA contiguous */
+    . = . + 0xffffffff80000000;
+    __kernel_start = .;
+
+    .text ALIGN(4K) : AT(ADDR(.text) - 0xffffffff80000000)
     {
         *(.text .text.*)
     }
 
-    .rodata ALIGN(4K) :
+    .rodata ALIGN(4K) : AT(ADDR(.rodata) - 0xffffffff80000000)
     {
         *(.rodata .rodata.*)
     }
 
-    .data ALIGN(4K) :
+    .data ALIGN(4K) : AT(ADDR(.data) - 0xffffffff80000000)
     {
         *(.data .data.*)
     }
 
-    .bss ALIGN(4K) :
+    .bss ALIGN(4K) : AT(ADDR(.bss) - 0xffffffff80000000)
     {
         *(COMMON)
         *(.bss .bss.*)

@@ -587,6 +587,62 @@ pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
 pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     let user_fault = error_code & 0x4 != 0;
     let present = error_code & 0x1 != 0;
+    let write_fault = error_code & 0x2 != 0;
+
+    // Handle Copy-on-Write faults first
+    if present && write_fault && fault_addr < 0x8000_0000 {
+        let cow_handled = with_current(|process| {
+            unsafe {
+                if let Some(pte) = paging::get_pte_mut(process.address_space.p4, fault_addr) {
+                    if *pte & paging::COW_FLAG != 0 {
+                        let old_frame_phys = (*pte & paging::ADDR_MASK) as usize;
+                        let ref_count = crate::memory::refcount::get(old_frame_phys);
+                        if ref_count == 1 {
+                            let mut flags = *pte & !paging::ADDR_MASK;
+                            flags |= paging::WRITABLE_FLAG;
+                            flags &= !paging::COW_FLAG;
+                            *pte = (*pte & paging::ADDR_MASK) | flags;
+                            paging::flush(fault_addr);
+                            crate::smp::send_tlb_shootdown();
+                            return true;
+                        } else {
+                            if let Some(new_frame) = frame_allocator::allocate_frame() {
+                                let fault_page_addr = paging::align_down(fault_addr, FRAME_SIZE);
+                                ptr::copy_nonoverlapping(
+                                    fault_page_addr as *const u8,
+                                    new_frame.start as *mut u8,
+                                    FRAME_SIZE,
+                                );
+                                crate::memory::refcount::decrement(old_frame_phys);
+                                let mut flags = *pte & !paging::ADDR_MASK;
+                                flags |= paging::WRITABLE_FLAG;
+                                flags &= !paging::COW_FLAG;
+                                *pte = new_frame.start as u64 | flags;
+                                paging::flush(fault_addr);
+                                crate::smp::send_tlb_shootdown();
+
+                                if let Some(pos) = process
+                                    .address_space
+                                    .user_mappings
+                                    .iter()
+                                    .position(|(v, _)| *v == fault_page_addr)
+                                {
+                                    process.address_space.user_mappings[pos] = (fault_page_addr, new_frame);
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        })
+        .unwrap_or(false);
+
+        if cow_handled {
+            return true;
+        }
+    }
 
     if !user_fault {
         return false;

@@ -7,7 +7,7 @@ const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
 const USER: u64 = 1 << 2;
 const HUGE_PAGE: u64 = 1 << 7;
-const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+pub const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
 
 #[repr(C, align(4096))]
 pub struct PageTable {
@@ -24,7 +24,14 @@ pub struct PageFlags(u64);
 impl PageFlags {
     pub const WRITABLE: Self = Self(PRESENT | WRITABLE);
     pub const USER_WRITABLE: Self = Self(PRESENT | WRITABLE | USER);
+
+    pub fn from_raw(flags: u64) -> Self {
+        Self(flags)
+    }
 }
+
+pub const WRITABLE_FLAG: u64 = WRITABLE;
+pub const COW_FLAG: u64 = 1 << 9;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PagingError {
@@ -128,44 +135,74 @@ pub unsafe fn unmap_page_at(p4: *mut PageTable, virt: usize) -> Result<usize, Pa
     Ok(phys)
 }
 
-pub unsafe fn clone_p4_table(source: *mut PageTable) -> Result<Frame, PagingError> { unsafe {
-    deep_clone_p4_table(source)
+pub unsafe fn get_pte_mut(p4: *mut PageTable, virt: usize) -> Option<&'static mut u64> { unsafe {
+    let p3_entry = &mut (*p4).entries[p4_index(virt)];
+    if *p3_entry & PRESENT == 0 || *p3_entry & HUGE_PAGE != 0 {
+        return None;
+    }
+    let p3 = (*p3_entry & ADDR_MASK) as *mut PageTable;
+    let p2_entry = &mut (*p3).entries[p3_index(virt)];
+    if *p2_entry & PRESENT == 0 || *p2_entry & HUGE_PAGE != 0 {
+        return None;
+    }
+    let p2 = (*p2_entry & ADDR_MASK) as *mut PageTable;
+    let p1_entry = &mut (*p2).entries[p2_index(virt)];
+    if *p1_entry & PRESENT == 0 || *p1_entry & HUGE_PAGE != 0 {
+        return None;
+    }
+    let p1 = (*p1_entry & ADDR_MASK) as *mut PageTable;
+    Some(&mut (*p1).entries[p1_index(virt)])
 }}
 
-unsafe fn deep_clone_p4_table(source: *mut PageTable) -> Result<Frame, PagingError> {
-    let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
-    let dest = frame.start as *mut PageTable;
-    unsafe {
-        ptr::write_bytes(dest as *mut u8, 0, FRAME_SIZE);
-        for index in 0..512 {
-            clone_table_entry(&(*source).entries[index], &mut (*dest).entries[index], 3)?;
+pub unsafe fn create_p4_table() -> Result<Frame, PagingError> { unsafe {
+    let p4_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+    let p4 = p4_frame.start as *mut PageTable;
+    ptr::write_bytes(p4 as *mut u8, 0, FRAME_SIZE);
+
+    let boot = boot_root_table();
+    // Share kernel mapping at index 511
+    (*p4).entries[511] = (*boot).entries[511];
+
+    // Create private P3 table for index 0 to separate userspace
+    let p3_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+    let p3 = p3_frame.start as *mut PageTable;
+    ptr::write_bytes(p3 as *mut u8, 0, FRAME_SIZE);
+
+    // Share identity mapping at index 0 of the boot P3 table
+    let boot_p3 = ((*boot).entries[0] & ADDR_MASK) as *mut PageTable;
+    (*p3).entries[0] = (*boot_p3).entries[0];
+
+    // Connect P3 to P4
+    (*p4).entries[0] = p3_frame.start as u64 | PRESENT | WRITABLE | USER;
+
+    Ok(p4_frame)
+}}
+
+pub unsafe fn free_user_page_tables(p4: *mut PageTable) { unsafe {
+    let p4_entry = (*p4).entries[0];
+    if p4_entry & PRESENT == 0 {
+        return;
+    }
+    let p3 = (p4_entry & ADDR_MASK) as *mut PageTable;
+    for i in 1..512 {
+        let p3_entry = (*p3).entries[i];
+        if p3_entry & PRESENT == 0 || p3_entry & HUGE_PAGE != 0 {
+            continue;
         }
+        let p2 = (p3_entry & ADDR_MASK) as *mut PageTable;
+        for j in 0..512 {
+            let p2_entry = (*p2).entries[j];
+            if p2_entry & PRESENT == 0 || p2_entry & HUGE_PAGE != 0 {
+                continue;
+            }
+            let p1 = (p2_entry & ADDR_MASK) as *mut PageTable;
+            frame_allocator::free_frame(Frame { start: p1 as usize });
+        }
+        frame_allocator::free_frame(Frame { start: p2 as usize });
     }
-    Ok(frame)
-}
-
-unsafe fn clone_table_entry(src: &u64, dst: &mut u64, level: u32) -> Result<(), PagingError> { unsafe {
-    if *src & PRESENT == 0 {
-        return Ok(());
-    }
-
-    if level == 0 || *src & HUGE_PAGE != 0 {
-        *dst = *src;
-        return Ok(());
-    }
-
-    let src_table = (*src & ADDR_MASK) as *mut PageTable;
-    let new_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
-    let dest_table = new_frame.start as *mut PageTable;
-    ptr::write_bytes(dest_table as *mut u8, 0, FRAME_SIZE);
-
-    for index in 0..512 {
-        clone_table_entry(&(*src_table).entries[index], &mut (*dest_table).entries[index], level - 1)?;
-    }
-
-    *dst = new_frame.start as u64 | (*src & !ADDR_MASK);
-    Ok(())
+    frame_allocator::free_frame(Frame { start: p3 as usize });
 }}
+
 
 fn self_test() {
     const TEST_VIRT: usize = 0x4000_0000;
@@ -261,7 +298,7 @@ unsafe fn next_table(_p4: *mut PageTable, entry: &mut u64) -> Result<*mut PageTa
     Ok((*entry & ADDR_MASK) as *mut PageTable)
 }
 
-unsafe fn flush(virt: usize) {
+pub unsafe fn flush(virt: usize) {
     unsafe {
         core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags));
     }

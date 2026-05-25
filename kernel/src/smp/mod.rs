@@ -636,6 +636,28 @@ fn apic_write_icr(local_apic: usize, apic_id: u32, low: u32) {
     wait_icr_idle(local_apic);
 }
 
+pub fn send_tlb_shootdown() {
+    let addr = {
+        let guard = SMP.lock();
+        guard.as_ref().map(|s| s.local_apic_addr as usize)
+    };
+    if let Some(local_apic) = addr {
+        wait_icr_idle(local_apic);
+        write_u32(local_apic + APIC_ICR_LOW, 0x000c_00f0);
+        wait_icr_idle(local_apic);
+    }
+}
+
+pub fn signal_eoi() {
+    let addr = {
+        let guard = SMP.lock();
+        guard.as_ref().map(|s| s.local_apic_addr as usize)
+    };
+    if let Some(local_apic) = addr {
+        write_u32(local_apic + 0xb0, 0);
+    }
+}
+
 fn wait_icr_idle(local_apic: usize) {
     for _ in 0..100_000 {
         if read_u32(local_apic + APIC_ICR_LOW) & APIC_ICR_DELIVERY_STATUS == 0 {

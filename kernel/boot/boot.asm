@@ -23,9 +23,14 @@ setup_page_tables:
     or eax, 0x3
     mov dword ptr [p4_table], eax
 
+    mov eax, offset p3_kernel_table
+    or eax, 0x3
+    mov dword ptr [p4_table + 511 * 8], eax
+
     mov eax, offset p2_table
     or eax, 0x3
     mov dword ptr [p3_table], eax
+    mov dword ptr [p3_kernel_table + 510 * 8], eax
 
     mov ecx, 0
 
@@ -100,6 +105,8 @@ boot_p4_table:
 p4_table:
     .skip 4096
 p3_table:
+    .skip 4096
+p3_kernel_table:
     .skip 4096
 p2_table:
     .skip 4096
