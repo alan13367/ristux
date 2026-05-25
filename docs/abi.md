@@ -137,6 +137,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `symlink`, `readlink`,
   `chdir`, `getcwd`.
+- Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
+  `..`; symlink expansion is capped at eight hops.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,

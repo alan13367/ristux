@@ -260,6 +260,8 @@ impl Vfs {
 
     fn mount(&mut self, device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsError> {
         let _ = device;
+        let mountpoint = normalize_path(mountpoint)?;
+        let mountpoint = mountpoint.as_str();
         if !self.nodes.iter().any(|node| node.path == mountpoint) {
             self.add_directory(mountpoint);
         }
@@ -376,6 +378,8 @@ impl Vfs {
     }
 
     fn create_file_as(&mut self, path: &str, creds: Credentials) -> Result<usize, VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2_mut() {
                 match fs.metadata(path) {
@@ -584,6 +588,8 @@ impl Vfs {
     }
 
     fn mkdir_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         if self.nodes.iter().any(|node| node.path == path) {
             return Err(VfsError::AlreadyExists);
         }
@@ -603,6 +609,8 @@ impl Vfs {
     }
 
     fn rmdir_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         if path == "/" {
             return Err(VfsError::PermissionDenied);
         }
@@ -629,6 +637,8 @@ impl Vfs {
     }
 
     fn unlink_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         let node = self
             .nodes
@@ -643,6 +653,10 @@ impl Vfs {
     }
 
     fn rename_as(&mut self, old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let normalized_old = normalize_path(old_path)?;
+        let normalized_new = normalize_path(new_path)?;
+        let old_path = normalized_old.as_str();
+        let new_path = normalized_new.as_str();
         if old_path == "/" || new_path == "/" {
             return Err(VfsError::PermissionDenied);
         }
@@ -670,6 +684,8 @@ impl Vfs {
     }
 
     fn symlink_as(&mut self, target: &str, link_path: &str, creds: Credentials) -> Result<(), VfsError> {
+        let normalized_link = normalize_path(link_path)?;
+        let link_path = normalized_link.as_str();
         if self.nodes.iter().any(|node| node.path == link_path) {
             return Err(VfsError::AlreadyExists);
         }
@@ -689,6 +705,8 @@ impl Vfs {
     }
 
     fn readlink(&self, path: &str) -> Result<Vec<u8>, VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         let node = self
             .nodes
             .iter()
@@ -701,6 +719,8 @@ impl Vfs {
     }
 
     fn chown_as(&mut self, path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
         let node = self
             .nodes
             .iter_mut()
@@ -1256,11 +1276,12 @@ impl Vfs {
 
     fn stat_inner(&self, path: &str, follow_symlink: bool) -> Result<Stat, VfsError> {
         let resolved;
+        let normalized = normalize_path(path)?;
         let path = if follow_symlink {
-            resolved = self.resolve_symlink_path(path)?;
+            resolved = self.resolve_symlink_path(normalized.as_str())?;
             resolved.as_str()
         } else {
-            path
+            normalized.as_str()
         };
         if let Some(pid) = proc_status_pid(path) {
             return Ok(Stat {
@@ -1339,7 +1360,7 @@ impl Vfs {
     }
 
     fn resolve_symlink_path(&self, path: &str) -> Result<String, VfsError> {
-        let mut current = String::from(path);
+        let mut current = normalize_path(path)?;
         for _ in 0..8 {
             let Some(node) = self.nodes.iter().find(|node| node.path == current) else {
                 return Ok(current);
@@ -1348,19 +1369,21 @@ impl Vfs {
                 return Ok(current);
             }
             let target = str::from_utf8(&node.data).map_err(|_| VfsError::Utf8)?;
-            current = if target.starts_with('/') {
+            let next = if target.starts_with('/') {
                 String::from(target)
             } else {
                 join_path(&parent_path(&current), target)
             };
+            current = normalize_path(&next)?;
         }
         Err(VfsError::NotFound)
     }
 
     fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
+        let path = normalize_path(path).ok()?;
         self.nodes
             .iter()
-            .find(|node| node.path == path)
+            .find(|node| node.path == path.as_str())
             .map(|node| node.timestamps)
     }
 
@@ -1443,7 +1466,8 @@ impl Vfs {
     }
 
     fn list_paths(&self, prefix: &str) -> Vec<String> {
-        self.resolve_mount_list_paths(prefix)
+        let prefix = normalize_path(prefix).unwrap_or_else(|_| String::from("/"));
+        self.resolve_mount_list_paths(&prefix)
     }
 }
 
@@ -1639,6 +1663,8 @@ fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
 }
 
 fn parent_path(path: &str) -> String {
+    let normalized = normalize_path(path).unwrap_or_else(|_| String::from(path));
+    let path = normalized.as_str();
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
         Some(0) | None => String::from("/"),
@@ -1647,6 +1673,8 @@ fn parent_path(path: &str) -> String {
 }
 
 fn file_name(path: &str) -> String {
+    let normalized = normalize_path(path).unwrap_or_else(|_| String::from(path));
+    let path = normalized.as_str();
     path.trim_end_matches('/')
         .rsplit('/')
         .next()
@@ -1655,11 +1683,39 @@ fn file_name(path: &str) -> String {
 }
 
 fn join_path(parent: &str, name: &str) -> String {
-    if parent == "/" {
+    let joined = if name.starts_with('/') {
+        String::from(name)
+    } else if parent == "/" {
         format!("/{}", name)
     } else {
         format!("{}/{}", parent.trim_end_matches('/'), name)
+    };
+    normalize_path(&joined).unwrap_or(joined)
+}
+
+fn normalize_path(path: &str) -> Result<String, VfsError> {
+    if !path.starts_with('/') {
+        return Err(VfsError::NotFound);
     }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        return Ok(String::from("/"));
+    }
+    let mut normalized = String::new();
+    for part in parts {
+        normalized.push('/');
+        normalized.push_str(part);
+    }
+    Ok(normalized)
 }
 
 fn proc_status_pid(path: &str) -> Option<u64> {

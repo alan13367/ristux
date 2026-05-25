@@ -157,6 +157,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_path"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_poll"
   sleep 1
   printf 'sendkey ret\n'
@@ -278,6 +282,10 @@ grep -q "cc_mmap: mprotect ok" "$SERIAL_LOG"
 grep -q "cc_mmap: munmap ok" "$SERIAL_LOG"
 grep -q "cc_mmap: file ok" "$SERIAL_LOG"
 grep -q "cc_mmap: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_path" "$SERIAL_LOG"
+grep -q "cc_path: normalized io ok" "$SERIAL_LOG"
+grep -q "cc_path: symlink ok" "$SERIAL_LOG"
+grep -q "cc_path: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_poll" "$SERIAL_LOG"
 grep -q "cc_poll: stdin ok" "$SERIAL_LOG"
 grep -q "cc_poll: pipe ok" "$SERIAL_LOG"

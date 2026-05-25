@@ -11,6 +11,7 @@ file /bin/cc_fs ../build/userland/cc_fs.elf
 file /bin/cc_hello ../build/userland/cc_hello.elf
 file /bin/cc_links ../build/userland/cc_links.elf
 file /bin/cc_mmap ../build/userland/cc_mmap.elf
+file /bin/cc_path ../build/userland/cc_path.elf
 file /bin/cc_poll ../build/userland/cc_poll.elf
 file /bin/cc_proc ../build/userland/cc_proc.elf
 file /bin/cc_select ../build/userland/cc_select.elf
@@ -44,6 +45,7 @@ package cc_fs 0.1.0 /bin/cc_fs
 package cc_hello 0.1.0 /bin/cc_hello
 package cc_links 0.1.0 /bin/cc_links
 package cc_mmap 0.1.0 /bin/cc_mmap
+package cc_path 0.1.0 /bin/cc_path
 package cc_poll 0.1.0 /bin/cc_poll
 package cc_proc 0.1.0 /bin/cc_proc
 package cc_select 0.1.0 /bin/cc_select
