@@ -1,6 +1,6 @@
 pub mod elf;
 
-use core::{arch::asm, cmp, ptr, slice};
+use core::{arch::global_asm, cmp, ptr, slice};
 
 use crate::{
     fs,
@@ -17,13 +17,91 @@ const MAX_USER_RANGES: usize = 16;
 const MAX_USER_MAPPINGS: usize = 32;
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
+global_asm!(
+    r#"
+.global user_enter_with_return
+.type user_enter_with_return, @function
+user_enter_with_return:
+    mov [r8], rsp
+    lea rax, [rip + .Luser_enter_return]
+    mov [r8 + 8], rax
+    mov [r8 + 16], rbx
+    mov [r8 + 24], rbp
+    mov [r8 + 32], r12
+    mov [r8 + 40], r13
+    mov [r8 + 48], r14
+    mov [r8 + 56], r15
+    push rcx
+    push rsi
+    pushfq
+    push rdx
+    push rdi
+    iretq
+.Luser_enter_return:
+    ret
+
+.global user_exit_to_kernel
+.type user_exit_to_kernel, @function
+user_exit_to_kernel:
+    mov rbx, [rdi + 16]
+    mov rbp, [rdi + 24]
+    mov r12, [rdi + 32]
+    mov r13, [rdi + 40]
+    mov r14, [rdi + 48]
+    mov r15, [rdi + 56]
+    mov rsp, [rdi]
+    jmp qword ptr [rdi + 8]
+"#
+);
+
+unsafe extern "C" {
+    fn user_enter_with_return(
+        entry: u64,
+        stack_top: u64,
+        user_cs: u64,
+        user_ss: u64,
+        context: *mut UserReturnContext,
+    );
+    fn user_exit_to_kernel(context: *const UserReturnContext) -> !;
+}
+
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
     processes_loaded: 0,
     syscalls_handled: 0,
+    init_exit_status: None,
     last_exit_status: None,
 };
 static ACTIVE_USER: SpinLock<ActiveUserContext> = SpinLock::new(ActiveUserContext::empty());
 static USER_RUN_STATE: SpinLock<UserRunState> = SpinLock::new(UserRunState::new());
+static LAST_USER_RESULT: SpinLock<UserProgramResult> = SpinLock::new(UserProgramResult::empty());
+static mut USER_RETURN_CONTEXT: UserReturnContext = UserReturnContext::empty();
+
+#[repr(C)]
+struct UserReturnContext {
+    rsp: u64,
+    rip: u64,
+    rbx: u64,
+    rbp: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+}
+
+impl UserReturnContext {
+    const fn empty() -> Self {
+        Self {
+            rsp: 0,
+            rip: 0,
+            rbx: 0,
+            rbp: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct UserRange {
@@ -68,10 +146,23 @@ struct ActiveUserContext {
     exit_status: i32,
 }
 
-pub struct ActiveExit {
+#[derive(Clone, Copy)]
+pub struct UserProgramResult {
     pub name: &'static str,
     pub pid: u64,
+    pub status: i32,
     pub unmapped_pages: usize,
+}
+
+impl UserProgramResult {
+    const fn empty() -> Self {
+        Self {
+            name: "",
+            pid: 0,
+            status: 0,
+            unmapped_pages: 0,
+        }
+    }
 }
 
 struct UserRunState {
@@ -149,6 +240,7 @@ impl ActiveUserContext {
 pub struct UserspaceStats {
     pub processes_loaded: usize,
     pub syscalls_handled: usize,
+    pub init_exit_status: Option<i32>,
     pub last_exit_status: Option<i32>,
 }
 
@@ -233,28 +325,21 @@ pub fn stats() -> UserspaceStats {
 
 pub fn enter_userland_sequence() -> ! {
     USER_RUN_STATE.lock().reset();
-    enter_next_user_program()
+    for (index, path) in USER_PROGRAMS.iter().enumerate() {
+        run_user_program(path, (index + 1) as u64);
+        USER_RUN_STATE.lock().completed += 1;
+    }
+
+    let completed = USER_RUN_STATE.lock().completed;
+    crate::println!(
+        "Ring 3 user program sequence passed: {} program(s).",
+        completed
+    );
+    crate::arch::x86_64::instructions::enable_interrupts();
+    crate::halt_loop();
 }
 
-pub fn enter_next_user_program() -> ! {
-    let (index, path) = {
-        let mut state = USER_RUN_STATE.lock();
-        if state.next_index >= USER_PROGRAMS.len() {
-            crate::println!(
-                "Ring 3 user program sequence passed: {} program(s).",
-                state.completed
-            );
-            crate::arch::x86_64::instructions::enable_interrupts();
-            crate::halt_loop();
-        }
-
-        let index = state.next_index;
-        state.next_index += 1;
-        (index, USER_PROGRAMS[index])
-    };
-
-    let pid = (index + 1) as u64;
-
+pub fn run_user_program(path: &'static str, pid: u64) -> UserProgramResult {
     {
         let mut active = ACTIVE_USER.lock();
         *active = ActiveUserContext::new(pid, path);
@@ -277,8 +362,10 @@ pub fn enter_next_user_program() -> ! {
     );
 
     unsafe {
-        enter_user_mode(entry as usize, USER_INIT_STACK_TOP);
+        enter_user_mode_returning(entry as usize, USER_INIT_STACK_TOP);
     }
+
+    *LAST_USER_RESULT.lock()
 }
 
 pub fn active_user_read(addr: usize, len: usize) -> Option<&'static [u8]> {
@@ -303,7 +390,7 @@ pub fn record_active_syscall() {
     }
 }
 
-pub fn finish_active_exit(status: i32) -> ActiveExit {
+pub fn finish_active_exit(status: i32) -> UserProgramResult {
     let mut active = ACTIVE_USER.lock();
     active.exited = true;
     active.exit_status = status;
@@ -329,16 +416,23 @@ pub fn finish_active_exit(status: i32) -> ActiveExit {
 
     active.range_count = 0;
     active.mapping_count = 0;
-    USER_RUN_STATE.lock().completed += 1;
-
     unsafe {
         USERSPACE_STATS.last_exit_status = Some(status);
     }
 
-    ActiveExit {
+    let result = UserProgramResult {
         name,
         pid,
+        status,
         unmapped_pages,
+    };
+    *LAST_USER_RESULT.lock() = result;
+    result
+}
+
+pub fn return_from_active_user() -> ! {
+    unsafe {
+        user_exit_to_kernel(ptr::addr_of!(USER_RETURN_CONTEXT));
     }
 }
 
@@ -363,10 +457,11 @@ fn run_init_process(process: &mut UserProcess) {
 
     unsafe {
         USERSPACE_STATS.syscalls_handled += 4;
-        USERSPACE_STATS.last_exit_status = match process.state() {
+        USERSPACE_STATS.init_exit_status = match process.state() {
             ProcessState::Exited(status) => Some(status),
             _ => None,
         };
+        USERSPACE_STATS.last_exit_status = USERSPACE_STATS.init_exit_status;
     }
 }
 
@@ -457,24 +552,17 @@ const fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-unsafe fn enter_user_mode(entry: usize, stack_top: usize) -> ! {
+unsafe fn enter_user_mode_returning(entry: usize, stack_top: usize) {
     let user_cs = crate::arch::x86_64::gdt::user_code_selector() as u64;
     let user_ss = crate::arch::x86_64::gdt::user_data_selector() as u64;
 
     unsafe {
-        asm!(
-            "push {user_ss}",
-            "push {stack_top}",
-            "pushfq",
-            "or qword ptr [rsp], 0x200",
-            "push {user_cs}",
-            "push {entry}",
-            "iretq",
-            user_ss = in(reg) user_ss,
-            stack_top = in(reg) stack_top as u64,
-            user_cs = in(reg) user_cs,
-            entry = in(reg) entry as u64,
-            options(noreturn)
+        user_enter_with_return(
+            entry as u64,
+            stack_top as u64,
+            user_cs,
+            user_ss,
+            ptr::addr_of_mut!(USER_RETURN_CONTEXT),
         );
     }
 }

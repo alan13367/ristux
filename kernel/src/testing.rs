@@ -37,7 +37,7 @@ fn run() -> KernelResult<()> {
     let userspace = userspace::stats();
     ensure(userspace.processes_loaded >= 1, "no user process loaded")?;
     ensure(
-        userspace.last_exit_status == Some(0),
+        userspace.init_exit_status == Some(0),
         "init process did not exit cleanly",
     )?;
     let processes = process::stats();
@@ -111,9 +111,10 @@ fn run() -> KernelResult<()> {
         scheduler.preemption_count
     );
     crate::println!(
-        "Userspace stats: {} process(es), {} syscall(s), last exit {:?}",
+        "Userspace stats: {} process(es), {} syscall(s), init exit {:?}, last exit {:?}",
         userspace.processes_loaded,
         userspace.syscalls_handled,
+        userspace.init_exit_status,
         userspace.last_exit_status
     );
     crate::println!(

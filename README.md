@@ -139,6 +139,8 @@ not print `kernel panic`.
 - Provides a small syscall ABI and process model with `fork`, `exec`, `wait`, and exit statuses.
 - Mounts an initrd-backed VFS with `/dev`, `/proc`, and `/tmp`.
 - Implements basic device files, pipes, redirection, and a scripted shell smoke test.
+- Runs shell-launched `/bin/true` and `/bin/false` through real CPL3 ELF
+  execution before reporting `wait` statuses.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

@@ -93,11 +93,11 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 "Ring 3 ELF process {} pid {} exited with status {} from rip {:#x}; unmapped {} page(s).",
                 exit.name,
                 exit.pid,
-                status,
+                exit.status,
                 frame.rip,
                 exit.unmapped_pages
             );
-            userspace::enter_next_user_program();
+            userspace::return_from_active_user();
         }
         SYS_YIELD | SYS_SLEEP => {
             frame.rax = 0;

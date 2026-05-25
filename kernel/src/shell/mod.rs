@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::{fs, ipc::pipe::Pipe, process};
+use crate::{fs, ipc::pipe::Pipe, process, userspace};
 
 pub fn init() {
     run_script(&[
@@ -99,9 +99,13 @@ fn run_command(command: &str, cwd: &mut String) -> String {
                 None => output("cat: not found\n"),
             }
         }
-        "true" => run_external("/bin/true", 0),
-        "false" => run_external("/bin/false", 1),
-        other => run_external(other, 0),
+        "true" => run_external("/bin/true"),
+        "false" => run_external("/bin/false"),
+        other => {
+            let mut text = String::from(other);
+            text.push_str(": not found\n");
+            output(&text)
+        }
     }
 }
 
@@ -110,13 +114,18 @@ fn output(text: &str) -> String {
     String::from(text)
 }
 
-fn run_external(path: &str, status: i32) -> String {
+fn run_external(path: &'static str) -> String {
     let parent = 1;
     let child = process::fork(parent).expect("shell fork failed");
     process::exec(child, path);
-    process::exit(child, status);
+    let result = userspace::run_user_program(path, child);
+    process::exit(child, result.status);
     let waited = process::wait(parent, child).unwrap_or(-1);
-    crate::println!("{} exited with {}", path, waited);
+    crate::println!(
+        "{} exited with {} after ring 3 exec ({} page(s) unmapped)",
+        path,
+        waited,
+        result.unmapped_pages
+    );
     String::new()
 }
-
