@@ -9,7 +9,7 @@ use core::ptr;
 use ristux_userland::sys;
 
 fn main(_args: &[&[u8]]) -> i32 {
-    let _ = sys::write(1, b"init: spawning /bin/sh\n");
+    let _ = sys::write(1, b"init: spawning /bin/login\n");
 
     loop {
         let pid = sys::fork();
@@ -19,11 +19,11 @@ fn main(_args: &[&[u8]]) -> i32 {
         }
 
         if pid == 0 {
-            let path = b"/bin/sh\0";
+            let path = b"/bin/login\0";
             let argv: [*const u8; 2] = [path.as_ptr(), ptr::null()];
             let envp: [*const u8; 1] = [ptr::null()];
             let _ = sys::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
-            let _ = sys::write(2, b"init: execve /bin/sh failed\n");
+            let _ = sys::write(2, b"init: execve /bin/login failed\n");
             sys::exit(127);
         }
 
@@ -38,7 +38,7 @@ fn main(_args: &[&[u8]]) -> i32 {
             }
         }
 
-        let _ = sys::write(1, b"init: /bin/sh exited; respawning\n");
+        let _ = sys::write(1, b"init: /bin/login exited; respawning\n");
         let _ = sys::write(1, b"");
         let _ = vec![0u8; 0];
     }

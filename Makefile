@@ -24,7 +24,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -34,6 +34,9 @@ USER_TRUE_ELF := build/userland/true.elf
 USER_FALSE_ELF := build/userland/false.elf
 USER_TOUCH_ELF := build/userland/touch.elf
 USER_MOUNT_ELF := build/userland/mount.elf
+USER_LOGIN_ELF := build/userland/login.elf
+USER_ID_ELF := build/userland/id.elf
+USER_SU_ELF := build/userland/su.elf
 USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
@@ -81,6 +84,9 @@ $(USER_TRUE_ELF): $(USERLAND_RS_STAMP)
 $(USER_FALSE_ELF): $(USERLAND_RS_STAMP)
 $(USER_TOUCH_ELF): $(USERLAND_RS_STAMP)
 $(USER_MOUNT_ELF): $(USERLAND_RS_STAMP)
+$(USER_LOGIN_ELF): $(USERLAND_RS_STAMP)
+$(USER_ID_ELF): $(USERLAND_RS_STAMP)
+$(USER_SU_ELF): $(USERLAND_RS_STAMP)
 
 $(USER_LS_OBJ): userland/ls.S
 	mkdir -p build/userland
@@ -146,7 +152,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

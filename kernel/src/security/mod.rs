@@ -8,6 +8,12 @@ pub const ROOT_GID: GroupId = 0;
 pub struct Credentials {
     pub uid: UserId,
     pub gid: GroupId,
+    pub euid: UserId,
+    pub egid: GroupId,
+    pub suid: UserId,
+    pub sgid: GroupId,
+    pub groups: [GroupId; 8],
+    pub group_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,15 +38,39 @@ impl Credentials {
         Self {
             uid: ROOT_UID,
             gid: ROOT_GID,
+            euid: ROOT_UID,
+            egid: ROOT_GID,
+            suid: ROOT_UID,
+            sgid: ROOT_GID,
+            groups: [ROOT_GID, 0, 0, 0, 0, 0, 0, 0],
+            group_count: 1,
         }
     }
 
     pub const fn user(uid: UserId, gid: GroupId) -> Self {
-        Self { uid, gid }
+        Self {
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            suid: uid,
+            sgid: gid,
+            groups: [gid, 0, 0, 0, 0, 0, 0, 0],
+            group_count: 1,
+        }
     }
 
     pub const fn is_superuser(&self) -> bool {
-        self.uid == ROOT_UID
+        self.euid == ROOT_UID
+    }
+
+    pub fn in_group(&self, group: GroupId) -> bool {
+        if self.egid == group {
+            return true;
+        }
+        self.groups[..self.group_count.min(self.groups.len())]
+            .iter()
+            .any(|candidate| *candidate == group)
     }
 }
 
@@ -73,11 +103,11 @@ impl FileMetadata {
             return true;
         }
 
-        if creds.uid == self.owner {
+        if creds.euid == self.owner {
             return self.mode.bit(access, 6);
         }
 
-        if creds.gid == self.group {
+        if creds.in_group(self.group) {
             return self.mode.bit(access, 3);
         }
 

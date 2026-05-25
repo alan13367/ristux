@@ -361,10 +361,19 @@ impl Vfs {
                         }
                         fs.truncate_file(path).map_err(map_ext2_error)?;
                     }
-                    Err(_) => {
-                        fs.create_file(path, creds.uid, creds.gid, 0o644)
+                    Err(ext2::Ext2Error::NotFound) => {
+                        let parent_path = parent_path(path);
+                        let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+                        if parent.kind != ext2::Ext2NodeKind::Directory {
+                            return Err(VfsError::NotFile);
+                        }
+                        if !parent.metadata.can_access(creds, Access::Write) {
+                            return Err(VfsError::PermissionDenied);
+                        }
+                        fs.create_file(path, creds.euid, creds.egid, 0o644)
                             .map_err(map_ext2_error)?;
                     }
+                    Err(err) => return Err(map_ext2_error(err)),
                 }
                 return self.push_open_handle(OpenHandle::Ext2File {
                     path: String::from(path),
@@ -401,7 +410,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::File,
-            metadata: FileMetadata::new(creds.uid, creds.gid, 0o644),
+            metadata: FileMetadata::new(creds.euid, creds.egid, 0o644),
             timestamps: FileTimestamps {
                 created_at: now,
                 modified_at: now,
@@ -445,7 +454,7 @@ impl Vfs {
             self.nodes.push(Node {
                 path: String::from(path),
                 kind: NodeKind::File,
-                metadata: FileMetadata::new(0o444, 0, 0),
+                metadata: FileMetadata::new(0, 0, 0o444),
                 timestamps: FileTimestamps {
                     created_at: crate::time::filesystem_timestamp(),
                     modified_at: crate::time::filesystem_timestamp(),
@@ -481,7 +490,7 @@ impl Vfs {
         if rights.read && !self.nodes[node].metadata.can_access(creds, Access::Read) {
             crate::println!(
                 "VFS permission denied: uid {} cannot read {}.",
-                creds.uid,
+                creds.euid,
                 path
             );
             return Err(VfsError::PermissionDenied);
@@ -489,7 +498,7 @@ impl Vfs {
         if rights.write && !self.nodes[node].metadata.can_access(creds, Access::Write) {
             crate::println!(
                 "VFS permission denied: uid {} cannot write {}.",
-                creds.uid,
+                creds.euid,
                 path
             );
             return Err(VfsError::PermissionDenied);
@@ -545,7 +554,7 @@ impl Vfs {
         self.nodes.push(Node {
             path: String::from(path),
             kind: NodeKind::Directory,
-            metadata: FileMetadata::new(creds.uid, creds.gid, 0o755),
+            metadata: FileMetadata::new(creds.euid, creds.egid, 0o755),
             timestamps: FileTimestamps {
                 created_at: now,
                 modified_at: now,
@@ -579,7 +588,7 @@ impl Vfs {
             .iter_mut()
             .find(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
-        if !creds.is_superuser() && creds.uid != node.metadata.owner {
+        if !creds.is_superuser() && creds.euid != node.metadata.owner {
             return Err(VfsError::PermissionDenied);
         }
         node.metadata.mode = crate::security::FileMode::new(mode);
@@ -935,6 +944,8 @@ impl Vfs {
             OpenHandle::Node { node, .. } => {
                 let node = &self.nodes[*node];
                 Ok(Stat {
+                    owner: node.metadata.owner,
+                    group: node.metadata.group,
                     mode: node.metadata.mode.0,
                     size: node.data.len() as u64,
                     mtime: node.timestamps.modified_at,
@@ -947,6 +958,8 @@ impl Vfs {
                     .metadata(path)
                     .map_err(map_ext2_error)?;
                 Ok(Stat {
+                    owner: meta.metadata.owner,
+                    group: meta.metadata.group,
                     mode: meta.metadata.mode.0,
                     size: meta.size,
                     mtime: crate::time::filesystem_timestamp(),
@@ -972,6 +985,8 @@ impl Vfs {
     fn stat(&self, path: &str) -> Result<Stat, VfsError> {
         if let Some(pid) = proc_status_pid(path) {
             return Ok(Stat {
+                owner: 0,
+                group: 0,
                 mode: 0o444,
                 size: format_proc_status(pid).len() as u64,
                 mtime: crate::time::filesystem_timestamp(),
@@ -981,6 +996,8 @@ impl Vfs {
             if let Some(fs) = self.root_ext2() {
                 if let Ok(meta) = fs.metadata(path) {
                     return Ok(Stat {
+                        owner: meta.metadata.owner,
+                        group: meta.metadata.group,
                         mode: meta.metadata.mode.0,
                         size: meta.size,
                         mtime: crate::time::filesystem_timestamp(),
@@ -994,6 +1011,8 @@ impl Vfs {
             .find(|node| node.path == path)
             .ok_or(VfsError::NotFound)?;
         Ok(Stat {
+            owner: node.metadata.owner,
+            group: node.metadata.group,
             mode: node.metadata.mode.0,
             size: node.data.len() as u64,
             mtime: node.timestamps.modified_at,
@@ -1112,6 +1131,8 @@ pub fn close(fd: usize) -> Result<(), VfsError> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Stat {
+    pub owner: u32,
+    pub group: u32,
     pub mode: u16,
     pub size: u64,
     pub mtime: u64,
@@ -1196,6 +1217,14 @@ fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
         | ext2::Ext2Error::Unsupported
         | ext2::Ext2Error::NoSpace
         | ext2::Ext2Error::DirectoryFull => VfsError::BadFd,
+    }
+}
+
+fn parent_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(0) | None => String::from("/"),
+        Some(index) => String::from(&trimmed[..index]),
     }
 }
 

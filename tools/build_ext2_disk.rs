@@ -486,7 +486,9 @@ fn main() {
                 if *path == "/bin/init" {
                     init_data = Some(data.clone());
                 }
-                let mode = if path.starts_with("/bin/")
+                let mode = if *path == "/bin/su" {
+                    0o4755
+                } else if path.starts_with("/bin/")
                     || path.starts_with("/sbin/")
                     || path.starts_with("/lib/")
                 {

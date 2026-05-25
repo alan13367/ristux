@@ -6,13 +6,16 @@ file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
+file /bin/id ../build/userland/id.elf
 file /bin/kill ../build/userland/kill.elf
+file /bin/login ../build/userland/login.elf
 file /bin/ls ../build/userland/ls.elf
 file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/touch ../build/userland/touch.elf
+file /bin/su ../build/userland/su.elf
 file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
@@ -21,15 +24,18 @@ package cat 0.1.0 /bin/cat
 package chmod 0.1.0 /bin/chmod
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
+package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
 package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
+package login 0.1.0 /bin/login
 package ls 0.1.0 /bin/ls
 package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir
 package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm
 package sh 0.1.0 /bin/sh
+package su 0.1.0 /bin/su
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp

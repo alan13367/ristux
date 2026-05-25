@@ -37,6 +37,7 @@ send_text() {
       '_') printf 'sendkey shift-minus\n' ;;
       '>') printf 'sendkey shift-dot\n' ;;
       '<') printf 'sendkey shift-comma\n' ;;
+      '~') printf 'sendkey shift-grave_accent\n' ;;
       *) echo "smoke_test: unsupported key '$ch'" >&2; exit 1 ;;
     esac
     sleep "${RISTUX_SMOKE_KEY_DELAY:-0.04}"
@@ -45,6 +46,10 @@ send_text() {
 
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
+  send_text "root"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "echo hello"
   sleep 1
   printf 'sendkey ret\n'
@@ -65,12 +70,44 @@ send_text() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "exit"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 4
+  send_text "alice"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "id"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "touch /etc/foo"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "touch ~/foo"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "su"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 4
+  send_text "id"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
 
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
+  send_text "alice"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cat /home/marker"
   sleep 1
   printf 'sendkey ret\n'
@@ -95,17 +132,27 @@ grep -q "TCP MVP self-test passed" "$SERIAL_LOG"
 grep -q "Socket layer self-test passed" "$SERIAL_LOG"
 grep -q "Framebuffer graphics self-test passed" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
-grep -q "init: spawning /bin/sh" "$SERIAL_LOG"
+grep -q "init: spawning /bin/login" "$SERIAL_LOG"
+grep -q "login: " "$SERIAL_LOG"
 grep -q "\\$ " "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: touch /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo persisted > /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$SERIAL_LOG"
 grep -q "persisted" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: alice" "$SERIAL_LOG"
+grep -q "uid=1000(alice) gid=1000(alice)" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: touch /etc/foo" "$SERIAL_LOG"
+grep -q "touch: EACCES /etc/foo" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: touch ~/foo" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: su" "$SERIAL_LOG"
+grep -q "uid=0(root) gid=0(root)" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
+grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: mount" "$REBOOT_SERIAL_LOG"
 grep -q "persisted" "$REBOOT_SERIAL_LOG"

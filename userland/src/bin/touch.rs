@@ -24,7 +24,11 @@ fn main(args: &[&[u8]]) -> i32 {
 
         let fd = sys::open(path.as_ptr(), O_WRONLY | O_CREAT, 0o644);
         if fd < 0 {
-            let _ = sys::write(2, b"touch: cannot touch ");
+            if fd == -13 {
+                let _ = sys::write(2, b"touch: EACCES ");
+            } else {
+                let _ = sys::write(2, b"touch: cannot touch ");
+            }
             let _ = sys::write(2, arg);
             let _ = sys::write(2, b"\n");
             rc = 1;

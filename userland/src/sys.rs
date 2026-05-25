@@ -25,9 +25,14 @@ pub const NR_KILL: usize = 62;
 pub const NR_GETCWD: usize = 79;
 pub const NR_CHDIR: usize = 80;
 pub const NR_GETUID: usize = 102;
+pub const NR_GETGID: usize = 104;
 pub const NR_SETUID: usize = 105;
+pub const NR_SETGID: usize = 106;
+pub const NR_GETEUID: usize = 107;
 pub const NR_SETPGID: usize = 109;
 pub const NR_GETPPID: usize = 110;
+pub const NR_SETGROUPS: usize = 116;
+pub const NR_SETRESUID: usize = 117;
 pub const NR_RT_SIGACTION: usize = 13;
 pub const NR_RT_SIGRETURN: usize = 15;
 
@@ -187,6 +192,41 @@ pub fn brk(addr: usize) -> isize {
 #[inline]
 pub fn getpid() -> isize {
     unsafe { syscall0(NR_GETPID) }
+}
+
+#[inline]
+pub fn getuid() -> isize {
+    unsafe { syscall0(NR_GETUID) }
+}
+
+#[inline]
+pub fn geteuid() -> isize {
+    unsafe { syscall0(NR_GETEUID) }
+}
+
+#[inline]
+pub fn getgid() -> isize {
+    unsafe { syscall0(NR_GETGID) }
+}
+
+#[inline]
+pub fn setuid(uid: u32) -> isize {
+    unsafe { syscall1(NR_SETUID, uid as usize) }
+}
+
+#[inline]
+pub fn setgid(gid: u32) -> isize {
+    unsafe { syscall1(NR_SETGID, gid as usize) }
+}
+
+#[inline]
+pub fn setresuid(ruid: u32, euid: u32, suid: u32) -> isize {
+    unsafe { syscall3(NR_SETRESUID, ruid as usize, euid as usize, suid as usize) }
+}
+
+#[inline]
+pub fn setgroups(groups: &[u32]) -> isize {
+    unsafe { syscall2(NR_SETGROUPS, groups.len(), groups.as_ptr() as usize) }
 }
 
 #[inline]

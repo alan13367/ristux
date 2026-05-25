@@ -8,7 +8,7 @@ use crate::{
         frame_allocator::{self, FRAME_SIZE},
         paging::{self, PageFlags},
     },
-    security::Credentials,
+    security::{Access, Credentials, FileMetadata},
     sync::spinlock::SpinLock,
     task::scheduler,
     userspace::elf,
@@ -364,7 +364,7 @@ impl ProcessTable {
         };
         for waiter in waiters {
             if let Some(parent) = self.get_mut(waiter) {
-                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
+                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
                 {
                     parent.state = ProcessState::Ready;
                     wake.push(waiter);
@@ -373,7 +373,7 @@ impl ProcessTable {
         }
         if let Some(parent) = self.get(pid).and_then(|p| p.parent) {
             if let Some(parent_proc) = self.get_mut(parent) {
-                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
+                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
                 {
                     parent_proc.state = ProcessState::Ready;
                     wake.push(parent);
@@ -484,13 +484,25 @@ pub struct ExecInfo {
 /// outgoing iretq frame.
 pub fn exec_for_user(pid: Pid, path: &str, args: &[&str]) -> Option<ExecInfo> {
     with_table(|table| {
+        let metadata = fs::stat(path).ok()?;
         let data = fs::read_file(path)?;
         let index = table.processes.iter().position(|p| p.pid == pid)?;
+        let credentials = table.processes[index].credentials;
+        let file = FileMetadata::new(metadata.owner, metadata.group, metadata.mode);
+        if !file.can_access(credentials, Access::Execute) {
+            return None;
+        }
         // Preserve fds across exec (semantically correct execve behaviour).
         if table.processes[index].load_elf(path, &data).is_err() {
             return None;
         }
         table.processes[index].setup_stack(args);
+        if metadata.mode & 0o4000 != 0 {
+            table.processes[index].credentials.euid = metadata.owner;
+        }
+        if metadata.mode & 0o2000 != 0 {
+            table.processes[index].credentials.egid = metadata.group;
+        }
         table.processes[index].state = ProcessState::Running;
         let p = &table.processes[index];
         Some(ExecInfo {
@@ -1020,6 +1032,104 @@ pub fn finish_user_run(pid: Pid) -> (i32, usize) {
 
 pub fn current_uid() -> u32 {
     with_current_read(|p| p.credentials.uid).unwrap_or(0)
+}
+
+pub fn current_euid() -> u32 {
+    with_current_read(|p| p.credentials.euid).unwrap_or(0)
+}
+
+pub fn current_gid() -> u32 {
+    with_current_read(|p| p.credentials.gid).unwrap_or(0)
+}
+
+pub fn current_egid() -> u32 {
+    with_current_read(|p| p.credentials.egid).unwrap_or(0)
+}
+
+pub fn set_current_uid(uid: u32) -> Result<(), ()> {
+    with_current(|p| {
+        if p.credentials.is_superuser() {
+            p.credentials.uid = uid;
+            p.credentials.euid = uid;
+            p.credentials.suid = uid;
+            return Ok(());
+        }
+        if uid == p.credentials.uid || uid == p.credentials.suid {
+            p.credentials.euid = uid;
+            return Ok(());
+        }
+        Err(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn set_current_gid(gid: u32) -> Result<(), ()> {
+    with_current(|p| {
+        if p.credentials.is_superuser() {
+            p.credentials.gid = gid;
+            p.credentials.egid = gid;
+            p.credentials.sgid = gid;
+            p.credentials.groups[0] = gid;
+            p.credentials.group_count = 1;
+            return Ok(());
+        }
+        if gid == p.credentials.gid || gid == p.credentials.sgid {
+            p.credentials.egid = gid;
+            return Ok(());
+        }
+        Err(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn set_current_resuid(ruid: Option<u32>, euid: Option<u32>, suid: Option<u32>) -> Result<(), ()> {
+    with_current(|p| {
+        let old = p.credentials;
+        let allowed = |uid: u32| {
+            old.is_superuser() || uid == old.uid || uid == old.euid || uid == old.suid
+        };
+        if let Some(uid) = ruid {
+            if !allowed(uid) {
+                return Err(());
+            }
+        }
+        if let Some(uid) = euid {
+            if !allowed(uid) {
+                return Err(());
+            }
+        }
+        if let Some(uid) = suid {
+            if !allowed(uid) {
+                return Err(());
+            }
+        }
+        if let Some(uid) = ruid {
+            p.credentials.uid = uid;
+        }
+        if let Some(uid) = euid {
+            p.credentials.euid = uid;
+        }
+        if let Some(uid) = suid {
+            p.credentials.suid = uid;
+        }
+        Ok(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn set_current_groups(groups: &[u32]) -> Result<(), ()> {
+    with_current(|p| {
+        if !p.credentials.is_superuser() || groups.len() > p.credentials.groups.len() {
+            return Err(());
+        }
+        p.credentials.groups = [0; 8];
+        for (index, group) in groups.iter().copied().enumerate() {
+            p.credentials.groups[index] = group;
+        }
+        p.credentials.group_count = groups.len();
+        Ok(())
+    })
+    .unwrap_or(Err(()))
 }
 
 pub fn user_cwd() -> Option<String> {

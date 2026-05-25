@@ -79,6 +79,24 @@ fn split_pipeline(line: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+fn expand_tilde(token: Vec<u8>) -> Vec<u8> {
+    let home: &[u8] = if sys::getuid() == 0 {
+        b"/root"
+    } else {
+        b"/home/alice"
+    };
+    if token.as_slice() == b"~" {
+        return home.to_vec();
+    }
+    if token.starts_with(b"~/") {
+        let mut out = Vec::with_capacity(home.len() + token.len() - 1);
+        out.extend_from_slice(home);
+        out.extend_from_slice(&token[1..]);
+        return out;
+    }
+    token
+}
+
 fn parse_stage(segment: &[u8]) -> (Stage, bool) {
     let mut stage = Stage::new();
     let mut background = false;
@@ -114,14 +132,14 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
         }
         if tokens[i].as_slice() == b"<" {
             if i + 1 < tokens.len() {
-                stage.stdin_path = Some(core::mem::take(&mut tokens[i + 1]));
+                stage.stdin_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
                 i += 2;
                 continue;
             }
         }
         if tokens[i].as_slice() == b">" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(core::mem::take(&mut tokens[i + 1]));
+                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
                 stage.append_stdout = false;
                 i += 2;
                 continue;
@@ -129,13 +147,13 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
         }
         if tokens[i].as_slice() == b">>" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(core::mem::take(&mut tokens[i + 1]));
+                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
                 stage.append_stdout = true;
                 i += 2;
                 continue;
             }
         }
-        let tok = core::mem::take(&mut tokens[i]);
+        let tok = expand_tilde(core::mem::take(&mut tokens[i]));
         if !tok.is_empty() {
             stage.argv.push(tok);
         }

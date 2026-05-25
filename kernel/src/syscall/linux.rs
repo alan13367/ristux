@@ -35,15 +35,21 @@ pub const NR_kill: u64 = 62;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
 pub const NR_getuid: u64 = 102;
+pub const NR_getgid: u64 = 104;
 pub const NR_setuid: u64 = 105;
+pub const NR_setgid: u64 = 106;
+pub const NR_geteuid: u64 = 107;
 pub const NR_setpgid: u64 = 109;
 pub const NR_getppid: u64 = 110;
+pub const NR_setgroups: u64 = 116;
+pub const NR_setresuid: u64 = 117;
 
 const ESRCH: i64 = -3;
 const EBADF: i64 = -9;
 const ENOMEM: i64 = -12;
 const EFAULT: i64 = -14;
 const ENOENT: i64 = -2;
+const EACCES: i64 = -13;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
@@ -94,7 +100,12 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_fstat => linux_fstat(a0 as usize, a1 as usize),
         NR_kill => linux_kill(a0 as u64, a1 as u8),
         NR_getuid => Ok(process::current_uid() as u64),
-        NR_setuid => Ok(0),
+        NR_geteuid => Ok(process::current_euid() as u64),
+        NR_getgid => Ok(process::current_gid() as u64),
+        NR_setuid => linux_setuid(a0 as u32),
+        NR_setgid => linux_setgid(a0 as u32),
+        NR_setresuid => linux_setresuid(a0, a1, a2),
+        NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction | NR_rt_sigreturn => Ok(0),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
@@ -195,7 +206,7 @@ fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
     let append = flags & O_APPEND != 0;
     process::user_open_options(&path, read, write, create, truncate, append)
         .map(|fd| fd as u64)
-        .map_err(|_| ENOENT)
+        .map_err(map_vfs_error)
 }
 
 fn linux_close(fd: usize) -> Result<u64, i64> {
@@ -322,6 +333,52 @@ fn linux_setpgid(_pid: u64, _pgid: u64) -> Result<u64, i64> {
     Ok(0)
 }
 
+fn linux_setuid(uid: u32) -> Result<u64, i64> {
+    process::set_current_uid(uid).map(|_| 0).map_err(|_| EACCES)
+}
+
+fn linux_setgid(gid: u32) -> Result<u64, i64> {
+    process::set_current_gid(gid).map(|_| 0).map_err(|_| EACCES)
+}
+
+fn linux_setresuid(ruid: u64, euid: u64, suid: u64) -> Result<u64, i64> {
+    let no_change = u64::MAX;
+    let ruid = if ruid == no_change {
+        None
+    } else {
+        Some(ruid as u32)
+    };
+    let euid = if euid == no_change {
+        None
+    } else {
+        Some(euid as u32)
+    };
+    let suid = if suid == no_change {
+        None
+    } else {
+        Some(suid as u32)
+    };
+    process::set_current_resuid(ruid, euid, suid)
+        .map(|_| 0)
+        .map_err(|_| EACCES)
+}
+
+fn linux_setgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
+    if size > 8 {
+        return Err(EINVAL);
+    }
+    let mut groups = Vec::new();
+    if size > 0 {
+        let bytes = process::read_user(list_ptr, size * 4).ok_or(EFAULT)?;
+        for chunk in bytes.chunks_exact(4) {
+            groups.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+    }
+    process::set_current_groups(&groups)
+        .map(|_| 0)
+        .map_err(|_| EACCES)
+}
+
 fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     process::user_chdir(&path).map(|_| 0).map_err(|_| ENOENT)
@@ -370,16 +427,22 @@ fn linux_lseek(fd: usize, offset: i64, whence: u32) -> Result<u64, i64> {
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
-    write_linux_stat(buf_ptr, meta.size, meta.mode as u32)
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
 }
 
 fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let meta = fs::fstat(vfs_fd).map_err(|_| EBADF)?;
-    write_linux_stat(buf_ptr, meta.size, meta.mode as u32)
+    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32)
 }
 
-fn write_linux_stat(buf_ptr: usize, size: u64, mode: u32) -> Result<u64, i64> {
+fn write_linux_stat(
+    buf_ptr: usize,
+    owner: u32,
+    group: u32,
+    size: u64,
+    mode: u32,
+) -> Result<u64, i64> {
     // struct stat is ~144 bytes on x86_64; we only fill the fields userland
     // typically reads (size, mode), zeroing the rest.
     const STAT_SIZE: usize = 144;
@@ -388,6 +451,8 @@ fn write_linux_stat(buf_ptr: usize, size: u64, mode: u32) -> Result<u64, i64> {
         *byte = 0;
     }
     out[24..28].copy_from_slice(&mode.to_le_bytes()); // st_mode
+    out[28..32].copy_from_slice(&owner.to_le_bytes()); // st_uid
+    out[32..36].copy_from_slice(&group.to_le_bytes()); // st_gid
     out[48..56].copy_from_slice(&size.to_le_bytes()); // st_size
     Ok(0)
 }
@@ -414,6 +479,15 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
         offset += 1;
     }
     String::from_utf8(buf).ok()
+}
+
+fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
+    match err {
+        fs::vfs::VfsError::PermissionDenied => EACCES,
+        fs::vfs::VfsError::NotFound => ENOENT,
+        fs::vfs::VfsError::BadFd => EBADF,
+        _ => EINVAL,
+    }
 }
 
 fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {
