@@ -86,10 +86,17 @@ impl SocketTable {
         remote_port: u16,
     ) -> Result<(), SocketError> {
         match self.entry(handle)?.backend {
-            SocketBackend::Tcp(socket) => self
-                .tcp
-                .connect(socket, remote_ip, remote_port)
-                .map_err(map_tcp_error),
+            SocketBackend::Tcp(socket) => {
+                self.tcp
+                    .connect(socket, remote_ip, remote_port)
+                    .map_err(map_tcp_error)?;
+                super::drive_tcp(&mut self.tcp);
+                if self.tcp.established(socket) {
+                    Ok(())
+                } else {
+                    Err(SocketError::WouldBlock)
+                }
+            }
         }
     }
 
@@ -97,6 +104,7 @@ impl SocketTable {
         let entry = *self.entry(handle)?;
         match entry.backend {
             SocketBackend::Tcp(socket) => {
+                super::drive_tcp(&mut self.tcp);
                 let accepted = self.tcp.accept(socket).map_err(map_tcp_error)?;
                 self.sockets.push(SocketEntry {
                     domain: entry.domain,
@@ -110,13 +118,20 @@ impl SocketTable {
 
     pub fn send(&mut self, handle: usize, data: &[u8]) -> Result<usize, SocketError> {
         match self.entry(handle)?.backend {
-            SocketBackend::Tcp(socket) => self.tcp.send(socket, data).map_err(map_tcp_error),
+            SocketBackend::Tcp(socket) => {
+                let sent = self.tcp.send(socket, data).map_err(map_tcp_error)?;
+                super::drive_tcp(&mut self.tcp);
+                Ok(sent)
+            }
         }
     }
 
     pub fn recv(&mut self, handle: usize, output: &mut [u8]) -> Result<usize, SocketError> {
         match self.entry(handle)?.backend {
-            SocketBackend::Tcp(socket) => self.tcp.recv(socket, output).map_err(map_tcp_error),
+            SocketBackend::Tcp(socket) => {
+                super::drive_tcp(&mut self.tcp);
+                self.tcp.recv(socket, output).map_err(map_tcp_error)
+            }
         }
     }
 

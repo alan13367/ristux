@@ -10,6 +10,7 @@ const ETHERTYPE_ARP: u16 = 0x0806;
 const ARP_REQUEST: u16 = 1;
 const ARP_REPLY: u16 = 2;
 const IP_PROTO_ICMP: u8 = 1;
+const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
@@ -77,6 +78,7 @@ struct NetworkStack {
     device: VirtioNetDriver,
     arp_cache: Vec<ArpEntry>,
     udp_sockets: Vec<UdpSocket>,
+    tcp_inbox: Vec<tcp::TcpPacket>,
     rx_frames: usize,
     tx_frames: usize,
 }
@@ -90,6 +92,7 @@ impl NetworkStack {
             device,
             arp_cache: Vec::new(),
             udp_sockets: Vec::new(),
+            tcp_inbox: Vec::new(),
             rx_frames: 0,
             tx_frames: 0,
         }
@@ -160,6 +163,30 @@ impl NetworkStack {
         }
     }
 
+    fn send_tcp(&mut self, mut outbound: tcp::TcpOutbound) -> bool {
+        if outbound.segment.len() < 20 {
+            return false;
+        }
+        let Some(dst_mac) = self.resolve_mac(outbound.dst_ip) else {
+            return false;
+        };
+        outbound.segment[16] = 0;
+        outbound.segment[17] = 0;
+        let checksum = tcp::checksum(self.ip, outbound.dst_ip, &outbound.segment);
+        outbound.segment[16] = (checksum >> 8) as u8;
+        outbound.segment[17] = (checksum & 0xff) as u8;
+        self.transmit_ipv4(dst_mac, outbound.dst_ip, IP_PROTO_TCP, &outbound.segment);
+        true
+    }
+
+    fn pop_tcp_inbound(&mut self) -> Option<tcp::TcpPacket> {
+        if self.tcp_inbox.is_empty() {
+            None
+        } else {
+            Some(self.tcp_inbox.remove(0))
+        }
+    }
+
     fn pop_tx(&mut self) -> Option<EthernetFrame> {
         self.device.pop_tx()
     }
@@ -204,6 +231,7 @@ impl NetworkStack {
 
         match packet.protocol {
             IP_PROTO_ICMP => self.handle_icmp(frame.src, packet),
+            IP_PROTO_TCP => self.handle_tcp(packet),
             IP_PROTO_UDP => self.handle_udp(packet),
             _ => {}
         }
@@ -239,6 +267,14 @@ impl NetworkStack {
             src_port,
             payload: Vec::from(&packet.payload[4..]),
         });
+        crate::process::wake_io_waiters();
+    }
+
+    fn handle_tcp(&mut self, packet: Ipv4Packet) {
+        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload) else {
+            return;
+        };
+        self.tcp_inbox.push(tcp_packet);
         crate::process::wake_io_waiters();
     }
 
@@ -293,10 +329,10 @@ struct Ipv4Packet {
 
 pub fn init() {
     socket::init();
+    *NET_STACK.lock() = Some(runtime_stack());
     socket::self_test();
     self_test();
     tcp::self_test();
-    *NET_STACK.lock() = Some(runtime_stack());
 }
 
 pub fn stats() -> NetStats {
@@ -360,6 +396,43 @@ pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
         datagram.src_port
     );
     Some(count)
+}
+
+pub fn drive_tcp(tcp_stack: &mut tcp::TcpStack) -> bool {
+    let mut made_progress = false;
+    loop {
+        let mut sent_outbound = false;
+        {
+            let mut guard = NET_STACK.lock();
+            let Some(stack) = guard.as_mut() else {
+                return made_progress;
+            };
+            stack.poll();
+            while let Some(packet) = stack.pop_tcp_inbound() {
+                if tcp_stack.handle_packet(packet) {
+                    made_progress = true;
+                }
+            }
+            while let Some(outbound) = tcp_stack.pop_outbound() {
+                if stack.send_tcp(outbound) {
+                    made_progress = true;
+                    sent_outbound = true;
+                }
+            }
+            if sent_outbound {
+                stack.poll();
+                while let Some(packet) = stack.pop_tcp_inbound() {
+                    if tcp_stack.handle_packet(packet) {
+                        made_progress = true;
+                    }
+                }
+            }
+        }
+        if !sent_outbound {
+            break;
+        }
+    }
+    made_progress
 }
 
 fn runtime_stack() -> NetworkStack {
