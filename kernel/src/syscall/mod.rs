@@ -23,6 +23,9 @@ pub const SYS_MKDIR: u64 = 15;
 pub const SYS_UNLINK: u64 = 16;
 pub const SYS_CHMOD: u64 = 17;
 pub const SYS_KILL: u64 = 18;
+pub const SYS_UDP_BIND: u64 = 19;
+pub const SYS_UDP_SEND: u64 = 20;
+pub const SYS_UDP_RECV: u64 = 21;
 
 const EACCES: i64 = -13;
 const EBADF: i64 = -9;
@@ -204,6 +207,34 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_UDP_BIND => {
+            frame.rax = match sys_udp_bind_active(frame.rdi as u16) {
+                Ok(socket) => socket,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_UDP_SEND => {
+            frame.rax = match sys_udp_send_active(
+                frame.rdi as usize,
+                frame.rsi as u32,
+                frame.rdx as u16,
+                frame.r10 as usize,
+                frame.r8 as usize,
+            ) {
+                Ok(written) => written,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_UDP_RECV => {
+            frame.rax = match sys_udp_recv_active(
+                frame.rdi as usize,
+                frame.rsi as usize,
+                frame.rdx as usize,
+            ) {
+                Ok(read) => read,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -344,6 +375,32 @@ fn sys_kill_active(pid: u64, signal_number: u8) -> SyscallResult {
     } else {
         Err(SyscallError(ESRCH))
     }
+}
+
+fn sys_udp_bind_active(local_port: u16) -> SyscallResult {
+    crate::net::udp_bind(local_port)
+        .map(|socket| socket as u64)
+        .ok_or(SyscallError(EINVAL))
+}
+
+fn sys_udp_send_active(
+    socket: usize,
+    dst_ip: u32,
+    dst_port: u16,
+    ptr: usize,
+    len: usize,
+) -> SyscallResult {
+    let bytes = userspace::active_user_read(ptr, len).ok_or(SyscallError(EFAULT))?;
+    if crate::net::udp_send(socket, dst_ip.to_be_bytes(), dst_port, bytes) {
+        Ok(len as u64)
+    } else {
+        Err(SyscallError(EINVAL))
+    }
+}
+
+fn sys_udp_recv_active(socket: usize, ptr: usize, len: usize) -> SyscallResult {
+    let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
+    Ok(crate::net::udp_recv(socket, buffer).unwrap_or(0) as u64)
 }
 
 fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {

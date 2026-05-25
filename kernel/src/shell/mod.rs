@@ -20,6 +20,7 @@ pub fn init() {
         "/bin/chmod 644 /tmp/message.txt",
         "/bin/cat /tmp/message.txt",
         "sigtest",
+        "/bin/udp",
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
@@ -110,6 +111,7 @@ fn external_path(program: &str) -> Option<&'static str> {
         "pwd" | "/bin/pwd" => Some("/bin/pwd"),
         "rm" | "/bin/rm" => Some("/bin/rm"),
         "touch" | "/bin/touch" => Some("/bin/touch"),
+        "udp" | "/bin/udp" => Some("/bin/udp"),
         "true" | "/bin/true" => Some("/bin/true"),
         "false" | "/bin/false" => Some("/bin/false"),
         _ => None,
@@ -173,7 +175,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
 
     match program {
         "help" => {
-            output("builtins: help clear echo pwd cd exit ls cat chmod kill mkdir rm sigtest touch user true false\n")
+            output("builtins: help clear echo pwd cd exit ls cat chmod kill mkdir rm sigtest touch udp user true false\n")
         }
         "clear" => output("\x0c"),
         "echo" => {
@@ -194,6 +196,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "rm" => run_external_with_args("/bin/rm", &args),
         "sigtest" => run_signal_test(),
         "touch" => run_external_with_args("/bin/touch", &args),
+        "udp" => run_external_with_args("/bin/udp", &args),
         "user" => run_as_user(&args),
         "cat" => {
             let Some(path) = args.first() else {
@@ -218,6 +221,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "/bin/pwd" => run_external("/bin/pwd"),
         "/bin/rm" => run_external_with_args("/bin/rm", &args),
         "/bin/touch" => run_external_with_args("/bin/touch", &args),
+        "/bin/udp" => run_external_with_args("/bin/udp", &args),
         other => {
             let mut text = String::from(other);
             text.push_str(": not found\n");

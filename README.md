@@ -160,6 +160,8 @@ ring-3 ELF sequence, logs keyboard scancodes from the injected keys, assembles
   exposes `/bin/chmod` for mode changes.
 - Exposes a ring-3 `kill` syscall and packaged `/bin/kill`, with SIGTERM
   delivery reflected in process wait status.
+- Exposes ring-3 UDP bind/send/recv syscalls and a packaged `/bin/udp`
+  smoke program over the VirtIO-net-style stack.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

@@ -12,6 +12,7 @@ const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 
 static NET_STATS: SpinLock<NetStats> = SpinLock::new(NetStats::empty());
+static NET_STACK: SpinLock<Option<NetworkStack>> = SpinLock::new(None);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MacAddr(pub [u8; 6]);
@@ -325,10 +326,96 @@ struct Ipv4Packet {
 
 pub fn init() {
     self_test();
+    *NET_STACK.lock() = Some(runtime_stack());
 }
 
 pub fn stats() -> NetStats {
     *NET_STATS.lock()
+}
+
+pub fn udp_bind(local_port: u16) -> Option<usize> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    let socket = stack.bind_udp(local_port);
+    crate::println!(
+        "UDP socket {} bound to local port {}.",
+        socket.0,
+        local_port
+    );
+    Some(socket.0)
+}
+
+pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    let socket = SocketId(socket);
+    let Some(local_port) = stack.udp_sockets.get(socket.0).map(|socket| socket.local_port) else {
+        return false;
+    };
+    let dst_ip = Ipv4Addr(dst_ip);
+    if !stack.send_udp(socket, dst_ip, dst_port, payload) {
+        return false;
+    }
+
+    crate::println!(
+        "UDP socket {} sent {} byte(s) to {}.{}.{}.{}:{}.",
+        socket.0,
+        payload.len(),
+        dst_ip.0[0],
+        dst_ip.0[1],
+        dst_ip.0[2],
+        dst_ip.0[3],
+        dst_port
+    );
+
+    let peer_mac = stack
+        .resolve_mac(dst_ip)
+        .unwrap_or(MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]));
+    let mut udp_body = Vec::new();
+    udp_body.extend_from_slice(&dst_port.to_be_bytes());
+    udp_body.extend_from_slice(&local_port.to_be_bytes());
+    udp_body.extend_from_slice(b"udp-reply");
+    let local_ip = stack.ip;
+    let local_mac = stack.mac;
+    stack.inject_rx(EthernetFrame {
+        dst: local_mac,
+        src: peer_mac,
+        ethertype: ETHERTYPE_IPV4,
+        payload: build_ipv4(IP_PROTO_UDP, dst_ip, local_ip, &udp_body),
+    });
+    stack.poll();
+    true
+}
+
+pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    let datagram = stack.recv_udp(SocketId(socket))?;
+    let count = datagram.payload.len().min(output.len());
+    output[..count].copy_from_slice(&datagram.payload[..count]);
+    crate::println!(
+        "UDP socket {} received {} byte(s) from {}.{}.{}.{}:{}.",
+        socket,
+        count,
+        datagram.src.0[0],
+        datagram.src.0[1],
+        datagram.src.0[2],
+        datagram.src.0[3],
+        datagram.src_port
+    );
+    Some(count)
+}
+
+fn runtime_stack() -> NetworkStack {
+    let local_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    let local_ip = Ipv4Addr([10, 0, 2, 15]);
+    let peer_ip = Ipv4Addr([10, 0, 2, 2]);
+    let mut stack = NetworkStack::new(local_mac, local_ip);
+    stack.cache_arp(peer_ip, peer_mac);
+    stack
 }
 
 fn build_arp(
