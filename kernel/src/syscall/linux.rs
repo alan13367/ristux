@@ -26,7 +26,9 @@ pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
 pub const NR_pipe: u64 = 22;
 pub const NR_sched_yield: u64 = 24;
+pub const NR_dup: u64 = 32;
 pub const NR_dup2: u64 = 33;
+pub const NR_nanosleep: u64 = 35;
 pub const NR_getpid: u64 = 39;
 pub const NR_socket: u64 = 41;
 pub const NR_connect: u64 = 42;
@@ -43,6 +45,9 @@ pub const NR_wait4: u64 = 61;
 pub const NR_kill: u64 = 62;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
+pub const NR_mkdir: u64 = 83;
+pub const NR_chmod: u64 = 90;
+pub const NR_gettimeofday: u64 = 96;
 pub const NR_getuid: u64 = 102;
 pub const NR_getgid: u64 = 104;
 pub const NR_setuid: u64 = 105;
@@ -53,6 +58,8 @@ pub const NR_getppid: u64 = 110;
 pub const NR_getpgrp: u64 = 111;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
+pub const NR_time: u64 = 201;
+pub const NR_clock_gettime: u64 = 228;
 
 const ESRCH: i64 = -3;
 const EBADF: i64 = -9;
@@ -60,6 +67,7 @@ const ENOMEM: i64 = -12;
 const EFAULT: i64 = -14;
 const ENOENT: i64 = -2;
 const EACCES: i64 = -13;
+const EEXIST: i64 = -17;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
@@ -91,7 +99,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_close => linux_close(a0 as usize),
         NR_pipe => linux_pipe(a0 as usize),
         NR_sched_yield => linux_sched_yield(frame),
+        NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
+        NR_nanosleep => linux_nanosleep(a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
         NR_connect => linux_connect(a0 as usize, a1 as usize, a2 as usize),
@@ -135,6 +145,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
+        NR_mkdir => linux_mkdir(a0 as usize, a1 as u16),
+        NR_chmod => linux_chmod(a0 as usize, a1 as u16),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
@@ -144,6 +156,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
         NR_getgid => Ok(process::current_gid() as u64),
+        NR_time => linux_time(a0 as usize),
+        NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
+        NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
@@ -404,6 +419,12 @@ fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {
         .map_err(|_| EBADF)
 }
 
+fn linux_dup(fd: usize) -> Result<u64, i64> {
+    process::user_dup(fd)
+        .map(|fd| fd as u64)
+        .map_err(|_| EBADF)
+}
+
 fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
     if domain != AF_INET {
         return Err(EINVAL);
@@ -592,13 +613,15 @@ fn linux_execve(
     frame: &mut SyscallInterruptFrame,
     path_ptr: usize,
     argv_ptr: usize,
-    _envp_ptr: usize,
+    envp_ptr: usize,
 ) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let args = read_user_argv(argv_ptr).ok_or(EFAULT)?;
+    let env = read_user_envp(envp_ptr).ok_or(EFAULT)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let info = process::exec_for_user(pid, &path, &arg_refs).ok_or(ENOENT)?;
+    let env_refs: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
+    let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).ok_or(ENOENT)?;
     // Patch the syscall frame so the imminent iretq lands at the new entry
     // point with the freshly built user stack. argc → rdi, argv → rsi (SysV
     // calling convention used by our _start glue).
@@ -606,6 +629,7 @@ fn linux_execve(
     frame.rsp = info.stack_top as u64;
     frame.rdi = info.argc as u64;
     frame.rsi = info.argv_ptr as u64;
+    frame.rdx = info.envp_ptr as u64;
     frame.cs = 0x33; // USER_CODE
     frame.ss = 0x2B; // USER_DATA
     frame.rflags = 0x202;
@@ -722,6 +746,20 @@ fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
     Ok(buf as u64)
 }
 
+fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_mkdir(&path).map_err(map_vfs_error)?;
+    let _ = process::user_chmod(&path, mode);
+    Ok(0)
+}
+
+fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_chmod(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_brk(new_break: usize) -> Result<u64, i64> {
     if new_break == 0 {
         return Ok(process::current_heap_break() as u64);
@@ -730,6 +768,73 @@ fn linux_brk(new_break: usize) -> Result<u64, i64> {
         Ok(addr) => Ok(addr as u64),
         Err(_) => Ok(process::current_heap_break() as u64),
     }
+}
+
+fn linux_time(tloc: usize) -> Result<u64, i64> {
+    let now = crate::time::unix_time();
+    if tloc != 0 {
+        let out = process::write_user_buffer(tloc, 8).ok_or(EFAULT)?;
+        out.copy_from_slice(&(now as i64).to_le_bytes());
+    }
+    Ok(now)
+}
+
+fn linux_gettimeofday(tv: usize, tz: usize) -> Result<u64, i64> {
+    let now = crate::time::unix_time() as i64;
+    if tv != 0 {
+        let out = process::write_user_buffer(tv, 16).ok_or(EFAULT)?;
+        out[0..8].copy_from_slice(&now.to_le_bytes());
+        out[8..16].copy_from_slice(&0i64.to_le_bytes());
+    }
+    if tz != 0 {
+        let out = process::write_user_buffer(tz, 8).ok_or(EFAULT)?;
+        out.fill(0);
+    }
+    Ok(0)
+}
+
+fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
+    const CLOCK_REALTIME: i32 = 0;
+    const CLOCK_MONOTONIC: i32 = 1;
+    let hz = crate::config::PIT_TARGET_HZ as u64;
+    let (sec, nsec) = match clock_id {
+        CLOCK_REALTIME => {
+            let ticks = crate::time::monotonic_ticks();
+            let sec = crate::time::unix_time();
+            let nsec = (ticks % hz).saturating_mul(1_000_000_000) / hz;
+            (sec, nsec)
+        }
+        CLOCK_MONOTONIC => {
+            let millis = crate::time::uptime_millis();
+            (millis / 1000, (millis % 1000) * 1_000_000)
+        }
+        _ => return Err(EINVAL),
+    };
+    let out = process::write_user_buffer(tp, 16).ok_or(EFAULT)?;
+    out[0..8].copy_from_slice(&(sec as i64).to_le_bytes());
+    out[8..16].copy_from_slice(&(nsec as i64).to_le_bytes());
+    Ok(0)
+}
+
+fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {
+    let bytes = process::read_user(req, 16).ok_or(EFAULT)?;
+    let sec = i64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EFAULT)?);
+    let nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
+    if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+        return Err(EINVAL);
+    }
+    let hz = crate::config::PIT_TARGET_HZ as u64;
+    let sec_ticks = (sec as u64).saturating_mul(hz);
+    let nsec_ticks = ((nsec as u64).saturating_mul(hz) + 999_999_999) / 1_000_000_000;
+    let target = crate::time::monotonic_ticks().saturating_add(sec_ticks + nsec_ticks);
+    while crate::time::monotonic_ticks() < target {
+        core::hint::spin_loop();
+    }
+    if rem != 0 {
+        let out = process::write_user_buffer(rem, 16).ok_or(EFAULT)?;
+        out.fill(0);
+    }
+    Ok(0)
 }
 
 fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
@@ -874,6 +979,7 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
     match err {
         fs::vfs::VfsError::PermissionDenied => EACCES,
         fs::vfs::VfsError::NotFound => ENOENT,
+        fs::vfs::VfsError::AlreadyExists => EEXIST,
         fs::vfs::VfsError::BadFd => EBADF,
         _ => EINVAL,
     }
@@ -895,6 +1001,27 @@ fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {
         }
     }
     Some(args)
+}
+
+fn read_user_envp(envp_ptr: usize) -> Option<Vec<alloc::string::String>> {
+    let mut env = Vec::new();
+    if envp_ptr == 0 {
+        return Some(env);
+    }
+    let mut index = 0usize;
+    loop {
+        let ptr_bytes = process::read_user(envp_ptr + index * 8, 8)?;
+        let entry_ptr = u64::from_le_bytes(ptr_bytes.try_into().ok()?) as usize;
+        if entry_ptr == 0 {
+            break;
+        }
+        env.push(read_user_cstr(entry_ptr)?);
+        index += 1;
+        if index > 16 {
+            break;
+        }
+    }
+    Some(env)
 }
 
 pub fn self_test() {

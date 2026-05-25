@@ -4,6 +4,7 @@ file /bin/init ../build/userland/init.elf
 file /bin/sh ../build/userland/sh.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
+file /bin/cc_hello ../build/userland/cc_hello.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
@@ -25,6 +26,7 @@ file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
 file /lib/libc.so ../build/userland/libc.so
 package cat 0.1.0 /bin/cat
+package cc_hello 0.1.0 /bin/cc_hello
 package chmod 0.1.0 /bin/chmod
 package curl_lite 0.1.0 /bin/curl_lite
 package echo 0.1.0 /bin/echo

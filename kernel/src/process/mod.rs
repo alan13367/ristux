@@ -21,6 +21,7 @@ pub type Pid = u64;
 
 const MAX_FDS: usize = 16;
 const MAX_USER_ARGS: usize = 8;
+const MAX_USER_ENVS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
@@ -63,6 +64,7 @@ pub struct Process {
     pub stack_top: usize,
     pub argc: usize,
     pub argv_ptr: usize,
+    pub envp_ptr: usize,
     exit_status: Option<i32>,
     waiters: Vec<Pid>,
     is_user: bool,
@@ -128,6 +130,7 @@ impl Process {
             stack_top: paging::USER_STACK_TOP,
             argc: 0,
             argv_ptr: 0,
+            envp_ptr: 0,
             exit_status: None,
             waiters: Vec::new(),
             is_user: true,
@@ -223,9 +226,16 @@ impl Process {
     }
 
     fn setup_stack(&mut self, args: &[&str]) {
+        self.setup_stack_with_env(args, &[]);
+    }
+
+    fn setup_stack_with_env(&mut self, args: &[&str], env: &[&str]) {
         self.address_space.activate();
         if args.len() > MAX_USER_ARGS {
             panic!("too many user arguments");
+        }
+        if env.len() > MAX_USER_ENVS {
+            panic!("too many user environment entries");
         }
         let stack_top = paging::USER_STACK_TOP;
         let stack_bottom = stack_top - FRAME_SIZE;
@@ -238,35 +248,71 @@ impl Process {
         let mut sp = stack_top;
         let mut arg_ptrs = [0usize; MAX_USER_ARGS];
         for (index, arg) in args.iter().enumerate() {
-            let bytes = arg.as_bytes();
-            sp -= bytes.len() + 1;
-            sp &= !0xf;
-            let page = paging::align_down(sp, FRAME_SIZE);
-            if !self.address_space.allows(page, FRAME_SIZE) {
-                self.address_space
-                    .map_zero_page(page)
-                    .expect("argv stack map failed");
-            }
-            unsafe {
-                ptr::copy_nonoverlapping(bytes.as_ptr(), sp as *mut u8, bytes.len());
-                *(sp as *mut u8).add(bytes.len()) = 0;
-            }
-            arg_ptrs[index] = sp;
+            arg_ptrs[index] = self.push_stack_string(&mut sp, arg);
+        }
+        let mut env_ptrs = [0usize; MAX_USER_ENVS];
+        for (index, entry) in env.iter().enumerate() {
+            env_ptrs[index] = self.push_stack_string(&mut sp, entry);
         }
 
         sp &= !0xf;
-        sp -= (args.len() + 1) * 8;
-        sp -= 8;
+        let env_bytes = (env.len() + 1) * 8;
+        sp -= env_bytes;
+        self.ensure_stack_mapping(sp, env_bytes);
+        let envp_ptr = sp;
         unsafe {
-            for index in 0..args.len() {
-                *(sp as *mut u64).add(index) = arg_ptrs[index] as u64;
+            for index in 0..env.len() {
+                *(envp_ptr as *mut u64).add(index) = env_ptrs[index] as u64;
             }
-            *(sp as *mut u64).add(args.len()) = 0;
+            *(envp_ptr as *mut u64).add(env.len()) = 0;
         }
 
+        let argv_bytes = (args.len() + 1) * 8;
+        sp -= argv_bytes;
+        self.ensure_stack_mapping(sp, argv_bytes);
+        let argv_ptr = sp;
+        unsafe {
+            for index in 0..args.len() {
+                *(argv_ptr as *mut u64).add(index) = arg_ptrs[index] as u64;
+            }
+            *(argv_ptr as *mut u64).add(args.len()) = 0;
+        }
+
+        sp = (sp & !0xf).saturating_sub(8);
+        self.ensure_stack_mapping(sp, 8);
         self.stack_top = sp;
         self.argc = args.len();
-        self.argv_ptr = sp;
+        self.argv_ptr = argv_ptr;
+        self.envp_ptr = envp_ptr;
+    }
+
+    fn push_stack_string(&mut self, sp: &mut usize, text: &str) -> usize {
+        let bytes = text.as_bytes();
+        *sp -= bytes.len() + 1;
+        *sp &= !0xf;
+        self.ensure_stack_mapping(*sp, bytes.len() + 1);
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), *sp as *mut u8, bytes.len());
+            *(*sp as *mut u8).add(bytes.len()) = 0;
+        }
+        *sp
+    }
+
+    fn ensure_stack_mapping(&mut self, addr: usize, len: usize) {
+        let end = addr.saturating_add(len.max(1));
+        let mut page = paging::align_down(addr, FRAME_SIZE);
+        let page_end = paging::align_up(end, FRAME_SIZE);
+        while page < page_end {
+            if !self.address_space.allows(page, FRAME_SIZE) {
+                self.address_space
+                    .map_zero_page(page)
+                    .expect("user stack map failed");
+            }
+            if page < self.address_space.stack_bottom {
+                self.address_space.stack_bottom = page;
+            }
+            page += FRAME_SIZE;
+        }
     }
 
     fn destroy(&mut self) {
@@ -473,6 +519,7 @@ impl Process {
             stack_top: self.stack_top,
             argc: self.argc,
             argv_ptr: self.argv_ptr,
+            envp_ptr: self.envp_ptr,
             exit_status: None,
             waiters: Vec::new(),
             is_user: self.is_user,
@@ -506,13 +553,14 @@ pub struct ExecInfo {
     pub stack_top: usize,
     pub argc: usize,
     pub argv_ptr: usize,
+    pub envp_ptr: usize,
 }
 
 /// Execve invoked from a running user process. Replaces the address space of
 /// `pid` with the program at `path`, preserves the existing file descriptors,
 /// and returns the entry/stack info so the syscall dispatcher can patch the
 /// outgoing iretq frame.
-pub fn exec_for_user(pid: Pid, path: &str, args: &[&str]) -> Option<ExecInfo> {
+pub fn exec_for_user(pid: Pid, path: &str, args: &[&str], env: &[&str]) -> Option<ExecInfo> {
     with_table(|table| {
         let metadata = fs::stat(path).ok()?;
         let data = fs::read_file(path)?;
@@ -526,7 +574,7 @@ pub fn exec_for_user(pid: Pid, path: &str, args: &[&str]) -> Option<ExecInfo> {
         if table.processes[index].load_elf(path, &data).is_err() {
             return None;
         }
-        table.processes[index].setup_stack(args);
+        table.processes[index].setup_stack_with_env(args, env);
         if metadata.mode & 0o4000 != 0 {
             table.processes[index].credentials.euid = metadata.owner;
         }
@@ -540,6 +588,7 @@ pub fn exec_for_user(pid: Pid, path: &str, args: &[&str]) -> Option<ExecInfo> {
             stack_top: p.stack_top,
             argc: p.argc,
             argv_ptr: p.argv_ptr,
+            envp_ptr: p.envp_ptr,
         })
     })
 }

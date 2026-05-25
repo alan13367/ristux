@@ -57,6 +57,15 @@ USER_UDP_OBJ := build/userland/udp.o
 USER_UDP_ELF := build/userland/udp.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
+USER_C_HEADERS := $(wildcard userland/c/include/*.h) $(wildcard userland/c/include/sys/*.h)
+USER_C_CFLAGS := --target=x86_64-unknown-none-elf -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone -msoft-float -mno-sse -mno-sse2 -nostdinc -Iuserland/c/include -Wall -Wextra
+USER_C_ASFLAGS := --target=x86_64-unknown-none-elf -x assembler -c
+USER_CRT0_OBJ := build/userland/c/crt0.o
+USER_CRTI_OBJ := build/userland/c/crti.o
+USER_CRTN_OBJ := build/userland/c/crtn.o
+USER_C_LIBC_OBJ := build/userland/c/libc.o
+USER_CC_HELLO_OBJ := build/userland/c/cc_hello.o
+USER_CC_HELLO_ELF := build/userland/cc_hello.elf
 ROOTFS_BUILDER := build/build_rootfs
 EXT2_DISK_BUILDER := build/build_ext2_disk
 ROOTFS_MANIFEST := rootfs/manifest.txt
@@ -152,6 +161,29 @@ $(USER_LIBC_OBJ): userland/libc.S
 $(USER_LIBC_SO): $(USER_LIBC_OBJ)
 	$(RUST_LLD) -flavor gnu -shared -o $@ $(USER_LIBC_OBJ)
 
+$(USER_CRT0_OBJ): userland/c/crt/crt0.S
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_ASFLAGS) $< -o $@
+
+$(USER_CRTI_OBJ): userland/c/crt/crti.S
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_ASFLAGS) $< -o $@
+
+$(USER_CRTN_OBJ): userland/c/crt/crtn.S
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_ASFLAGS) $< -o $@
+
+$(USER_C_LIBC_OBJ): userland/c/libc/libc.c $(USER_C_HEADERS)
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_CC_HELLO_OBJ): userland/c/bin/cc_hello.c $(USER_C_HEADERS)
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_CC_HELLO_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_HELLO_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_HELLO_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
+
 $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
@@ -160,7 +192,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

@@ -130,6 +130,10 @@ send_text() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_hello"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -196,6 +200,11 @@ grep -q "ristux tcp ok" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: sig_demo" "$SERIAL_LOG"
 grep -q "sig_demo: handler ran" "$SERIAL_LOG"
 grep -q "sig_demo: after sigreturn" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_hello" "$SERIAL_LOG"
+grep -q "cc_hello: hello from C" "$SERIAL_LOG"
+grep -q "cc_hello: malloc ok" "$SERIAL_LOG"
+grep -q "cc_hello: file=file io ok" "$SERIAL_LOG"
+grep -q "cc_hello: done" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"

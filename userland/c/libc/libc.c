@@ -1,0 +1,489 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#define SYS_READ 0
+#define SYS_WRITE 1
+#define SYS_OPEN 2
+#define SYS_CLOSE 3
+#define SYS_STAT 4
+#define SYS_FSTAT 5
+#define SYS_LSEEK 8
+#define SYS_BRK 12
+#define SYS_PIPE 22
+#define SYS_NANOSLEEP 35
+#define SYS_DUP 32
+#define SYS_DUP2 33
+#define SYS_GETPID 39
+#define SYS_FORK 57
+#define SYS_EXECVE 59
+#define SYS_EXIT 60
+#define SYS_WAIT4 61
+#define SYS_KILL 62
+#define SYS_GETCWD 79
+#define SYS_CHDIR 80
+#define SYS_MKDIR 83
+#define SYS_CHMOD 90
+#define SYS_GETTIMEOFDAY 96
+#define SYS_GETPPID 110
+#define SYS_TIME 201
+#define SYS_CLOCK_GETTIME 228
+
+int errno;
+static char *empty_environment[] = { NULL };
+char **environ = empty_environment;
+
+int main(int argc, char **argv, char **envp);
+
+static long syscall0(long n) {
+    long ret;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n) : "rcx", "r11", "memory");
+    return ret;
+}
+
+static long syscall1(long n, long a) {
+    long ret;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n), "D"(a) : "rcx", "r11", "memory");
+    return ret;
+}
+
+static long syscall2(long n, long a, long b) {
+    long ret;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b) : "rcx", "r11", "memory");
+    return ret;
+}
+
+static long syscall3(long n, long a, long b, long c) {
+    long ret;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
+    return ret;
+}
+
+static long syscall4(long n, long a, long b, long c, long d) {
+    long ret;
+    register long r10 __asm__("r10") = d;
+    __asm__ volatile("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10) : "rcx", "r11", "memory");
+    return ret;
+}
+
+static long syscall_ret(long ret) {
+    if (ret < 0 && ret >= -4095) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return ret;
+}
+
+void __ristux_start(long argc, char **argv, char **envp) {
+    if (envp != NULL) {
+        environ = envp;
+    }
+    exit(main((int)argc, argv, environ));
+}
+
+ssize_t read(int fd, void *buf, size_t len) {
+    return (ssize_t)syscall_ret(syscall3(SYS_READ, fd, (long)buf, (long)len));
+}
+
+ssize_t write(int fd, const void *buf, size_t len) {
+    return (ssize_t)syscall_ret(syscall3(SYS_WRITE, fd, (long)buf, (long)len));
+}
+
+int open(const char *path, int flags, unsigned int mode) {
+    return (int)syscall_ret(syscall3(SYS_OPEN, (long)path, flags, mode));
+}
+
+int close(int fd) {
+    return (int)syscall_ret(syscall1(SYS_CLOSE, fd));
+}
+
+off_t lseek(int fd, off_t offset, int whence) {
+    return (off_t)syscall_ret(syscall3(SYS_LSEEK, fd, offset, whence));
+}
+
+int pipe(int pipefd[2]) {
+    return (int)syscall_ret(syscall1(SYS_PIPE, (long)pipefd));
+}
+
+int dup(int oldfd) {
+    return (int)syscall_ret(syscall1(SYS_DUP, oldfd));
+}
+
+int dup2(int oldfd, int newfd) {
+    return (int)syscall_ret(syscall2(SYS_DUP2, oldfd, newfd));
+}
+
+pid_t fork(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_FORK));
+}
+
+int execve(const char *path, char *const argv[], char *const envp[]) {
+    return (int)syscall_ret(syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp));
+}
+
+pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
+    return (pid_t)syscall_ret(syscall4(SYS_WAIT4, pid, (long)status, options, (long)rusage));
+}
+
+pid_t getpid(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_GETPID));
+}
+
+pid_t getppid(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_GETPPID));
+}
+
+int chdir(const char *path) {
+    return (int)syscall_ret(syscall1(SYS_CHDIR, (long)path));
+}
+
+char *getcwd(char *buf, size_t size) {
+    long ret = syscall_ret(syscall2(SYS_GETCWD, (long)buf, (long)size));
+    return ret < 0 ? NULL : (char *)ret;
+}
+
+int stat(const char *path, struct stat *buf) {
+    return (int)syscall_ret(syscall2(SYS_STAT, (long)path, (long)buf));
+}
+
+int fstat(int fd, struct stat *buf) {
+    return (int)syscall_ret(syscall2(SYS_FSTAT, fd, (long)buf));
+}
+
+int mkdir(const char *path, mode_t mode) {
+    return (int)syscall_ret(syscall2(SYS_MKDIR, (long)path, mode));
+}
+
+int chmod(const char *path, mode_t mode) {
+    return (int)syscall_ret(syscall2(SYS_CHMOD, (long)path, mode));
+}
+
+int kill(int pid, int sig) {
+    return (int)syscall_ret(syscall2(SYS_KILL, pid, sig));
+}
+
+time_t time(time_t *tloc) {
+    return (time_t)syscall_ret(syscall1(SYS_TIME, (long)tloc));
+}
+
+int gettimeofday(struct timeval *tv, struct timezone *tz) {
+    return (int)syscall_ret(syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)tz));
+}
+
+int clock_gettime(int clockid, struct timespec *tp) {
+    return (int)syscall_ret(syscall2(SYS_CLOCK_GETTIME, clockid, (long)tp));
+}
+
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    return (int)syscall_ret(syscall2(SYS_NANOSLEEP, (long)req, (long)rem));
+}
+
+int brk(void *addr) {
+    long ret = syscall1(SYS_BRK, (long)addr);
+    if (ret < (long)addr) {
+        errno = ENOMEM;
+        return -1;
+    }
+    return 0;
+}
+
+void *sbrk(long increment) {
+    static char *current_break;
+    if (current_break == NULL) {
+        current_break = (char *)syscall1(SYS_BRK, 0);
+    }
+    char *old = current_break;
+    char *next = old + increment;
+    if (brk(next) < 0) {
+        return (void *)-1;
+    }
+    current_break = next;
+    return old;
+}
+
+void _exit(int status) {
+    syscall1(SYS_EXIT, status);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+void exit(int status) {
+    _exit(status);
+}
+
+struct malloc_header {
+    size_t size;
+};
+
+void *malloc(size_t size) {
+    if (size == 0) {
+        size = 1;
+    }
+    size = (size + 15) & ~(size_t)15;
+    size_t total = sizeof(struct malloc_header) + size;
+    struct malloc_header *header = (struct malloc_header *)sbrk((long)total);
+    if (header == (void *)-1) {
+        return NULL;
+    }
+    header->size = size;
+    return header + 1;
+}
+
+void free(void *ptr) {
+    (void)ptr;
+}
+
+void *calloc(size_t nmemb, size_t size) {
+    if (size != 0 && nmemb > ((size_t)-1) / size) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    size_t total = nmemb * size;
+    void *ptr = malloc(total);
+    if (ptr != NULL) {
+        memset(ptr, 0, total);
+    }
+    return ptr;
+}
+
+void *realloc(void *ptr, size_t size) {
+    if (ptr == NULL) {
+        return malloc(size);
+    }
+    if (size == 0) {
+        free(ptr);
+        return NULL;
+    }
+    struct malloc_header *old_header = ((struct malloc_header *)ptr) - 1;
+    void *next = malloc(size);
+    if (next == NULL) {
+        return NULL;
+    }
+    size_t copy = old_header->size < size ? old_header->size : size;
+    memcpy(next, ptr, copy);
+    return next;
+}
+
+void *memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = dst;
+    const unsigned char *s = src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dst;
+}
+
+void *memmove(void *dst, const void *src, size_t n) {
+    unsigned char *d = dst;
+    const unsigned char *s = src;
+    if (d < s) {
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+    } else if (d > s) {
+        for (size_t i = n; i > 0; i--) {
+            d[i - 1] = s[i - 1];
+        }
+    }
+    return dst;
+}
+
+void *memset(void *dst, int value, size_t n) {
+    unsigned char *d = dst;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = (unsigned char)value;
+    }
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *pa = a;
+    const unsigned char *pb = b;
+    for (size_t i = 0; i < n; i++) {
+        if (pa[i] != pb[i]) {
+            return (int)pa[i] - (int)pb[i];
+        }
+    }
+    return 0;
+}
+
+size_t strlen(const char *s) {
+    size_t len = 0;
+    while (s[len] != '\0') {
+        len++;
+    }
+    return len;
+}
+
+int strcmp(const char *a, const char *b) {
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+char *strcpy(char *dst, const char *src) {
+    char *out = dst;
+    while ((*dst++ = *src++) != '\0') {
+    }
+    return out;
+}
+
+char *strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i] != '\0'; i++) {
+        dst[i] = src[i];
+    }
+    for (; i < n; i++) {
+        dst[i] = '\0';
+    }
+    return dst;
+}
+
+char *strchr(const char *s, int ch) {
+    while (*s != '\0') {
+        if (*s == (char)ch) {
+            return (char *)s;
+        }
+        s++;
+    }
+    return ch == 0 ? (char *)s : NULL;
+}
+
+int putchar(int ch) {
+    unsigned char c = (unsigned char)ch;
+    return write(1, &c, 1) == 1 ? ch : -1;
+}
+
+int puts(const char *s) {
+    size_t len = strlen(s);
+    if (write(1, s, len) < 0) {
+        return -1;
+    }
+    if (write(1, "\n", 1) < 0) {
+        return -1;
+    }
+    return (int)len + 1;
+}
+
+static int print_str(const char *s) {
+    if (s == NULL) {
+        s = "(null)";
+    }
+    size_t len = strlen(s);
+    return write(1, s, len) < 0 ? -1 : (int)len;
+}
+
+static int print_unsigned(unsigned long value, unsigned int base, int prefix) {
+    char buf[32];
+    const char *digits = "0123456789abcdef";
+    size_t index = sizeof(buf);
+    if (value == 0) {
+        buf[--index] = '0';
+    }
+    while (value != 0) {
+        buf[--index] = digits[value % base];
+        value /= base;
+    }
+    int written = 0;
+    if (prefix) {
+        if (write(1, "0x", 2) < 0) {
+            return -1;
+        }
+        written += 2;
+    }
+    size_t len = sizeof(buf) - index;
+    if (write(1, &buf[index], len) < 0) {
+        return -1;
+    }
+    return written + (int)len;
+}
+
+static int print_signed(long value) {
+    if (value < 0) {
+        if (write(1, "-", 1) < 0) {
+            return -1;
+        }
+        int rest = print_unsigned((unsigned long)(-value), 10, 0);
+        return rest < 0 ? -1 : rest + 1;
+    }
+    return print_unsigned((unsigned long)value, 10, 0);
+}
+
+int vprintf(const char *fmt, va_list ap) {
+    int written = 0;
+    for (size_t i = 0; fmt[i] != '\0'; i++) {
+        if (fmt[i] != '%') {
+            if (write(1, &fmt[i], 1) < 0) {
+                return -1;
+            }
+            written++;
+            continue;
+        }
+
+        i++;
+        int long_flag = 0;
+        if (fmt[i] == 'l') {
+            long_flag = 1;
+            i++;
+        }
+
+        int n = 0;
+        switch (fmt[i]) {
+        case '%':
+            n = write(1, "%", 1) < 0 ? -1 : 1;
+            break;
+        case 'c': {
+            char c = (char)va_arg(ap, int);
+            n = write(1, &c, 1) < 0 ? -1 : 1;
+            break;
+        }
+        case 's':
+            n = print_str(va_arg(ap, const char *));
+            break;
+        case 'd':
+        case 'i':
+            n = print_signed(long_flag ? va_arg(ap, long) : va_arg(ap, int));
+            break;
+        case 'u':
+            n = print_unsigned(long_flag ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int), 10, 0);
+            break;
+        case 'x':
+            n = print_unsigned(long_flag ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int), 16, 0);
+            break;
+        case 'p':
+            n = print_unsigned((unsigned long)va_arg(ap, void *), 16, 1);
+            break;
+        default:
+            n = write(1, "?", 1) < 0 ? -1 : 1;
+            break;
+        }
+        if (n < 0) {
+            return -1;
+        }
+        written += n;
+    }
+    return written;
+}
+
+int printf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vprintf(fmt, ap);
+    va_end(ap);
+    return ret;
+}
