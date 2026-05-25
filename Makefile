@@ -96,8 +96,13 @@ USER_CC_PROCFS_OBJ := build/userland/c/cc_procfs.o
 USER_CC_PROCFS_ELF := build/userland/cc_procfs.elf
 ROOTFS_BUILDER := build/build_rootfs
 EXT2_DISK_BUILDER := build/build_ext2_disk
+PACKAGE_TAR_BUILDER := build/build_package_tar
 ROOTFS_MANIFEST := rootfs/manifest.txt
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release
+ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
+ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
+ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
+ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
 .PHONY: all build rootfs disk check-multiboot iso run run-headless smoke debug test clean
 
@@ -310,13 +315,24 @@ $(USER_CC_PROCFS_OBJ): userland/c/bin/cc_procfs.c $(USER_C_HEADERS)
 $(USER_CC_PROCFS_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_PROCFS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_PROCFS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
 
-$(ROOTFS_BUILDER): tools/build_rootfs.rs
+$(ROOTFS_BUILDER): tools/build_rootfs.rs tools/package_archive.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
+$(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs tools/package_archive.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
+
+$(PACKAGE_TAR_BUILDER): tools/build_package_tar.rs
+	mkdir -p build
+	$(RUSTC) $< -o $@
+
+$(ROOTFS_BASE_PACKAGE_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_BASE_PACKAGE_INPUTS)
+	mkdir -p build/packages
+	$(PACKAGE_TAR_BUILDER) $@ $(ROOTFS_BASE_PACKAGE_DIR)
+
+$(ROOTFS_BASE_PACKAGE_ARCHIVE): $(ROOTFS_BASE_PACKAGE_TAR)
+	gzip -n -c $< > $@
 
 $(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_DEV_ELF) $(USER_CC_COW_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)

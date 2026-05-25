@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod package_archive;
+
 const MAGIC: &[u8; 8] = b"RITRD001";
 const PACKAGE_INDEX: &str = "/pkg/packages.txt";
 
@@ -41,12 +43,13 @@ fn main() {
         match parts.as_slice() {
             ["file", path, source] => {
                 let source = manifest_dir.join(source);
-                files.push(FileEntry {
-                    path: (*path).to_owned(),
-                    data: fs::read(&source).unwrap_or_else(|err| {
+                insert_file(
+                    &mut files,
+                    (*path).to_owned(),
+                    fs::read(&source).unwrap_or_else(|err| {
                         panic!("read rootfs source {}: {}", source.display(), err)
                     }),
-                });
+                );
             }
             ["package", name, version, path] => {
                 packages.push(PackageEntry {
@@ -55,14 +58,25 @@ fn main() {
                     path: (*path).to_owned(),
                 });
             }
+            ["package-archive", name, version, source, prefix] => {
+                let source = manifest_dir.join(source);
+                for file in package_archive::extract_package_archive(&source, prefix) {
+                    let path = file.path;
+                    let data = file.data;
+                    insert_file(&mut files, path.clone(), data);
+                    packages.push(PackageEntry {
+                        name: (*name).to_owned(),
+                        version: (*version).to_owned(),
+                        path,
+                    });
+                }
+            }
             _ => panic!("invalid rootfs manifest line {}: {}", line_index + 1, line),
         }
     }
 
-    files.push(FileEntry {
-        path: PACKAGE_INDEX.to_owned(),
-        data: package_index(&packages, &files).into_bytes(),
-    });
+    let package_index = package_index(&packages, &files).into_bytes();
+    insert_file(&mut files, PACKAGE_INDEX.to_owned(), package_index);
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let mut archive = Vec::new();
@@ -77,6 +91,14 @@ fn main() {
         fs::create_dir_all(parent).expect("create rootfs output directory");
     }
     fs::write(output, archive).expect("write rootfs image");
+}
+
+fn insert_file(files: &mut Vec<FileEntry>, path: String, data: Vec<u8>) {
+    if let Some(file) = files.iter_mut().find(|file| file.path == path) {
+        file.data = data;
+    } else {
+        files.push(FileEntry { path, data });
+    }
 }
 
 fn package_index(packages: &[PackageEntry], files: &[FileEntry]) -> String {

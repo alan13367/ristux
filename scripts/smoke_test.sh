@@ -67,6 +67,14 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 5
+  send_text "cat /etc/motd"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cat /pkg/packages.txt"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "touch /home/marker"
   sleep 1
   printf 'sendkey ret\n'
@@ -241,6 +249,10 @@ grep -q "\\$ " "$SERIAL_LOG"
 grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
+grep -q "ristux package archive path online" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
+grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: touch /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo persisted > /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$SERIAL_LOG"

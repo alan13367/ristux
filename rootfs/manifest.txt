@@ -39,6 +39,7 @@ file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
 file /lib/libc.so ../build/userland/libc.so
+package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow

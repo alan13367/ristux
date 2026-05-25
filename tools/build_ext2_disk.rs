@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod package_archive;
+
 const BLOCK_SIZE: usize = 1024;
 const DISK_SIZE: usize = 64 * 1024 * 1024;
 const BLOCKS_COUNT: u32 = (DISK_SIZE / BLOCK_SIZE) as u32;
@@ -67,6 +69,12 @@ struct Builder {
     entries: BTreeMap<String, Entry>,
     block_used: Vec<bool>,
     inode_used: Vec<bool>,
+}
+
+struct PackageEntry {
+    name: String,
+    version: String,
+    path: String,
 }
 
 impl Builder {
@@ -467,10 +475,13 @@ fn main() {
     builder.ensure_dir("/root", 0o700, 0, 0);
     builder.ensure_dir("/tmp", 0o777, 0, 0);
     builder.ensure_dir("/dev", 0o755, 0, 0);
+    builder.ensure_dir("/pkg", 0o755, 0, 0);
     builder.ensure_dir("/proc", 0o755, 0, 0);
     builder.ensure_dir("/initrd", 0o755, 0, 0);
 
     let mut init_data = None;
+    let mut installed_files = BTreeMap::new();
+    let mut packages = Vec::new();
     for (line_index, line) in manifest.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -486,23 +497,39 @@ fn main() {
                 if *path == "/bin/init" {
                     init_data = Some(data.clone());
                 }
-                let mode = if *path == "/bin/su" {
-                    0o4755
-                } else if path.starts_with("/bin/")
-                    || path.starts_with("/sbin/")
-                    || path.starts_with("/lib/")
-                {
-                    0o755
-                } else {
-                    0o644
-                };
-                builder.add_file(path, data, mode, 0, 0);
+                add_manifest_file(&mut builder, &mut installed_files, path, data);
             }
-            ["package", ..] => {}
+            ["package", name, version, path] => {
+                packages.push(PackageEntry {
+                    name: (*name).to_owned(),
+                    version: (*version).to_owned(),
+                    path: (*path).to_owned(),
+                });
+            }
+            ["package-archive", name, version, source, prefix] => {
+                let source = manifest_dir.join(source);
+                for file in package_archive::extract_package_archive(&source, prefix) {
+                    let path = file.path;
+                    let data = file.data;
+                    add_manifest_file(&mut builder, &mut installed_files, &path, data);
+                    packages.push(PackageEntry {
+                        name: (*name).to_owned(),
+                        version: (*version).to_owned(),
+                        path,
+                    });
+                }
+            }
             _ => panic!("invalid rootfs manifest line {}: {}", line_index + 1, line),
         }
     }
 
+    builder.add_file(
+        "/pkg/packages.txt",
+        package_index(&packages, &installed_files).into_bytes(),
+        0o644,
+        0,
+        0,
+    );
     if let Some(data) = init_data {
         builder.add_file("/sbin/init", data, 0o755, 0, 0);
     }
@@ -537,6 +564,56 @@ fn main() {
     );
 
     builder.finish(&output);
+}
+
+fn add_manifest_file(
+    builder: &mut Builder,
+    installed_files: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    data: Vec<u8>,
+) {
+    let mode = manifest_file_mode(path);
+    installed_files.insert(String::from(path), data.clone());
+    builder.add_file(path, data, mode, 0, 0);
+}
+
+fn manifest_file_mode(path: &str) -> u16 {
+    if path == "/bin/su" {
+        0o4755
+    } else if path.starts_with("/bin/")
+        || path.starts_with("/sbin/")
+        || path.starts_with("/lib/")
+    {
+        0o755
+    } else {
+        0o644
+    }
+}
+
+fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -> String {
+    let mut output = String::from("# name version path checksum\n");
+    for package in packages {
+        let data = files
+            .get(&package.path)
+            .unwrap_or_else(|| panic!("package {} references missing {}", package.name, package.path));
+        output.push_str(&format!(
+            "{} {} {} {:016x}\n",
+            package.name,
+            package.version,
+            package.path,
+            checksum(data)
+        ));
+    }
+    output
+}
+
+fn checksum(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
 }
 
 fn put_u16(buf: &mut [u8], offset: usize, value: u16) {
