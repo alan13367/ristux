@@ -20,6 +20,11 @@ fn run() -> KernelResult<()> {
         !drivers::registered_drivers().is_empty(),
         "no kernel drivers registered",
     )?;
+    let framebuffer = drivers::framebuffer::stats();
+    ensure(
+        framebuffer.initialized && framebuffer.backbuffer_presented,
+        "framebuffer graphics path did not initialize",
+    )?;
     let scheduler = task::scheduler::stats();
     ensure(
         scheduler.task_count >= 4,
@@ -74,6 +79,16 @@ fn run() -> KernelResult<()> {
     for driver in drivers::registered_drivers() {
         crate::println!("  {} ({})", driver.name, driver.kind);
     }
+    crate::println!(
+        "Framebuffer stats: {}x{}x{}, linear {}, {} pixel(s), {} glyph(s), {} fb0 write(s)",
+        framebuffer.width,
+        framebuffer.height,
+        framebuffer.bpp,
+        framebuffer.linear,
+        framebuffer.pixels_drawn,
+        framebuffer.glyphs_drawn,
+        framebuffer.fb0_writes
+    );
 
     crate::println!(
         "Scheduler stats: {} tasks, {} ready, {} timer dispatches",

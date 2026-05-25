@@ -23,6 +23,7 @@ pub enum DeviceKind {
     Zero,
     Console,
     Keyboard,
+    Framebuffer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +86,7 @@ impl Vfs {
         vfs.add_device("/dev/zero", DeviceKind::Zero);
         vfs.add_device("/dev/console", DeviceKind::Console);
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
+        vfs.add_device("/dev/fb0", DeviceKind::Framebuffer);
         vfs.add_file("/proc/version", b"ristux 0.1\n");
         vfs.add_file("/tmp/message.txt", b"hello from tmpfs\n");
         vfs
@@ -200,6 +202,7 @@ impl Vfs {
                 Ok(count)
             }
             NodeKind::Device(DeviceKind::Console) => Ok(0),
+            NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
             NodeKind::Directory => Err(VfsError::NotFile),
         }
     }
@@ -230,6 +233,7 @@ impl Vfs {
                 crate::print!("{}", text);
                 Ok(input.len())
             }
+            NodeKind::Device(DeviceKind::Framebuffer) => Ok(drivers::framebuffer::write_bytes(input)),
             NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
             NodeKind::Directory => Err(VfsError::NotFile),
         }
@@ -368,8 +372,14 @@ pub fn self_test() {
     {
         panic!("VFS path resolution self-test failed");
     }
-    if list_paths("/dev").len() < 4 {
+    if list_paths("/dev").len() < 5 {
         panic!("devfs mount self-test failed");
+    }
+    let fb = open("/dev/fb0").expect("open /dev/fb0 failed");
+    let fb_written = write(fb, &[0x40, 0x80, 0xff]).expect("write /dev/fb0 failed");
+    close(fb).expect("close /dev/fb0 failed");
+    if fb_written != 3 {
+        panic!("/dev/fb0 self-test failed");
     }
     chmod("/tmp/message.txt", 0o600).expect("chmod self-test failed");
     let user = Credentials::user(1000, 1000);

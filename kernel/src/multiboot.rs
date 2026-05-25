@@ -81,6 +81,12 @@ impl BootInfo {
             height: unsafe { *((payload + 16) as *const u32) },
             bpp: unsafe { *((payload + 20) as *const u8) },
             buffer_type: unsafe { *((payload + 21) as *const u8) },
+            red_field_position: read_optional_u8(tag, 24),
+            red_mask_size: read_optional_u8(tag, 25),
+            green_field_position: read_optional_u8(tag, 26),
+            green_mask_size: read_optional_u8(tag, 27),
+            blue_field_position: read_optional_u8(tag, 28),
+            blue_mask_size: read_optional_u8(tag, 29),
         })
     }
 
@@ -325,6 +331,12 @@ pub struct FramebufferInfo {
     pub height: u32,
     pub bpp: u8,
     pub buffer_type: u8,
+    pub red_field_position: u8,
+    pub red_mask_size: u8,
+    pub green_field_position: u8,
+    pub green_mask_size: u8,
+    pub blue_field_position: u8,
+    pub blue_mask_size: u8,
 }
 
 fn read_c_string(addr: usize, max_len: usize) -> Option<&'static str> {
@@ -335,4 +347,13 @@ fn read_c_string(addr: usize, max_len: usize) -> Option<&'static str> {
 
 const fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
+}
+
+fn read_optional_u8(tag: Tag<'_>, payload_offset: usize) -> u8 {
+    let addr = tag.payload() + payload_offset;
+    if addr < tag.addr + tag.size as usize {
+        unsafe { *(addr as *const u8) }
+    } else {
+        0
+    }
 }

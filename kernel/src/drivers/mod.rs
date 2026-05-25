@@ -1,3 +1,4 @@
+pub mod framebuffer;
 pub mod keyboard;
 pub mod serial;
 pub mod vga;
@@ -19,6 +20,10 @@ const REGISTERED_DRIVERS: &[DriverInfo] = &[
     DriverInfo {
         name: "ps2-keyboard",
         kind: "input",
+    },
+    DriverInfo {
+        name: "framebuffer",
+        kind: "graphics-output",
     },
 ];
 
