@@ -31,6 +31,7 @@ send_text() {
       [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
       ' ') printf 'sendkey spc\n' ;;
       '|') printf 'sendkey shift-backslash\n' ;;
+      '&') printf 'sendkey shift-7\n' ;;
       '/') printf 'sendkey slash\n' ;;
       '.') printf 'sendkey dot\n' ;;
       '-') printf 'sendkey minus\n' ;;
@@ -98,6 +99,24 @@ send_text() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "sleep 60 &"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "jobs"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "fg"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  printf 'sendkey ctrl-c\n'
+  sleep 4
+  send_text "echo after ctrlc"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -150,6 +169,13 @@ grep -q "touch: EACCES /etc/foo" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: touch ~/foo" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: su" "$SERIAL_LOG"
 grep -q "uid=0(root) gid=0(root)" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: sleep 60 &" "$SERIAL_LOG"
+grep -q "\\[1\\] Running sleep 60 &" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: jobs" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: fg" "$SERIAL_LOG"
+grep -q "TTY delivered signal 2 to foreground pgrp" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo after ctrlc" "$SERIAL_LOG"
+grep -q "after ctrlc" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"

@@ -7,6 +7,7 @@ use crate::{process::Pid, signal::Signal, sync::spinlock::SpinLock};
 static TTY: SpinLock<Option<Tty>> = SpinLock::new(None);
 static LEFT_SHIFT: AtomicBool = AtomicBool::new(false);
 static RIGHT_SHIFT: AtomicBool = AtomicBool::new(false);
+static CTRL: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TtyMode {
@@ -22,6 +23,7 @@ pub struct Tty {
     eof: bool,
     /// Processes parked inside `read()` waiting for input.
     waiters: Vec<Pid>,
+    foreground_pgrp: Pid,
 }
 
 impl Tty {
@@ -32,6 +34,7 @@ impl Tty {
             ready: Vec::new(),
             eof: false,
             waiters: Vec::new(),
+            foreground_pgrp: 1,
         }
     }
 
@@ -42,6 +45,7 @@ impl Tty {
     pub fn input(&mut self, byte: u8) -> Option<Signal> {
         match byte {
             0x03 => Some(Signal::Int),
+            0x1a => Some(Signal::Tstp),
             0x04 => {
                 self.eof = true;
                 None
@@ -100,6 +104,14 @@ impl Tty {
     fn has_data(&self) -> bool {
         !self.ready.is_empty() || self.eof
     }
+
+    fn foreground_pgrp(&self) -> Pid {
+        self.foreground_pgrp
+    }
+
+    fn set_foreground_pgrp(&mut self, pgrp: Pid) {
+        self.foreground_pgrp = pgrp;
+    }
 }
 
 pub fn init() {
@@ -112,32 +124,40 @@ pub fn input_scancode(scancode: u8) {
         return;
     };
 
-    let waiters = {
+    let (waiters, signal_target) = {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
         if let Some(signal) = tty.input(byte) {
-            crate::println!(
-                "TTY line discipline generated signal {} from keyboard input.",
-                signal.number()
-            );
-            return;
-        }
-
-        if byte == b'\n' {
-            let line = tty.pending_line().unwrap_or(&[]);
-            let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
-            match str::from_utf8(trimmed) {
-                Ok(text) => crate::println!("TTY canonical line ready: {}", text),
-                Err(_) => crate::println!("TTY canonical line ready: <binary>"),
-            }
-        }
-
-        if tty.has_data() {
-            tty.drain_waiters()
+            let target = tty.foreground_pgrp();
+            (Vec::new(), Some((target, signal)))
         } else {
-            Vec::new()
+            if byte == b'\n' {
+                let line = tty.pending_line().unwrap_or(&[]);
+                let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
+                match str::from_utf8(trimmed) {
+                    Ok(text) => crate::println!("TTY canonical line ready: {}", text),
+                    Err(_) => crate::println!("TTY canonical line ready: <binary>"),
+                }
+            }
+
+            let waiters = if tty.has_data() {
+                tty.drain_waiters()
+            } else {
+                Vec::new()
+            };
+            (waiters, None)
         }
     };
+
+    if let Some((pgrp, signal)) = signal_target {
+        crate::println!(
+            "TTY delivered signal {} to foreground pgrp {}.",
+            signal.number(),
+            pgrp
+        );
+        crate::process::signal_pgrp(pgrp, signal.default_status());
+        return;
+    }
 
     for pid in waiters {
         crate::process::wake_io_waiters_for(pid);
@@ -187,6 +207,20 @@ pub fn park_current() {
     crate::process::block_current(crate::process::BlockReason::WaitIo);
 }
 
+pub fn foreground_pgrp() -> Pid {
+    let guard = TTY.lock();
+    guard
+        .as_ref()
+        .map(|tty| tty.foreground_pgrp())
+        .unwrap_or(1)
+}
+
+pub fn set_foreground_pgrp(pgrp: Pid) {
+    let mut guard = TTY.lock();
+    let tty = guard.as_mut().expect("TTY used before initialization");
+    tty.set_foreground_pgrp(pgrp);
+}
+
 fn translate_set1(scancode: u8) -> Option<u8> {
     match scancode {
         0x2a => {
@@ -197,12 +231,20 @@ fn translate_set1(scancode: u8) -> Option<u8> {
             RIGHT_SHIFT.store(true, Ordering::Relaxed);
             return None;
         }
+        0x1d => {
+            CTRL.store(true, Ordering::Relaxed);
+            return None;
+        }
         0xaa => {
             LEFT_SHIFT.store(false, Ordering::Relaxed);
             return None;
         }
         0xb6 => {
             RIGHT_SHIFT.store(false, Ordering::Relaxed);
+            return None;
+        }
+        0x9d => {
+            CTRL.store(false, Ordering::Relaxed);
             return None;
         }
         _ => {}
@@ -213,7 +255,7 @@ fn translate_set1(scancode: u8) -> Option<u8> {
     }
 
     let shifted = LEFT_SHIFT.load(Ordering::Relaxed) || RIGHT_SHIFT.load(Ordering::Relaxed);
-    match scancode {
+    let byte = match scancode {
         0x02 => Some(if shifted { b'!' } else { b'1' }),
         0x03 => Some(if shifted { b'@' } else { b'2' }),
         0x04 => Some(if shifted { b'#' } else { b'3' }),
@@ -266,7 +308,11 @@ fn translate_set1(scancode: u8) -> Option<u8> {
         0x35 => Some(if shifted { b'?' } else { b'/' }),
         0x39 => Some(b' '),
         _ => None,
+    }?;
+    if CTRL.load(Ordering::Relaxed) && byte.is_ascii_alphabetic() {
+        return Some(byte.to_ascii_lowercase() & 0x1f);
     }
+    Some(byte)
 }
 
 fn self_test() {

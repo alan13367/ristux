@@ -47,6 +47,11 @@ pub struct Process {
     pub parent: Option<Pid>,
     pub name: String,
     pub cwd: String,
+    pub pgrp: Pid,
+    pub sid: Pid,
+    pub pending_signals: u64,
+    pub signal_mask: u64,
+    pub signal_handlers: [usize; 32],
     pub state: ProcessState,
     pub address_space: AddressSpace,
     pub credentials: Credentials,
@@ -103,6 +108,11 @@ impl Process {
             parent,
             name: String::from(name),
             cwd: String::from("/"),
+            pgrp: pid,
+            sid: parent.unwrap_or(pid),
+            pending_signals: 0,
+            signal_mask: 0,
+            signal_handlers: [0; 32],
             state: ProcessState::Ready,
             address_space,
             credentials,
@@ -433,6 +443,11 @@ impl Process {
             parent: self.parent,
             name: self.name.clone(),
             cwd: self.cwd.clone(),
+            pgrp: self.pgrp,
+            sid: self.sid,
+            pending_signals: self.pending_signals,
+            signal_mask: self.signal_mask,
+            signal_handlers: self.signal_handlers,
             state: ProcessState::Ready,
             address_space,
             credentials: self.credentials,
@@ -557,6 +572,56 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     } else {
         false
     }
+}
+
+pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
+    let pids = with_table(|table| {
+        table
+            .processes
+            .iter()
+            .filter(|process| {
+                process.pgrp == pgrp && !matches!(process.state, ProcessState::Zombie(_))
+            })
+            .map(|process| process.pid)
+            .collect::<Vec<_>>()
+    });
+    let mut delivered = false;
+    for pid in pids {
+        delivered |= signal(pid, status);
+    }
+    delivered
+}
+
+pub fn current_pgrp() -> Option<Pid> {
+    with_current_read(|process| process.pgrp)
+}
+
+pub fn set_pgid(pid: Pid, pgid: Pid) -> bool {
+    let caller = current_pid();
+    with_table(|table| {
+        let target_pid = if pid == 0 { caller.unwrap_or(0) } else { pid };
+        if target_pid == 0 {
+            return false;
+        }
+        let target_pgid = if pgid == 0 { target_pid } else { pgid };
+        let Some(process) = table.get_mut(target_pid) else {
+            return false;
+        };
+        process.pgrp = target_pgid;
+        true
+    })
+}
+
+pub fn set_signal_handler(pid: Pid, signal: usize, handler: usize) -> Option<usize> {
+    with_table(|table| {
+        let process = table.get_mut(pid)?;
+        if signal >= process.signal_handlers.len() {
+            return None;
+        }
+        let old = process.signal_handlers[signal];
+        process.signal_handlers[signal] = handler;
+        Some(old)
+    })
 }
 
 pub fn set_current(pid: Pid) {

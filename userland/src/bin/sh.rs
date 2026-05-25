@@ -4,7 +4,7 @@
 extern crate alloc;
 extern crate ristux_userland;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr;
@@ -14,6 +14,13 @@ const PS1: &[u8] = b"$ ";
 const FD_STDIN: i32 = 0;
 const FD_STDOUT: i32 = 1;
 const FD_STDERR: i32 = 2;
+const TIOCSPGRP: usize = 0x5410;
+
+struct Job {
+    id: usize,
+    pid: isize,
+    command: Vec<u8>,
+}
 
 #[derive(Clone)]
 struct Stage {
@@ -163,7 +170,35 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
     (stage, background)
 }
 
-fn builtin(stage: &Stage) -> Option<i32> {
+fn write_number(fd: i32, value: isize) {
+    let text = value.to_string();
+    let _ = sys::write(fd, text.as_bytes());
+}
+
+fn set_tty_foreground(pgrp: isize) {
+    let raw = pgrp as u32;
+    let _ = sys::ioctl(FD_STDIN, TIOCSPGRP, &raw as *const u32 as usize);
+}
+
+fn wait_foreground(pid: isize) -> i32 {
+    let mut status: i32 = 0;
+    let r = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    if r >= 0 {
+        (status >> 8) & 0xff
+    } else {
+        1
+    }
+}
+
+fn print_job(job: &Job) {
+    let _ = sys::write(FD_STDOUT, b"[");
+    write_number(FD_STDOUT, job.id as isize);
+    let _ = sys::write(FD_STDOUT, b"] Running ");
+    let _ = sys::write(FD_STDOUT, &job.command);
+    let _ = sys::write(FD_STDOUT, b"\n");
+}
+
+fn builtin(stage: &Stage, jobs: &mut Vec<Job>) -> Option<i32> {
     if stage.argv.is_empty() {
         return Some(0);
     }
@@ -188,6 +223,32 @@ fn builtin(stage: &Stage) -> Option<i32> {
             }
         }
         b"export" => Some(0),
+        b"jobs" => {
+            for job in jobs.iter() {
+                print_job(job);
+            }
+            Some(0)
+        }
+        b"fg" => {
+            let Some(job) = jobs.pop() else {
+                let _ = sys::write(FD_STDERR, b"fg: no current job\n");
+                return Some(1);
+            };
+            let shell_pgrp = sys::getpgrp();
+            set_tty_foreground(job.pid);
+            let status = wait_foreground(job.pid);
+            set_tty_foreground(shell_pgrp);
+            Some(status)
+        }
+        b"bg" => {
+            if let Some(job) = jobs.last() {
+                print_job(job);
+                Some(0)
+            } else {
+                let _ = sys::write(FD_STDERR, b"bg: no current job\n");
+                Some(1)
+            }
+        }
         b":" => Some(0),
         _ => None,
     }
@@ -213,8 +274,12 @@ fn open_redirect(path: &[u8], write: bool, append: bool) -> i32 {
 fn spawn_stage(stage: &Stage, stdin_fd: i32, stdout_fd: i32, pipes: &[[i32; 2]]) -> isize {
     let pid = sys::fork();
     if pid != 0 {
+        if pid > 0 {
+            let _ = sys::setpgid(pid as usize, pid as usize);
+        }
         return pid;
     }
+    let _ = sys::setpgid(0, 0);
 
     if stdin_fd != FD_STDIN {
         sys::dup2(stdin_fd, FD_STDIN);
@@ -274,7 +339,7 @@ fn spawn_stage(stage: &Stage, stdin_fd: i32, stdout_fd: i32, pipes: &[[i32; 2]])
     sys::exit(127);
 }
 
-fn run_line(line: &[u8]) -> i32 {
+fn run_line(line: &[u8], jobs: &mut Vec<Job>, next_job_id: &mut usize) -> i32 {
     let trimmed: Vec<u8> = line.iter().copied().filter(|b| *b != b'\r').collect();
     let segments = split_pipeline(&trimmed);
 
@@ -286,7 +351,7 @@ fn run_line(line: &[u8]) -> i32 {
         if stage.argv.is_empty() {
             return 0;
         }
-        if let Some(rc) = builtin(stage) {
+        if let Some(rc) = builtin(stage, jobs) {
             return rc;
         }
     }
@@ -324,21 +389,38 @@ fn run_line(line: &[u8]) -> i32 {
     }
 
     if background {
+        if let Some(pid) = pids.last().copied() {
+            jobs.push(Job {
+                id: *next_job_id,
+                pid,
+                command: trimmed.clone(),
+            });
+            *next_job_id += 1;
+            if let Some(job) = jobs.last() {
+                print_job(job);
+            }
+        }
         return 0;
     }
 
     let mut last_status: i32 = 0;
-    for pid in pids.iter() {
-        let mut status: i32 = 0;
-        let r = sys::wait4(*pid, &mut status as *mut i32, 0, 0);
-        if r >= 0 {
-            last_status = (status >> 8) & 0xff;
-        }
+    let shell_pgrp = sys::getpgrp();
+    if let Some(pid) = pids.last().copied() {
+        set_tty_foreground(pid);
     }
+    for pid in pids.iter() {
+        last_status = wait_foreground(*pid);
+    }
+    set_tty_foreground(shell_pgrp);
     last_status
 }
 
 fn main(_args: &[&[u8]]) -> i32 {
+    let _ = sys::setpgid(0, 0);
+    let shell_pgrp = sys::getpgrp();
+    set_tty_foreground(shell_pgrp);
+    let mut jobs: Vec<Job> = Vec::new();
+    let mut next_job_id = 1usize;
     loop {
         let _ = sys::write(FD_STDOUT, PS1);
         match read_line(FD_STDIN) {
@@ -346,7 +428,7 @@ fn main(_args: &[&[u8]]) -> i32 {
                 if line.is_empty() {
                     continue;
                 }
-                let _ = run_line(&line);
+                let _ = run_line(&line, &mut jobs, &mut next_job_id);
             }
             None => {
                 let _ = sys::write(FD_STDOUT, b"\n");

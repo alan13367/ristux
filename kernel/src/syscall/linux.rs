@@ -41,6 +41,7 @@ pub const NR_setgid: u64 = 106;
 pub const NR_geteuid: u64 = 107;
 pub const NR_setpgid: u64 = 109;
 pub const NR_getppid: u64 = 110;
+pub const NR_getpgrp: u64 = 111;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
 
@@ -91,6 +92,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
+        NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
         NR_brk => linux_brk(a0 as usize),
@@ -98,7 +100,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
         NR_stat => linux_stat(a0 as usize, a1 as usize),
         NR_fstat => linux_fstat(a0 as usize, a1 as usize),
-        NR_kill => linux_kill(a0 as u64, a1 as u8),
+        NR_kill => linux_kill(a0 as i64, a1 as u8),
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
         NR_getgid => Ok(process::current_gid() as u64),
@@ -106,7 +108,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
-        NR_rt_sigaction | NR_rt_sigreturn => Ok(0),
+        NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
+        NR_rt_sigreturn => Ok(0),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
             Err(ENOSYS)
@@ -329,8 +332,12 @@ fn linux_wait4(
     }
 }
 
-fn linux_setpgid(_pid: u64, _pgid: u64) -> Result<u64, i64> {
-    Ok(0)
+fn linux_setpgid(pid: u64, pgid: u64) -> Result<u64, i64> {
+    if process::set_pgid(pid, pgid) {
+        Ok(0)
+    } else {
+        Err(ESRCH)
+    }
 }
 
 fn linux_setuid(uid: u32) -> Result<u64, i64> {
@@ -406,14 +413,43 @@ fn linux_brk(new_break: usize) -> Result<u64, i64> {
     }
 }
 
-fn linux_ioctl(fd: usize, _request: u64, _argp: usize) -> Result<u64, i64> {
+fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
+    const TCGETS: u64 = 0x5401;
+    const TCSETS: u64 = 0x5402;
+    const TIOCGPGRP: u64 = 0x540f;
+    const TIOCSPGRP: u64 = 0x5410;
+    const TIOCGWINSZ: u64 = 0x5413;
+
     if process::user_vfs_fd(fd).is_none() {
         return Err(EBADF);
     }
-    // Minimal stub: ack TIOCGPGRP/TIOCSPGRP-style requests so utilities
-    // attempting basic terminal queries don't fail. Real signal/pgrp work
-    // lands in phase D.
-    Ok(0)
+    match request {
+        TIOCGPGRP => {
+            let out = process::write_user_buffer(argp, 4).ok_or(EFAULT)?;
+            out.copy_from_slice(&(tty::foreground_pgrp() as u32).to_le_bytes());
+            Ok(0)
+        }
+        TIOCSPGRP => {
+            let input = process::read_user(argp, 4).ok_or(EFAULT)?;
+            let pgrp = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) as u64;
+            tty::set_foreground_pgrp(pgrp);
+            Ok(0)
+        }
+        TCGETS => {
+            let out = process::write_user_buffer(argp, 32).ok_or(EFAULT)?;
+            out.fill(0);
+            Ok(0)
+        }
+        TCSETS => Ok(0),
+        TIOCGWINSZ => {
+            let out = process::write_user_buffer(argp, 8).ok_or(EFAULT)?;
+            out[0..2].copy_from_slice(&24u16.to_le_bytes());
+            out[2..4].copy_from_slice(&80u16.to_le_bytes());
+            out[4..8].fill(0);
+            Ok(0)
+        }
+        _ => Ok(0),
+    }
 }
 
 fn linux_lseek(fd: usize, offset: i64, whence: u32) -> Result<u64, i64> {
@@ -457,13 +493,47 @@ fn write_linux_stat(
     Ok(0)
 }
 
-fn linux_kill(pid: u64, sig: u8) -> Result<u64, i64> {
+fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     let signal = crate::signal::Signal::from_number(sig).ok_or(EINVAL)?;
-    if crate::signal::send(pid, signal) {
+    let delivered = if pid < 0 {
+        process::signal_pgrp((-pid) as u64, signal.default_status())
+    } else if pid == 0 {
+        process::current_pgrp()
+            .map(|pgrp| process::signal_pgrp(pgrp, signal.default_status()))
+            .unwrap_or(false)
+    } else {
+        crate::signal::send(pid as u64, signal)
+    };
+    if delivered {
         Ok(0)
     } else {
         Err(ESRCH)
     }
+}
+
+fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
+    if signum == 0 || signum >= 32 {
+        return Err(EINVAL);
+    }
+    let pid = process::current_pid().ok_or(ESRCH)?;
+    let new_handler = if act == 0 {
+        None
+    } else {
+        let bytes = process::read_user(act, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+        let mut raw = [0u8; core::mem::size_of::<usize>()];
+        raw.copy_from_slice(bytes);
+        Some(usize::from_le_bytes(raw))
+    };
+    let old = if let Some(handler) = new_handler {
+        process::set_signal_handler(pid, signum, handler).ok_or(EINVAL)?
+    } else {
+        process::set_signal_handler(pid, signum, 0).ok_or(EINVAL)?
+    };
+    if oldact != 0 {
+        let out = process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+        out.copy_from_slice(&old.to_le_bytes());
+    }
+    Ok(0)
 }
 
 fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {

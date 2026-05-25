@@ -16,6 +16,7 @@ file /bin/pwd ../build/userland/pwd.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/touch ../build/userland/touch.elf
 file /bin/su ../build/userland/su.elf
+file /bin/sleep ../build/userland/sleep.elf
 file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
@@ -36,6 +37,7 @@ package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm
 package sh 0.1.0 /bin/sh
 package su 0.1.0 /bin/su
+package sleep 0.1.0 /bin/sleep
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp

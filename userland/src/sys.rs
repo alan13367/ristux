@@ -195,6 +195,26 @@ pub fn getpid() -> isize {
 }
 
 #[inline]
+pub fn getpgrp() -> isize {
+    unsafe { syscall0(111) }
+}
+
+#[inline]
+pub fn setpgid(pid: usize, pgid: usize) -> isize {
+    unsafe { syscall2(NR_SETPGID, pid, pgid) }
+}
+
+#[inline]
+pub fn ioctl(fd: i32, request: usize, argp: usize) -> isize {
+    unsafe { syscall3(NR_IOCTL, fd as usize, request, argp) }
+}
+
+#[inline]
+pub fn kill(pid: isize, sig: u8) -> isize {
+    unsafe { syscall2(NR_KILL, pid as usize, sig as usize) }
+}
+
+#[inline]
 pub fn getuid() -> isize {
     unsafe { syscall0(NR_GETUID) }
 }
