@@ -56,3 +56,7 @@ pub fn write_fmt(args: fmt::Arguments<'_>) -> fmt::Result {
     SERIAL1.lock().write_fmt(args)
 }
 
+pub fn write_str(s: &str) -> fmt::Result {
+    use core::fmt::Write;
+    SERIAL1.lock().write_str(s)
+}

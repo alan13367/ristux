@@ -14,4 +14,3 @@ impl fmt::Display for KernelError {
         }
     }
 }
-

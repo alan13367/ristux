@@ -1,4 +1,7 @@
-use super::{pci, virtio_mmio, virtio_queue::{self, VirtQueue, VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE}};
+use super::{
+    pci, virtio_mmio,
+    virtio_queue::{self, VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE, VirtQueue},
+};
 use crate::sync::spinlock::SpinLock;
 
 const VIRTIO_VENDOR: u16 = 0x1af4;
@@ -97,7 +100,12 @@ impl VirtioBlockDriver {
         }
     }
 
-    pub fn read_sectors(&mut self, sector: u64, count: u32, buf: &mut [u8]) -> Result<(), BlockError> {
+    pub fn read_sectors(
+        &mut self,
+        sector: u64,
+        count: u32,
+        buf: &mut [u8],
+    ) -> Result<(), BlockError> {
         if buf.len() < count as usize * 512 {
             return Err(BlockError::IoError);
         }
@@ -129,10 +137,17 @@ impl VirtioBlockDriver {
         let status_phys = core::ptr::addr_of!(req.status) as u64;
 
         self.queue.reset();
-        self.queue.set_desc(0, header_phys, 16, VIRTQ_DESC_F_NEXT, 1);
         self.queue
-            .set_desc(1, data_phys, byte_len as u32, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 2);
-        self.queue.set_desc(2, status_phys, 1, VIRTQ_DESC_F_WRITE, 0);
+            .set_desc(0, header_phys, 16, VIRTQ_DESC_F_NEXT, 1);
+        self.queue.set_desc(
+            1,
+            data_phys,
+            byte_len as u32,
+            VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
+            2,
+        );
+        self.queue
+            .set_desc(2, status_phys, 1, VIRTQ_DESC_F_WRITE, 0);
         self.queue.submit_chain(0)?;
         virtio_mmio::kick_queue(self.mmio, 0);
 

@@ -15,15 +15,21 @@ ISO_DIR := iso
 ISO_KERNEL := $(ISO_DIR)/boot/ristux.elf
 ISO_INITRD := $(ISO_DIR)/boot/initrd.bin
 ISO_IMAGE := build/ristux.iso
-USER_INIT_OBJ := build/userland/init.o
+USERLAND_RS_TARGET := x86_64-ristux-user
+USERLAND_RS_OUT := userland/target/$(USERLAND_RS_TARGET)/release
+USERLAND_RS_SRC := \
+	userland/Cargo.toml \
+	userland/linker.ld \
+	$(wildcard userland/src/*.rs) \
+	$(wildcard userland/src/bin/*.rs) \
+	targets/x86_64-ristux-user.json
+USERLAND_RS_BINS := init sh cat echo true false
+USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
-USER_CAT_OBJ := build/userland/cat.o
+USER_SH_ELF := build/userland/sh.elf
 USER_CAT_ELF := build/userland/cat.elf
-USER_ECHO_OBJ := build/userland/echo.o
 USER_ECHO_ELF := build/userland/echo.elf
-USER_TRUE_OBJ := build/userland/true.o
 USER_TRUE_ELF := build/userland/true.elf
-USER_FALSE_OBJ := build/userland/false.o
 USER_FALSE_ELF := build/userland/false.elf
 USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
@@ -57,40 +63,20 @@ build:
 $(ISO_KERNEL): build
 	cp $(KERNEL_ELF) $(ISO_KERNEL)
 
-$(USER_INIT_OBJ): userland/init.S
+$(USERLAND_RS_STAMP): $(USERLAND_RS_SRC)
 	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
+	cd userland && $(CARGO) build --release
+	@for bin in $(USERLAND_RS_BINS); do \
+		cp $(USERLAND_RS_OUT)/$$bin build/userland/$$bin.elf; \
+	done
+	touch $@
 
-$(USER_INIT_ELF): $(USER_INIT_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_INIT_OBJ)
-
-$(USER_CAT_OBJ): userland/cat.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_CAT_ELF): $(USER_CAT_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_CAT_OBJ)
-
-$(USER_ECHO_OBJ): userland/echo.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_ECHO_ELF): $(USER_ECHO_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_ECHO_OBJ)
-
-$(USER_TRUE_OBJ): userland/true.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_TRUE_ELF): $(USER_TRUE_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_TRUE_OBJ)
-
-$(USER_FALSE_OBJ): userland/false.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_FALSE_ELF): $(USER_FALSE_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_FALSE_OBJ)
+$(USER_INIT_ELF): $(USERLAND_RS_STAMP)
+$(USER_SH_ELF): $(USERLAND_RS_STAMP)
+$(USER_CAT_ELF): $(USERLAND_RS_STAMP)
+$(USER_ECHO_ELF): $(USERLAND_RS_STAMP)
+$(USER_TRUE_ELF): $(USERLAND_RS_STAMP)
+$(USER_FALSE_ELF): $(USERLAND_RS_STAMP)
 
 $(USER_LS_OBJ): userland/ls.S
 	mkdir -p build/userland
@@ -159,7 +145,7 @@ $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)
@@ -187,6 +173,7 @@ test: smoke
 
 clean:
 	$(CARGO) clean
+	$(CARGO) clean --manifest-path userland/Cargo.toml
 	rm -rf build
 	rm -f $(ISO_KERNEL)
 	rm -f $(ISO_INITRD)

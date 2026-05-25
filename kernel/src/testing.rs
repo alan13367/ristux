@@ -36,10 +36,9 @@ fn run() -> KernelResult<()> {
     )?;
     let userspace = userspace::stats();
     ensure(userspace.processes_loaded >= 1, "no user process loaded")?;
-    ensure(
-        userspace.init_exit_status == Some(0),
-        "init process did not exit cleanly",
-    )?;
+    // Phase A: /bin/init now runs as a real ring-3 process and is expected to
+    // stay alive for the lifetime of the kernel, so we no longer require an
+    // exit status from it during self-tests.
     let processes = process::stats();
     ensure(
         processes.process_count >= 1,
@@ -73,10 +72,7 @@ fn run() -> KernelResult<()> {
         smp.ap_start_attempts > 0 && smp.booted_aps == smp.ap_start_attempts,
         "SMP AP trampoline did not boot every AP",
     )?;
-    ensure(
-        smp.shared_lock_audit_passed,
-        "SMP lock audit did not pass",
-    )?;
+    ensure(smp.shared_lock_audit_passed, "SMP lock audit did not pass")?;
     let sched = crate::sched::stats();
     ensure(sched.cpu_count >= 2, "per-CPU scheduler did not initialize")?;
     ensure(

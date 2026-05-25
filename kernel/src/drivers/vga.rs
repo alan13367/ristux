@@ -75,7 +75,14 @@ impl VgaWriter {
     }
 
     fn write_at(&mut self, row: usize, column: usize, byte: u8) {
-        self.write_char_at(row, column, VgaChar { ascii: byte, color: COLOR });
+        self.write_char_at(
+            row,
+            column,
+            VgaChar {
+                ascii: byte,
+                color: COLOR,
+            },
+        );
     }
 
     fn write_char_at(&mut self, row: usize, column: usize, ch: VgaChar) {
@@ -109,3 +116,6 @@ pub fn write_fmt(args: fmt::Arguments<'_>) -> fmt::Result {
     WRITER.lock().write_fmt(args)
 }
 
+pub fn write_str(s: &str) -> fmt::Result {
+    WRITER.lock().write_str(s)
+}

@@ -123,17 +123,18 @@ pub fn current_cpu_id() -> usize {
             out(reg) base,
             options(nomem, nostack, preserves_flags)
         );
-        if base.is_null() {
-            0
-        } else {
-            (*base).id
-        }
+        if base.is_null() { 0 } else { (*base).id }
     }
 }
 
 pub fn enqueue(pid: Pid) {
     let cpu_id = current_cpu_id();
-    let target = pick_cpu_for_enqueue(cpu_id);
+    // User process context switching is driven by `yield_from_syscall`, which
+    // can only resume frames on the CPU currently handling the syscall. AP idle
+    // loops may observe run queues for diagnostics, but they do not enter user
+    // mode, so keep process work on the local CPU until cross-CPU user dispatch
+    // exists.
+    let target = cpu_id;
     with_cpu_state_mut(target, |state| {
         if !state.run_queue.contains(&pid) {
             state.run_queue.push(pid);
@@ -173,38 +174,37 @@ pub fn dispatch_local() -> Option<Pid> {
 }
 
 /// Yield the CPU while blocked in a syscall, switching to another runnable process when possible.
-pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) {
-    let self_pid = match process::current_pid() {
-        Some(pid) => pid,
-        None => {
-            crate::arch::x86_64::instructions::halt();
-            return;
-        }
-    };
-    process::save_syscall_frame(self_pid, frame);
+/// Returns the pid whose saved syscall frame has been restored into `frame`.
+pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
+    let self_pid = process::current_pid();
 
     loop {
-        if process::is_runnable(self_pid) {
-            process::set_current(self_pid);
-            if process::restore_syscall_frame(self_pid, frame) {
-                return;
+        if let Some(pid) = self_pid {
+            if process::is_runnable(pid) {
+                process::set_current(pid);
+                return Some(pid);
             }
         }
 
         if let Some(next) = dispatch_local() {
-            if next == self_pid {
+            if Some(next) == self_pid {
                 continue;
+            }
+            if let Some(pid) = self_pid {
+                let mut restart = *frame;
+                restart.rip = restart.rip.saturating_sub(2);
+                process::save_syscall_frame(pid, &restart);
             }
             if process::restore_syscall_frame(next, frame) {
                 process::set_current(next);
-                return;
+                return Some(next);
             }
             enqueue(next);
             continue;
         }
 
         increment_idle_loops(current_cpu_id());
-        crate::arch::x86_64::instructions::halt();
+        crate::arch::x86_64::instructions::halt_until_interrupt();
     }
 }
 
@@ -260,23 +260,6 @@ pub struct SchedStats {
     pub queued: usize,
     pub dispatches: u64,
     pub idle_loops: u64,
-}
-
-fn pick_cpu_for_enqueue(preferred: usize) -> usize {
-    let count = CPU_COUNT.load(Ordering::Acquire);
-    if count <= 1 {
-        return 0;
-    }
-    let mut best = preferred.min(count - 1);
-    let mut best_len = usize::MAX;
-    for index in 0..count {
-        let len = CPU_SCHED[index].lock.lock().run_queue.len();
-        if len < best_len {
-            best_len = len;
-            best = index;
-        }
-    }
-    best
 }
 
 fn set_reschedule_pending(cpu_id: usize) {

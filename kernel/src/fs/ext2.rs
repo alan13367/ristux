@@ -50,10 +50,7 @@ impl Ext2Fs {
 
     pub fn list_dir(&self, path: &str) -> Result<Vec<String>, Ext2Error> {
         if path == "/" || path.is_empty() {
-            return Ok(vec![
-                String::from("etc"),
-                String::from("README"),
-            ]);
+            return Ok(vec![String::from("etc"), String::from("README")]);
         }
         if path == "/etc" || path == "etc" {
             return Ok(vec![String::from("os-release")]);

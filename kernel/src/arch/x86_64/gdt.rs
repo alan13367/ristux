@@ -50,8 +50,7 @@ struct Ring0Stack([u8; RING0_STACK_SIZE]);
 static DOUBLE_FAULT_STACK: Stack = Stack([0; DOUBLE_FAULT_STACK_SIZE]);
 static mut CPU_RING0_STACKS: [Ring0Stack; MAX_CPUS] =
     [const { Ring0Stack([0; RING0_STACK_SIZE]) }; MAX_CPUS];
-static mut CPU_TSS: [TaskStateSegment; MAX_CPUS] =
-    [const { TaskStateSegment::new() }; MAX_CPUS];
+static mut CPU_TSS: [TaskStateSegment; MAX_CPUS] = [const { TaskStateSegment::new() }; MAX_CPUS];
 static mut CPU_GDT: [[u64; 7]; MAX_CPUS] = [[0; 7]; MAX_CPUS];
 
 pub fn init() {
@@ -71,8 +70,8 @@ fn init_cpu(cpu_id: usize) {
         let tss = ptr::addr_of_mut!(CPU_TSS[cpu_id]);
         (*tss).interrupt_stack_table[DOUBLE_FAULT_IST_INDEX] =
             ptr::addr_of!(DOUBLE_FAULT_STACK.0) as u64 + DOUBLE_FAULT_STACK_SIZE as u64;
-        (*tss).privilege_stack_table[0] = ptr::addr_of!(CPU_RING0_STACKS[cpu_id].0) as u64
-            + RING0_STACK_SIZE as u64;
+        (*tss).privilege_stack_table[0] =
+            ptr::addr_of!(CPU_RING0_STACKS[cpu_id].0) as u64 + RING0_STACK_SIZE as u64;
 
         let gdt = ptr::addr_of_mut!(CPU_GDT[cpu_id]);
         (*gdt)[0] = 0;
@@ -131,9 +130,7 @@ pub fn init_user_segments() {
 
 pub fn kernel_stack_top(cpu_id: usize) -> u64 {
     let id = cpu_id.min(MAX_CPUS - 1);
-    unsafe {
-        ptr::addr_of!(CPU_RING0_STACKS[id].0) as u64 + RING0_STACK_SIZE as u64
-    }
+    unsafe { ptr::addr_of!(CPU_RING0_STACKS[id].0) as u64 + RING0_STACK_SIZE as u64 }
 }
 
 fn tss_descriptor(base: u64) -> (u64, u64) {

@@ -76,20 +76,17 @@ impl VirtQueue {
 
     pub fn avail_phys(&self) -> u64 {
         unsafe {
-            self.phys_addr()
-                .wrapping_add(
-                    (core::ptr::from_ref(&(*self.mem).avail) as u64)
-                        .wrapping_sub(self.phys_addr()),
-                )
+            self.phys_addr().wrapping_add(
+                (core::ptr::from_ref(&(*self.mem).avail) as u64).wrapping_sub(self.phys_addr()),
+            )
         }
     }
 
     pub fn used_phys(&self) -> u64 {
         unsafe {
-            self.phys_addr()
-                .wrapping_add(
-                    (core::ptr::from_ref(&(*self.mem).used) as u64).wrapping_sub(self.phys_addr()),
-                )
+            self.phys_addr().wrapping_add(
+                (core::ptr::from_ref(&(*self.mem).used) as u64).wrapping_sub(self.phys_addr()),
+            )
         }
     }
 

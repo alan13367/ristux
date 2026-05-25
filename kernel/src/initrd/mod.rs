@@ -39,12 +39,16 @@ impl Initrd {
             offset += 8;
 
             let path_end = offset.checked_add(path_len).ok_or("initrd path overflow")?;
-            let path = bytes.get(offset..path_end).ok_or("initrd path out of bounds")?;
+            let path = bytes
+                .get(offset..path_end)
+                .ok_or("initrd path out of bounds")?;
             let path = str::from_utf8(path).map_err(|_| "initrd path is not utf-8")?;
             offset = align_up(path_end, 8);
 
             let data_end = offset.checked_add(data_len).ok_or("initrd data overflow")?;
-            let data = bytes.get(offset..data_end).ok_or("initrd data out of bounds")?;
+            let data = bytes
+                .get(offset..data_end)
+                .ok_or("initrd data out of bounds")?;
             offset = align_up(data_end, 8);
 
             files.push(InitrdFile { path, data });
@@ -67,12 +71,16 @@ impl Initrd {
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, &'static str> {
-    let data = bytes.get(offset..offset + 2).ok_or("initrd u16 out of bounds")?;
+    let data = bytes
+        .get(offset..offset + 2)
+        .ok_or("initrd u16 out of bounds")?;
     Ok(u16::from_le_bytes([data[0], data[1]]))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, &'static str> {
-    let data = bytes.get(offset..offset + 4).ok_or("initrd u32 out of bounds")?;
+    let data = bytes
+        .get(offset..offset + 4)
+        .ok_or("initrd u32 out of bounds")?;
     Ok(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
 }
 

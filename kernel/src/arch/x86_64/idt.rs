@@ -160,10 +160,7 @@ pub fn init() {
             super::interrupts::KEYBOARD_VECTOR as usize,
             keyboard_interrupt_handler as *const () as u64,
         );
-        (*idt).set_handler(
-            0xf0,
-            tlb_shootdown_interrupt_handler as *const () as u64,
-        );
+        (*idt).set_handler(0xf0, tlb_shootdown_interrupt_handler as *const () as u64);
         (*idt).set_handler(
             crate::sched::reschedule_ipi_vector() as usize,
             reschedule_interrupt_handler as *const () as u64,
@@ -202,7 +199,10 @@ pub fn install_syscall_gate() {
         let idt = ptr::addr_of_mut!(IDT);
         (*idt).set_user_handler(SYSCALL_VECTOR, syscall_interrupt_stub as *const () as u64);
     }
-    crate::println!("IDT syscall gate installed at vector {:#x}.", SYSCALL_VECTOR);
+    crate::println!(
+        "IDT syscall gate installed at vector {:#x}.",
+        SYSCALL_VECTOR
+    );
 }
 
 extern "x86-interrupt" fn divide_error_handler(_stack_frame: InterruptStackFrame) {
@@ -228,7 +228,10 @@ extern "x86-interrupt" fn stack_segment_fault_handler(
     _stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    panic!("stack segment fault exception, error code {:#x}", error_code);
+    panic!(
+        "stack segment fault exception, error code {:#x}",
+        error_code
+    );
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
@@ -241,10 +244,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     );
 }
 
-extern "x86-interrupt" fn page_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: u64,
-) {
+extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
     let fault_addr: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_addr, options(nomem, nostack, preserves_flags));
@@ -271,9 +271,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
     panic!(
         "page fault exception at {:#x}, error code {:#x}, rip {:#x}",
-        fault_addr,
-        error_code,
-        stack_frame.instruction_pointer
+        fault_addr, error_code, stack_frame.instruction_pointer
     );
 }
 
@@ -309,29 +307,50 @@ global_asm!(
 linux_syscall_entry:
     cld
     swapgs
-    mov gs:[8], rsp
-    mov rsp, gs:[16]
-    push r11
-    push rcx
+    mov gs:[8], rsp                  // save user rsp
+    mov rsp, gs:[16]                 // switch to per-cpu kernel stack
+    // Build SyscallInterruptFrame on kernel stack so we return via iretq, just
+    // like the int 0x80 path. CPU-frame portion first (high addresses):
+    push 0x2B                        // ss = USER_DATA_SELECTOR (0x28 | 3)
+    push qword ptr gs:[8]            // rsp = saved user rsp
+    push r11                         // rflags = saved by syscall in r11
+    push 0x33                        // cs = USER_CODE_SELECTOR (0x30 | 3)
+    push rcx                         // rip = saved by syscall in rcx
+    // General-purpose register portion (matches int 0x80 stub layout):
     push r15
     push r14
     push r13
     push r12
-    push rbp
-    push rbx
+    push r11
     push r10
-    push rdx
-    push rsi
+    push r9
+    push r8
+    push rbp
     push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
     push rax
     mov rdi, rsp
-    call linux_syscall_dispatch
-    add rsp, 80
+    call linux_syscall_dispatch_frame
+    pop rax
+    pop rbx
     pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
     pop r11
-    mov rsp, gs:[8]
+    pop r12
+    pop r13
+    pop r14
+    pop r15
     swapgs
-    sysretq
+    iretq
 "#
 );
 
@@ -342,9 +361,28 @@ unsafe extern "C" {
 pub fn install_linux_syscall() {
     unsafe {
         let entry = linux_syscall_entry as *const () as u64;
-        write_msr(IA32_STAR, ((gdt::kernel_code_selector() as u64) << 32) | 0x0013_0008);
+        // STAR low 32 bits hold sysret selectors; high 32 hold syscall kernel cs.
+        // We don't use sysret anymore (return via iretq), but the CPU still
+        // requires STAR be initialized.
+        write_msr(
+            IA32_STAR,
+            ((gdt::kernel_code_selector() as u64) << 32) | 0x0013_0008,
+        );
         write_msr(IA32_LSTAR, entry);
         write_msr(IA32_FMASK, 0x200);
+        // Enable SYSCALL/SYSRET (set IA32_EFER.SCE).
+        const IA32_EFER: u32 = 0xc000_0080;
+        let mut efer_lo: u32;
+        let mut efer_hi: u32;
+        asm!(
+            "rdmsr",
+            in("ecx") IA32_EFER,
+            out("eax") efer_lo,
+            out("edx") efer_hi,
+            options(nomem, nostack, preserves_flags)
+        );
+        let efer = ((efer_hi as u64) << 32) | efer_lo as u64;
+        write_msr(IA32_EFER, efer | 1);
     }
     crate::println!("Linux x86_64 syscall entry installed via MSR.");
 }

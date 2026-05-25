@@ -1,11 +1,13 @@
 [build]
-target = "targets/x86_64-ristux-kernel.json"
+target = "../targets/x86_64-ristux-user.json"
 
-[target.x86_64-ristux-kernel]
+[target.x86_64-ristux-user]
 rustflags = [
     "-C", "relocation-model=static",
-    "-C", "link-arg=-Tkernel/linker.ld",
-    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-T../userland/linker.ld",
+    "-C", "link-arg=-nostdlib",
+    "-C", "link-arg=--no-dynamic-linker",
+    "-C", "link-arg=-static",
     "-C", "link-arg=-z",
     "-C", "link-arg=max-page-size=0x1000",
 ]
@@ -13,4 +15,3 @@ rustflags = [
 [unstable]
 build-std = ["core", "alloc", "compiler_builtins"]
 build-std-features = ["compiler-builtins-mem"]
-json-target-spec = true

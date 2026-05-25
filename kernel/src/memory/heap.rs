@@ -54,66 +54,70 @@ impl LinkedListAllocator {
         *self.head.lock() = head;
     }
 
-    unsafe fn alloc_from_free_list(&self, layout: Layout) -> *mut u8 { unsafe {
-        let size = layout.size();
-        let align = layout.align();
-        let total = align_up(HEADER_SIZE + size, align);
+    unsafe fn alloc_from_free_list(&self, layout: Layout) -> *mut u8 {
+        unsafe {
+            let size = layout.size();
+            let align = layout.align();
+            let total = align_up(HEADER_SIZE + size, align);
 
-        let mut head_ptr = self.head.lock();
-        let mut current = *head_ptr;
-        let mut prev: *mut FreeBlock = ptr::null_mut();
+            let mut head_ptr = self.head.lock();
+            let mut current = *head_ptr;
+            let mut prev: *mut FreeBlock = ptr::null_mut();
 
-        while !current.is_null() {
-            let block_size = (*current).size;
+            while !current.is_null() {
+                let block_size = (*current).size;
 
-            if block_size >= total {
-                let remainder = block_size - total;
-                if remainder >= HEADER_SIZE {
-                    let remainder_ptr = (current as *mut u8).add(total) as *mut FreeBlock;
-                    (*remainder_ptr).size = remainder;
-                    (*remainder_ptr).next = (*current).next;
-                    if prev.is_null() {
-                        *head_ptr = remainder_ptr;
+                if block_size >= total {
+                    let remainder = block_size - total;
+                    if remainder >= HEADER_SIZE {
+                        let remainder_ptr = (current as *mut u8).add(total) as *mut FreeBlock;
+                        (*remainder_ptr).size = remainder;
+                        (*remainder_ptr).next = (*current).next;
+                        if prev.is_null() {
+                            *head_ptr = remainder_ptr;
+                        } else {
+                            (*prev).next = remainder_ptr;
+                        }
+                    } else if prev.is_null() {
+                        *head_ptr = (*current).next;
                     } else {
-                        (*prev).next = remainder_ptr;
+                        (*prev).next = (*current).next;
                     }
-                } else if prev.is_null() {
-                    *head_ptr = (*current).next;
-                } else {
-                    (*prev).next = (*current).next;
+
+                    return (current as *mut u8).add(HEADER_SIZE);
                 }
 
-                return (current as *mut u8).add(HEADER_SIZE);
-            }
-
-            prev = current;
-            current = (*current).next;
-        }
-
-        ptr::null_mut()
-    }}
-
-    unsafe fn dealloc_to_free_list(&self, ptr: *mut u8, layout: Layout) { unsafe {
-        let block = ptr.sub(HEADER_SIZE) as *mut FreeBlock;
-        let block_size = align_up(HEADER_SIZE + layout.size(), layout.align());
-
-        (*block).size = block_size;
-        (*block).next = ptr::null_mut();
-
-        let mut head_ptr = self.head.lock();
-        if (*head_ptr).is_null() || block < *head_ptr {
-            (*block).next = *head_ptr;
-            *head_ptr = block;
-        } else {
-            let mut current = *head_ptr;
-            while !(*current).next.is_null() && (*current).next < block {
+                prev = current;
                 current = (*current).next;
             }
-            (*block).next = (*current).next;
-            (*current).next = block;
+
+            ptr::null_mut()
         }
-        *head_ptr = self.coalesce_head(*head_ptr);
-    }}
+    }
+
+    unsafe fn dealloc_to_free_list(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            let block = ptr.sub(HEADER_SIZE) as *mut FreeBlock;
+            let block_size = align_up(HEADER_SIZE + layout.size(), layout.align());
+
+            (*block).size = block_size;
+            (*block).next = ptr::null_mut();
+
+            let mut head_ptr = self.head.lock();
+            if (*head_ptr).is_null() || block < *head_ptr {
+                (*block).next = *head_ptr;
+                *head_ptr = block;
+            } else {
+                let mut current = *head_ptr;
+                while !(*current).next.is_null() && (*current).next < block {
+                    current = (*current).next;
+                }
+                (*block).next = (*current).next;
+                (*current).next = block;
+            }
+            *head_ptr = self.coalesce_head(*head_ptr);
+        }
+    }
 
     unsafe fn coalesce_head(&self, head: *mut FreeBlock) -> *mut FreeBlock {
         if head.is_null() {

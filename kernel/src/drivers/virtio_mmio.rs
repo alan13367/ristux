@@ -65,7 +65,14 @@ pub fn init_device(mmio: *mut u8, queue_count: u32) {
     }
 }
 
-pub fn setup_queue(mmio: *mut u8, queue_index: u32, desc: u64, driver: u64, device: u64, size: u32) {
+pub fn setup_queue(
+    mmio: *mut u8,
+    queue_index: u32,
+    desc: u64,
+    driver: u64,
+    device: u64,
+    size: u32,
+) {
     unsafe {
         write32(mmio, MMIO_QUEUE_SEL, queue_index);
         write32(mmio, MMIO_QUEUE_NUM, size);

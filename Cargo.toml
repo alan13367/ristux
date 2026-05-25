@@ -1,5 +1,6 @@
 [workspace]
 members = ["kernel"]
+exclude = ["userland"]
 resolver = "2"
 
 [profile.dev]

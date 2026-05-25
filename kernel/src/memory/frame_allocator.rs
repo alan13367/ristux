@@ -77,7 +77,11 @@ impl FrameAllocator {
 
         if let Some(framebuffer) = boot_info.framebuffer() {
             let size = framebuffer.pitch as usize * framebuffer.height as usize;
-            self.mark_range(framebuffer.addr as usize, framebuffer.addr as usize + size, true);
+            self.mark_range(
+                framebuffer.addr as usize,
+                framebuffer.addr as usize + size,
+                true,
+            );
         }
 
         self.initialized = true;

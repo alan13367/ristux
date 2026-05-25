@@ -8,6 +8,13 @@ pub fn halt() {
 }
 
 #[inline(always)]
+pub fn halt_until_interrupt() {
+    unsafe {
+        asm!("sti; hlt; cli", options(nomem, nostack));
+    }
+}
+
+#[inline(always)]
 pub fn disable_interrupts() {
     unsafe {
         asm!("cli", options(nomem, nostack, preserves_flags));
@@ -39,4 +46,3 @@ pub fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
     }
     value
 }
-

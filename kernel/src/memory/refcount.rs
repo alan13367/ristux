@@ -1,5 +1,5 @@
-use alloc::boxed::Box;
 use crate::sync::spinlock::SpinLock;
+use alloc::boxed::Box;
 
 const CHUNK_SHIFT: usize = 9;
 const CHUNK_SIZE: usize = 1 << CHUNK_SHIFT;

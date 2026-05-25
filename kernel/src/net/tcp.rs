@@ -178,12 +178,7 @@ pub fn build_tcp_segment(socket: &TcpSocket, flags: u8, payload: &[u8]) -> Vec<u
     segment
 }
 
-pub fn pseudo_header_checksum(
-    src: Ipv4Addr,
-    dst: Ipv4Addr,
-    tcp_len: u16,
-    segment: &[u8],
-) -> u16 {
+pub fn pseudo_header_checksum(src: Ipv4Addr, dst: Ipv4Addr, tcp_len: u16, segment: &[u8]) -> u16 {
     let mut sum = 0u32;
     for byte in src.0 {
         sum += u32::from(byte) << 8;

@@ -8,3 +8,6 @@ name = "ristux-kernel"
 path = "src/main.rs"
 
 [dependencies]
+
+[features]
+selftest_shell_script = []

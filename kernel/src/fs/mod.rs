@@ -81,3 +81,11 @@ pub fn mount_hybrid_ext2() {
 pub fn stat(path: &str) -> Result<Stat, vfs::VfsError> {
     vfs::stat(path)
 }
+
+pub fn fstat(fd: usize) -> Result<Stat, vfs::VfsError> {
+    vfs::fstat(fd)
+}
+
+pub fn is_tty_fd(fd: usize) -> bool {
+    vfs::is_tty_fd(fd)
+}

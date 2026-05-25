@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::ptr;
 
 use super::{
-    frame_allocator::{self, Frame, FRAME_SIZE},
+    frame_allocator::{self, FRAME_SIZE, Frame},
     paging::{self, PageFlags, PageTable, PagingError},
 };
 
@@ -62,8 +62,7 @@ impl AddressSpace {
     }
 
     pub fn map_zero_page(&mut self, virt: usize) -> Result<(), PagingError> {
-        let frame =
-            frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+        let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
         unsafe {
             ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
             self.map_user_page(virt, frame.start, PageFlags::USER_WRITABLE)?;
@@ -74,11 +73,7 @@ impl AddressSpace {
 
     pub fn unmap_user_page(&mut self, virt: usize) -> Result<(), PagingError> {
         let phys = unsafe { paging::unmap_page_at(self.p4, virt)? };
-        if let Some(index) = self
-            .user_mappings
-            .iter()
-            .position(|(v, _)| *v == virt)
-        {
+        if let Some(index) = self.user_mappings.iter().position(|(v, _)| *v == virt) {
             let (_, frame) = self.user_mappings.remove(index);
             if frame.start != phys {
                 panic!("address space unmap frame mismatch");
@@ -151,11 +146,7 @@ impl AddressSpace {
         if page < self.stack_bottom || page + FRAME_SIZE > self.stack_top {
             return Err(PagingError::NotMapped);
         }
-        if self
-            .user_mappings
-            .iter()
-            .any(|(virt, _)| *virt == page)
-        {
+        if self.user_mappings.iter().any(|(virt, _)| *virt == page) {
             return Ok(());
         }
         self.map_zero_page(page)?;
@@ -172,11 +163,7 @@ impl AddressSpace {
         let aligned = paging::align_up(new_break, FRAME_SIZE);
         let mut page = paging::align_up(self.heap_break, FRAME_SIZE);
         while page < aligned {
-            if !self
-                .user_mappings
-                .iter()
-                .any(|(virt, _)| *virt == page)
-            {
+            if !self.user_mappings.iter().any(|(virt, _)| *virt == page) {
                 self.map_zero_page(page)?;
             }
             page += FRAME_SIZE;
@@ -187,10 +174,8 @@ impl AddressSpace {
 }
 
 pub fn self_test() {
-    let mut space_a = AddressSpace::new_kernel_clone()
-        .expect("address space A creation failed");
-    let mut space_b = AddressSpace::new_kernel_clone()
-        .expect("address space B creation failed");
+    let mut space_a = AddressSpace::new_kernel_clone().expect("address space A creation failed");
+    let mut space_b = AddressSpace::new_kernel_clone().expect("address space B creation failed");
 
     const VIRT: usize = 0x4010_0000;
     space_a

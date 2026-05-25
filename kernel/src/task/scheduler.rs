@@ -353,9 +353,9 @@ pub fn init() {
 
 pub fn run_cooperative_demo() {
     while with_scheduler(|s| {
-        s.tasks.iter().any(|t| {
-            t.state != TaskState::Dead && matches!(t.name, "coop-a" | "coop-b")
-        })
+        s.tasks
+            .iter()
+            .any(|t| t.state != TaskState::Dead && matches!(t.name, "coop-a" | "coop-b"))
     }) {
         let request = with_scheduler(|s| s.prepare_switch(false));
         if let Some(request) = request {
@@ -377,11 +377,7 @@ pub fn on_timer_tick(tick: u64) {
             if task.state == TaskState::Running && matches!(task.name, "timer-a" | "timer-b") {
                 task.progress += 1;
                 if task.progress == 1 || task.progress % 5 == 0 {
-                    crate::println!(
-                        "preemptive task {} ran at tick {}",
-                        task.name,
-                        tick
-                    );
+                    crate::println!("preemptive task {} ran at tick {}", task.name, tick);
                 }
             }
         }

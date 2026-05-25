@@ -81,7 +81,9 @@ impl LoadedElf {
             let vaddr = read_u64(data, offset + 16)? as usize;
             let filesz = read_u64(data, offset + 32)? as usize;
             let memsz = read_u64(data, offset + 40)? as usize;
-            let file_end = file_offset.checked_add(filesz).ok_or(ElfError::OutOfBounds)?;
+            let file_end = file_offset
+                .checked_add(filesz)
+                .ok_or(ElfError::OutOfBounds)?;
             if file_end > data.len() || filesz > memsz {
                 return Err(ElfError::OutOfBounds);
             }
@@ -165,7 +167,9 @@ pub fn for_each_load_segment(
         let vaddr = read_u64(data, offset + 16)? as usize;
         let filesz = read_u64(data, offset + 32)? as usize;
         let memsz = read_u64(data, offset + 40)? as usize;
-        let file_end = file_offset.checked_add(filesz).ok_or(ElfError::OutOfBounds)?;
+        let file_end = file_offset
+            .checked_add(filesz)
+            .ok_or(ElfError::OutOfBounds)?;
         if file_end > data.len() || filesz > memsz {
             return Err(ElfError::OutOfBounds);
         }

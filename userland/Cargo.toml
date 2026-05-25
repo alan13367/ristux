@@ -1,0 +1,42 @@
+[package]
+name = "ristux-userland"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ristux_userland"
+path = "src/lib.rs"
+
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+
+[[bin]]
+name = "sh"
+path = "src/bin/sh.rs"
+
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
+name = "true"
+path = "src/bin/true.rs"
+
+[[bin]]
+name = "false"
+path = "src/bin/false.rs"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = false
+debug = false

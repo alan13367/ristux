@@ -13,6 +13,13 @@ pub fn _print(args: fmt::Arguments<'_>) {
     });
 }
 
+pub fn write_str(text: &str) {
+    instructions::without_interrupts(|| {
+        let _ = drivers::serial::write_str(text);
+        let _ = drivers::vga::write_str(text);
+    });
+}
+
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
@@ -32,4 +39,3 @@ macro_rules! println {
         $crate::print!(concat!($fmt, "\n"), $($arg)*)
     };
 }
-

@@ -1,6 +1,6 @@
 use core::{fmt, ptr};
 
-use super::frame_allocator::{self, Frame, FRAME_SIZE};
+use super::frame_allocator::{self, FRAME_SIZE, Frame};
 
 const ENTRY_COUNT: usize = 512;
 const PRESENT: u64 = 1 << 0;
@@ -135,80 +135,91 @@ pub unsafe fn unmap_page_at(p4: *mut PageTable, virt: usize) -> Result<usize, Pa
     Ok(phys)
 }
 
-pub unsafe fn get_pte_mut(p4: *mut PageTable, virt: usize) -> Option<&'static mut u64> { unsafe {
-    let p3_entry = &mut (*p4).entries[p4_index(virt)];
-    if *p3_entry & PRESENT == 0 || *p3_entry & HUGE_PAGE != 0 {
-        return None;
-    }
-    let p3 = (*p3_entry & ADDR_MASK) as *mut PageTable;
-    let p2_entry = &mut (*p3).entries[p3_index(virt)];
-    if *p2_entry & PRESENT == 0 || *p2_entry & HUGE_PAGE != 0 {
-        return None;
-    }
-    let p2 = (*p2_entry & ADDR_MASK) as *mut PageTable;
-    let p1_entry = &mut (*p2).entries[p2_index(virt)];
-    if *p1_entry & PRESENT == 0 || *p1_entry & HUGE_PAGE != 0 {
-        return None;
-    }
-    let p1 = (*p1_entry & ADDR_MASK) as *mut PageTable;
-    Some(&mut (*p1).entries[p1_index(virt)])
-}}
-
-pub unsafe fn create_p4_table() -> Result<Frame, PagingError> { unsafe {
-    let p4_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
-    let p4 = p4_frame.start as *mut PageTable;
-    ptr::write_bytes(p4 as *mut u8, 0, FRAME_SIZE);
-
-    let boot = boot_root_table();
-    // Share kernel mapping at index 511
-    (*p4).entries[511] = (*boot).entries[511];
-
-    // Create private P3 table for index 0 to separate userspace
-    let p3_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
-    let p3 = p3_frame.start as *mut PageTable;
-    ptr::write_bytes(p3 as *mut u8, 0, FRAME_SIZE);
-
-    // Share identity mapping at index 0 of the boot P3 table
-    let boot_p3 = ((*boot).entries[0] & ADDR_MASK) as *mut PageTable;
-    (*p3).entries[0] = (*boot_p3).entries[0];
-
-    // Connect P3 to P4
-    (*p4).entries[0] = p3_frame.start as u64 | PRESENT | WRITABLE | USER;
-
-    Ok(p4_frame)
-}}
-
-pub unsafe fn free_user_page_tables(p4: *mut PageTable) { unsafe {
-    let p4_entry = (*p4).entries[0];
-    if p4_entry & PRESENT == 0 {
-        return;
-    }
-    let p3 = (p4_entry & ADDR_MASK) as *mut PageTable;
-    for i in 1..512 {
-        let p3_entry = (*p3).entries[i];
-        if p3_entry & PRESENT == 0 || p3_entry & HUGE_PAGE != 0 {
-            continue;
+pub unsafe fn get_pte_mut(p4: *mut PageTable, virt: usize) -> Option<&'static mut u64> {
+    unsafe {
+        let p3_entry = &mut (*p4).entries[p4_index(virt)];
+        if *p3_entry & PRESENT == 0 || *p3_entry & HUGE_PAGE != 0 {
+            return None;
         }
-        let p2 = (p3_entry & ADDR_MASK) as *mut PageTable;
-        for j in 0..512 {
-            let p2_entry = (*p2).entries[j];
-            if p2_entry & PRESENT == 0 || p2_entry & HUGE_PAGE != 0 {
-                continue;
+        let p3 = (*p3_entry & ADDR_MASK) as *mut PageTable;
+        let p2_entry = &mut (*p3).entries[p3_index(virt)];
+        if *p2_entry & PRESENT == 0 || *p2_entry & HUGE_PAGE != 0 {
+            return None;
+        }
+        let p2 = (*p2_entry & ADDR_MASK) as *mut PageTable;
+        let p1_entry = &mut (*p2).entries[p2_index(virt)];
+        if *p1_entry & PRESENT == 0 || *p1_entry & HUGE_PAGE != 0 {
+            return None;
+        }
+        let p1 = (*p1_entry & ADDR_MASK) as *mut PageTable;
+        Some(&mut (*p1).entries[p1_index(virt)])
+    }
+}
+
+pub unsafe fn create_p4_table() -> Result<Frame, PagingError> {
+    unsafe {
+        let p4_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+        let p4 = p4_frame.start as *mut PageTable;
+        ptr::write_bytes(p4 as *mut u8, 0, FRAME_SIZE);
+
+        let boot = boot_root_table();
+        // Share kernel mapping at index 511
+        (*p4).entries[511] = (*boot).entries[511];
+
+        // Create private P3 table for index 0 to separate userspace
+        let p3_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+        let p3 = p3_frame.start as *mut PageTable;
+        ptr::write_bytes(p3 as *mut u8, 0, FRAME_SIZE);
+
+        // Share kernel/direct-map identity slots, but leave P3 index 1 private:
+        // ristux user ELFs, heap, and stack live in the 1-2 GiB range. Kernel
+        // syscalls still need low identity mappings and MMIO such as LAPIC
+        // (0xfee00000), so copy the other boot P3 entries into the user address
+        // space instead of disappearing those mappings while CR3 is user-owned.
+        let boot_p3 = ((*boot).entries[0] & ADDR_MASK) as *mut PageTable;
+        for index in 0..ENTRY_COUNT {
+            if index != 1 {
+                (*p3).entries[index] = (*boot_p3).entries[index];
             }
-            let p1 = (p2_entry & ADDR_MASK) as *mut PageTable;
-            frame_allocator::free_frame(Frame { start: p1 as usize });
         }
-        frame_allocator::free_frame(Frame { start: p2 as usize });
-    }
-    frame_allocator::free_frame(Frame { start: p3 as usize });
-}}
 
+        // Connect P3 to P4
+        (*p4).entries[0] = p3_frame.start as u64 | PRESENT | WRITABLE | USER;
+
+        Ok(p4_frame)
+    }
+}
+
+pub unsafe fn free_user_page_tables(p4: *mut PageTable) {
+    unsafe {
+        let p4_entry = (*p4).entries[0];
+        if p4_entry & PRESENT == 0 {
+            return;
+        }
+        let p3 = (p4_entry & ADDR_MASK) as *mut PageTable;
+        let p3_entry = (*p3).entries[1];
+        if p3_entry & PRESENT != 0 && p3_entry & HUGE_PAGE == 0 {
+            let p2 = (p3_entry & ADDR_MASK) as *mut PageTable;
+            for j in 0..512 {
+                let p2_entry = (*p2).entries[j];
+                if p2_entry & PRESENT == 0 || p2_entry & HUGE_PAGE != 0 {
+                    continue;
+                }
+                let p1 = (p2_entry & ADDR_MASK) as *mut PageTable;
+                frame_allocator::free_frame(Frame { start: p1 as usize });
+            }
+            frame_allocator::free_frame(Frame { start: p2 as usize });
+        }
+        frame_allocator::free_frame(Frame { start: p3 as usize });
+    }
+}
 
 fn self_test() {
     const TEST_VIRT: usize = 0x4000_0000;
     const TEST_VALUE: u64 = 0xfeed_face_cafe_beef;
 
-    let frame = frame_allocator::allocate_frame().expect("paging self-test frame allocation failed");
+    let frame =
+        frame_allocator::allocate_frame().expect("paging self-test frame allocation failed");
 
     unsafe {
         map_page(TEST_VIRT, frame.start, PageFlags::WRITABLE)
@@ -237,32 +248,37 @@ fn self_test() {
         let unmapped = unmap_page(0x4010_0000)
             .unwrap_or_else(|err| panic!("user paging unmap self-test failed: {}", err));
         if unmapped != user_frame.start {
-            panic!("user paging self-test unmapped unexpected frame {:#x}", unmapped);
+            panic!(
+                "user paging self-test unmapped unexpected frame {:#x}",
+                unmapped
+            );
         }
     }
     frame_allocator::free_frame(user_frame);
     crate::println!("Paging map/unmap self-test passed.");
 }
 
-unsafe fn split_p2_huge_page(entry: &mut u64, flags: PageFlags) -> Result<(), PagingError> { unsafe {
-    if *entry & HUGE_PAGE == 0 {
-        return Ok(());
+unsafe fn split_p2_huge_page(entry: &mut u64, flags: PageFlags) -> Result<(), PagingError> {
+    unsafe {
+        if *entry & HUGE_PAGE == 0 {
+            return Ok(());
+        }
+
+        let huge_phys = (*entry & ADDR_MASK) as usize;
+        let leaf_flags = (*entry & !ADDR_MASK) & !HUGE_PAGE;
+
+        let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
+        let p1 = frame.start as *mut PageTable;
+
+        for i in 0..512 {
+            let page_phys = huge_phys + i * FRAME_SIZE;
+            (*p1).entries[i] = page_phys as u64 | leaf_flags;
+        }
+
+        *entry = frame.start as u64 | PRESENT | WRITABLE | (flags.0 & USER);
+        Ok(())
     }
-
-    let huge_phys = (*entry & ADDR_MASK) as usize;
-    let leaf_flags = (*entry & !ADDR_MASK) & !HUGE_PAGE;
-
-    let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
-    let p1 = frame.start as *mut PageTable;
-
-    for i in 0..512 {
-        let page_phys = huge_phys + i * FRAME_SIZE;
-        (*p1).entries[i] = page_phys as u64 | leaf_flags;
-    }
-
-    *entry = frame.start as u64 | PRESENT | WRITABLE | (flags.0 & USER);
-    Ok(())
-}}
+}
 
 unsafe fn next_table_or_create(
     _p4: *mut PageTable,

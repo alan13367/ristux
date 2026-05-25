@@ -271,14 +271,11 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
             };
         }
         SYS_LSEEK => {
-            frame.rax = match sys_lseek_active(
-                frame.rdi as usize,
-                frame.rsi as isize,
-                frame.rdx as u32,
-            ) {
-                Ok(offset) => offset as u64,
-                Err(err) => err.0 as u64,
-            };
+            frame.rax =
+                match sys_lseek_active(frame.rdi as usize, frame.rsi as isize, frame.rdx as u32) {
+                    Ok(offset) => offset as u64,
+                    Err(err) => err.0 as u64,
+                };
         }
         SYS_STAT => {
             frame.rax = match sys_stat_active(frame.rdi as usize, frame.rsi as usize) {
@@ -422,8 +419,7 @@ fn sys_chmod_active(path_ptr: usize, mode: u16) -> SyscallResult {
 }
 
 fn sys_kill_active(pid: u64, signal_number: u8) -> SyscallResult {
-    let signal =
-        crate::signal::Signal::from_number(signal_number).ok_or(SyscallError(EINVAL))?;
+    let signal = crate::signal::Signal::from_number(signal_number).ok_or(SyscallError(EINVAL))?;
     if crate::signal::send(pid, signal) {
         Ok(0)
     } else {
@@ -502,10 +498,24 @@ fn sys_waitpid_active(
     }
 }
 
-fn yield_while_blocked(frame: &mut SyscallInterruptFrame) {
+fn yield_while_blocked(frame: &mut SyscallInterruptFrame) -> bool {
+    let original = process::current_pid();
     let mut saved = saved_from_frame(frame);
-    sched::yield_from_syscall(&mut saved);
+    let resumed = sched::yield_from_syscall(&mut saved);
     apply_saved_frame(frame, &saved);
+    resumed == original
+}
+
+/// Public alias of [`yield_while_blocked`] used by the Linux ABI dispatcher.
+pub fn yield_blocked(frame: &mut SyscallInterruptFrame) -> bool {
+    yield_while_blocked(frame)
+}
+
+/// Yield until a runnable process is dispatched. Used after `exit` empties the
+/// current process from the run queue so the kernel can fall back to another
+/// task instead of immediately iretq'ing into a torn-down address space.
+pub fn yield_until_runnable(frame: &mut SyscallInterruptFrame) -> bool {
+    yield_while_blocked(frame)
 }
 
 fn saved_from_frame(frame: &SyscallInterruptFrame) -> SavedSyscallFrame {

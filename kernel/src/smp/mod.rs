@@ -305,37 +305,27 @@ pub fn init(rsdp: Option<AcpiRsdp>) {
 
 pub fn stats() -> SmpStats {
     let guard = SMP.lock();
-    guard
-        .as_ref()
-        .map(SmpSystem::stats)
-        .unwrap_or(SmpStats {
-            cpu_count: 0,
-            started_cpus: 0,
-            firmware_cpu_count: 0,
-            local_apic_addr: 0,
-            acpi_table_detected: false,
-            local_apic_mapped: false,
-            apic_version: 0,
-            ap_start_attempts: 0,
-            booted_aps: 0,
-            trampoline_installed: false,
-            firmware_detected: false,
-            ipis_sent: 0,
-            scheduled_tasks: 0,
-            shared_lock_audit_passed: false,
-        })
+    guard.as_ref().map(SmpSystem::stats).unwrap_or(SmpStats {
+        cpu_count: 0,
+        started_cpus: 0,
+        firmware_cpu_count: 0,
+        local_apic_addr: 0,
+        acpi_table_detected: false,
+        local_apic_mapped: false,
+        apic_version: 0,
+        ap_start_attempts: 0,
+        booted_aps: 0,
+        trampoline_installed: false,
+        firmware_detected: false,
+        ipis_sent: 0,
+        scheduled_tasks: 0,
+        shared_lock_audit_passed: false,
+    })
 }
 
 fn self_test(system: &mut SmpSystem) {
     let tasks = [
-        "idle/0",
-        "worker/1",
-        "worker/2",
-        "worker/3",
-        "net-rx",
-        "fs-sync",
-        "tty",
-        "reaper",
+        "idle/0", "worker/1", "worker/2", "worker/3", "net-rx", "fs-sync", "tty", "reaper",
     ];
     system.schedule_round_robin(&tasks);
 
@@ -417,7 +407,12 @@ fn discover_acpi_madt(rsdp: AcpiRsdp) -> Option<CpuDiscovery> {
     parse_madt(madt_addr)
 }
 
-fn find_acpi_table(root_addr: usize, expected: [u8; 4], entry_size: usize, needle: [u8; 4]) -> Option<usize> {
+fn find_acpi_table(
+    root_addr: usize,
+    expected: [u8; 4],
+    entry_size: usize,
+    needle: [u8; 4],
+) -> Option<usize> {
     if root_addr == 0 {
         return None;
     }
@@ -637,9 +632,17 @@ fn send_init_sipi(local_apic: usize, apic_id: u32) {
         APIC_DELIVERY_INIT | APIC_LEVEL_ASSERT | APIC_TRIGGER_LEVEL,
     );
     delay(100_000);
-    apic_write_icr(local_apic, apic_id, APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR);
+    apic_write_icr(
+        local_apic,
+        apic_id,
+        APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR,
+    );
     delay(20_000);
-    apic_write_icr(local_apic, apic_id, APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR);
+    apic_write_icr(
+        local_apic,
+        apic_id,
+        APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR,
+    );
     delay(20_000);
 }
 
@@ -653,7 +656,12 @@ fn apic_write_icr(local_apic: usize, apic_id: u32, low: u32) {
 pub fn send_reschedule_ipi(cpu_index: usize) {
     let info = {
         let guard = SMP.lock();
-        guard.as_ref().map(|s| (s.local_apic_addr as usize, s.cpus.get(cpu_index).map(|c| c.apic_id)))
+        guard.as_ref().map(|s| {
+            (
+                s.local_apic_addr as usize,
+                s.cpus.get(cpu_index).map(|c| c.apic_id),
+            )
+        })
     };
     if let Some((local_apic, Some(apic_id))) = info {
         apic_write_icr(

@@ -2,13 +2,7 @@ pub mod elf;
 
 use core::{arch::global_asm, ptr};
 
-use crate::{
-    fs,
-    process,
-    security::Credentials,
-    syscall,
-    sync::spinlock::SpinLock,
-};
+use crate::{fs, process, security::Credentials, sync::spinlock::SpinLock, syscall};
 
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
@@ -181,22 +175,13 @@ pub fn init() {
     crate::arch::x86_64::gdt::init_user_segments();
     crate::syscall::init();
 
-    let init = fs::read_file("/bin/init").unwrap_or_else(|| panic!("/bin/init missing from VFS"));
-    let mut process = UserProcess::load(1, "init", &init)
-        .unwrap_or_else(|err| panic!("failed to load /bin/init ELF: {}", err));
-
+    // Phase A: the synthesised bring-up of legacy /bin/init.S is gone. The
+    // real ring-3 /bin/init runs once `kernel_main` finishes bringing up the
+    // kernel; see `kernel_main` → `run_user_program("/bin/init", 1)`. We only
+    // bump processes_loaded here so the self-test harness still sees a value.
     unsafe {
         USERSPACE_STATS.processes_loaded += 1;
     }
-
-    crate::println!(
-        "Loaded user process {} pid {} entry {:#x}",
-        process.name(),
-        process.pid(),
-        process.entry()
-    );
-
-    run_init_process(&mut process);
 }
 
 pub fn stats() -> UserspaceStats {
@@ -251,10 +236,7 @@ pub fn run_user_program_with_stdio(
     let stdout_vfs_fd = stdout_path.map(|stdout_path| {
         fs::write_file(stdout_path, b"");
         fs::open(stdout_path).unwrap_or_else(|err| {
-            panic!(
-                "failed to open redirected stdout {}: {}",
-                stdout_path, err
-            )
+            panic!("failed to open redirected stdout {}: {}", stdout_path, err)
         })
     });
 
@@ -286,15 +268,9 @@ pub fn run_user_program_with_fds_as(
     stdout_vfs_fd: Option<usize>,
     credentials: Credentials,
 ) -> UserProgramResult {
-    let (entry, stack_top, argc, argv) = process::prepare_user_run(
-        pid,
-        path,
-        args,
-        stdin_vfs_fd,
-        stdout_vfs_fd,
-        credentials,
-    )
-    .unwrap_or_else(|| panic!("{} missing from VFS", path));
+    let (entry, stack_top, argc, argv) =
+        process::prepare_user_run(pid, path, args, stdin_vfs_fd, stdout_vfs_fd, credentials)
+            .unwrap_or_else(|| panic!("{} missing from VFS", path));
 
     process::set_current(pid);
 

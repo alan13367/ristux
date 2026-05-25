@@ -1,6 +1,7 @@
 # Deterministic root filesystem manifest.
 # Paths are archived in sorted order by tools/build_rootfs.rs.
 file /bin/init ../build/userland/init.elf
+file /bin/sh ../build/userland/sh.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/echo ../build/userland/echo.elf
@@ -26,6 +27,7 @@ package ls 0.1.0 /bin/ls
 package mkdir 0.1.0 /bin/mkdir
 package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm
+package sh 0.1.0 /bin/sh
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp

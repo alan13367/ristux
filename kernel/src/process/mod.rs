@@ -96,8 +96,8 @@ pub struct ProcessTable {
 
 impl Process {
     fn new_user(pid: Pid, parent: Option<Pid>, name: &str, credentials: Credentials) -> Self {
-        let address_space = AddressSpace::new_kernel_clone()
-            .expect("failed to create user address space");
+        let address_space =
+            AddressSpace::new_kernel_clone().expect("failed to create user address space");
         Self {
             pid,
             parent,
@@ -124,9 +124,9 @@ impl Process {
     }
 
     fn init_stdio(&mut self) {
-        let keyboard = fs::open("/dev/keyboard").unwrap_or(0);
+        let tty = fs::open("/dev/tty").unwrap_or(0);
         let console = fs::open("/dev/console").unwrap_or(1);
-        self.set_fd(0, keyboard);
+        self.set_fd(0, tty);
         self.set_fd(1, console);
         self.set_fd(2, console);
     }
@@ -337,18 +337,23 @@ impl ProcessTable {
         true
     }
 
-    fn exit(&mut self, pid: Pid, status: i32) {
+    fn exit(&mut self, pid: Pid, status: i32) -> Vec<Pid> {
         let was_current = current_pid() == Some(pid);
+        let mut wake = Vec::new();
         let waiters = {
             let process = match self.get_mut(pid) {
                 Some(p) => p,
-                None => return,
+                None => return wake,
             };
             process.state = ProcessState::Zombie(status);
             process.exit_status = Some(status);
             if was_current {
                 process.address_space.activate();
             }
+            for index in 0..process.fd_count {
+                let _ = fs::close(process.fds[index].vfs_fd);
+            }
+            process.fd_count = 0;
             let mut old = AddressSpace::new_kernel_clone().expect("address space");
             core::mem::swap(&mut process.address_space, &mut old);
             old.destroy();
@@ -362,7 +367,7 @@ impl ProcessTable {
                 if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
                 {
                     parent.state = ProcessState::Ready;
-                    scheduler::wake_blocked(waiter);
+                    wake.push(waiter);
                 }
             }
         }
@@ -371,10 +376,11 @@ impl ProcessTable {
                 if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid)
                 {
                     parent_proc.state = ProcessState::Ready;
-                    scheduler::wake_blocked(parent);
+                    wake.push(parent);
                 }
             }
         }
+        wake
     }
 
     fn wait(&mut self, parent: Pid, child: Pid) -> Option<i32> {
@@ -403,12 +409,11 @@ impl ProcessTable {
         }
     }
 
-    fn signal(&mut self, pid: Pid, status: i32) -> bool {
+    fn signal(&mut self, pid: Pid, status: i32) -> Option<Vec<Pid>> {
         if self.get(pid).is_some() {
-            self.exit(pid, status);
-            true
+            Some(self.exit(pid, status))
         } else {
-            false
+            None
         }
     }
 }
@@ -466,25 +471,64 @@ pub fn exec_with_args(pid: Pid, path: &str, args: &[&str]) -> bool {
     with_table(|table| table.exec(pid, path, args))
 }
 
+pub struct ExecInfo {
+    pub entry: u64,
+    pub stack_top: usize,
+    pub argc: usize,
+    pub argv_ptr: usize,
+}
+
+/// Execve invoked from a running user process. Replaces the address space of
+/// `pid` with the program at `path`, preserves the existing file descriptors,
+/// and returns the entry/stack info so the syscall dispatcher can patch the
+/// outgoing iretq frame.
+pub fn exec_for_user(pid: Pid, path: &str, args: &[&str]) -> Option<ExecInfo> {
+    with_table(|table| {
+        let data = fs::read_file(path)?;
+        let index = table.processes.iter().position(|p| p.pid == pid)?;
+        // Preserve fds across exec (semantically correct execve behaviour).
+        if table.processes[index].load_elf(path, &data).is_err() {
+            return None;
+        }
+        table.processes[index].setup_stack(args);
+        table.processes[index].state = ProcessState::Running;
+        let p = &table.processes[index];
+        Some(ExecInfo {
+            entry: p.entry,
+            stack_top: p.stack_top,
+            argc: p.argc,
+            argv_ptr: p.argv_ptr,
+        })
+    })
+}
+
 pub fn get_parent(pid: Pid) -> Option<Pid> {
     with_table(|table| table.get(pid).and_then(|p| p.parent))
 }
 
 pub fn install_pipe_fds(pipefd: usize, read_vfs: usize, write_vfs: usize) -> Result<(), ()> {
     let parent = current_pid().ok_or(())?;
-    with_table(|table| {
+    let (user_read, user_write) = with_table(|table| {
         let process = table.get_mut(parent).ok_or(())?;
         let user_read = process.push_fd(read_vfs);
         let user_write = process.push_fd(write_vfs);
-        let out = write_user_buffer(pipefd, 8).ok_or(())?;
-        out[0..4].copy_from_slice(&(user_read as u32).to_le_bytes());
-        out[4..8].copy_from_slice(&(user_write as u32).to_le_bytes());
-        Ok(())
-    })
+        Ok((user_read, user_write))
+    })?;
+    let Some(out) = write_user_buffer(pipefd, 8) else {
+        let _ = user_close(user_read);
+        let _ = user_close(user_write);
+        return Err(());
+    };
+    out[0..4].copy_from_slice(&(user_read as u32).to_le_bytes());
+    out[4..8].copy_from_slice(&(user_write as u32).to_le_bytes());
+    Ok(())
 }
 
 pub fn exit(pid: Pid, status: i32) {
-    with_table(|table| table.exit(pid, status));
+    let wake = with_table(|table| table.exit(pid, status));
+    for pid in wake {
+        scheduler::wake_blocked(pid);
+    }
 }
 
 pub fn wait(parent: Pid, child: Pid) -> Option<i32> {
@@ -492,7 +536,15 @@ pub fn wait(parent: Pid, child: Pid) -> Option<i32> {
 }
 
 pub fn signal(pid: Pid, status: i32) -> bool {
-    with_table(|table| table.signal(pid, status))
+    let wake = with_table(|table| table.signal(pid, status));
+    if let Some(wake) = wake {
+        for pid in wake {
+            scheduler::wake_blocked(pid);
+        }
+        true
+    } else {
+        false
+    }
 }
 
 pub fn set_current(pid: Pid) {
@@ -641,7 +693,8 @@ pub fn user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
 }
 
 pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::chmod_as(path, mode, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| fs::chmod_as(path, mode, p.credentials))
+        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
@@ -687,7 +740,8 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
                                     .iter()
                                     .position(|(v, _)| *v == fault_page_addr)
                                 {
-                                    process.address_space.user_mappings[pos] = (fault_page_addr, new_frame);
+                                    process.address_space.user_mappings[pos] =
+                                        (fault_page_addr, new_frame);
                                 }
                                 return true;
                             }
@@ -715,10 +769,7 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
         if fault_addr >= process.address_space.stack_bottom
             && fault_addr < process.address_space.stack_top
         {
-            process
-                .address_space
-                .grow_stack(fault_addr)
-                .is_ok()
+            process.address_space.grow_stack(fault_addr).is_ok()
         } else if fault_addr >= paging::USER_HEAP_START
             && fault_addr < process.address_space.heap_break + FRAME_SIZE
         {
@@ -734,13 +785,34 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
 }
 
 pub fn wake_io_waiters() {
-    with_table(|table| {
+    let woken: Vec<Pid> = with_table(|table| {
+        let mut woken = Vec::new();
         for process in &mut table.processes {
             if matches!(process.state, ProcessState::Blocked(BlockReason::WaitIo)) {
                 process.state = ProcessState::Ready;
+                woken.push(process.pid);
             }
         }
+        woken
     });
+    for pid in woken {
+        crate::sched::wake_blocked(pid);
+    }
+}
+
+pub fn wake_io_waiters_for(pid: Pid) {
+    let woke = with_table(|table| {
+        if let Some(p) = table.get_mut(pid) {
+            if matches!(p.state, ProcessState::Blocked(BlockReason::WaitIo)) {
+                p.state = ProcessState::Ready;
+                return true;
+            }
+        }
+        false
+    });
+    if woke {
+        crate::sched::wake_blocked(pid);
+    }
 }
 
 pub fn block_current(reason: BlockReason) {
@@ -793,12 +865,12 @@ pub fn stats() -> ProcessStats {
     with_table(|table| ProcessStats {
         process_count: table.processes.len(),
         fd_count: table.processes.iter().map(|p| p.fd_count).sum(),
-        cwd_count: table
+        cwd_count: table.processes.iter().filter(|p| !p.cwd.is_empty()).count(),
+        fd_path_checksum: table
             .processes
             .iter()
-            .filter(|p| !p.cwd.is_empty())
-            .count(),
-        fd_path_checksum: table.processes.iter().map(|p| p.fd_count + p.pid as usize).sum(),
+            .map(|p| p.fd_count + p.pid as usize)
+            .sum(),
     })
 }
 
@@ -819,8 +891,7 @@ fn map_elf_segment(address_space: &mut AddressSpace, segment: elf::SegmentView<'
     let map_end = paging::align_up(segment_end, FRAME_SIZE);
 
     for page in (map_start..map_end).step_by(FRAME_SIZE) {
-        let frame =
-            frame_allocator::allocate_frame().expect("ELF segment frame allocation failed");
+        let frame = frame_allocator::allocate_frame().expect("ELF segment frame allocation failed");
         unsafe {
             ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
             let page_end = page + FRAME_SIZE;
@@ -895,16 +966,92 @@ pub fn prepare_user_run(
             process.set_fd(1, fd);
             process.set_fd(2, fd);
         }
-        Some((process.entry, process.stack_top, process.argc, process.argv_ptr))
+        Some((
+            process.entry,
+            process.stack_top,
+            process.argc,
+            process.argv_ptr,
+        ))
     })
 }
 
 pub fn finish_user_run(pid: Pid) -> (i32, usize) {
     let unmapped = with_table(|table| {
-        table.get(pid).map(|p| p.address_space.mapping_count()).unwrap_or(0)
+        table
+            .get(pid)
+            .map(|p| p.address_space.mapping_count())
+            .unwrap_or(0)
     });
     clear_current();
     (0, unmapped)
+}
+
+pub fn current_uid() -> u32 {
+    with_current_read(|p| p.credentials.uid).unwrap_or(0)
+}
+
+pub fn user_cwd() -> Option<String> {
+    with_current_read(|p| p.cwd.clone())
+}
+
+pub fn user_chdir(path: &str) -> Result<(), ()> {
+    with_current(|p| {
+        if path.is_empty() {
+            return Err(());
+        }
+        let resolved = if path.starts_with('/') {
+            String::from(path)
+        } else {
+            let mut combined = p.cwd.clone();
+            if !combined.ends_with('/') {
+                combined.push('/');
+            }
+            combined.push_str(path);
+            combined
+        };
+        p.cwd = resolved;
+        Ok(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn current_heap_break() -> usize {
+    with_current_read(|p| p.address_space.heap_break).unwrap_or(0)
+}
+
+/// Wait for any child matching `child` (0 = any). Returns Some((pid, status)) when
+/// a zombie child is reaped, None otherwise.
+pub fn wait_any(parent: Pid, child: Pid) -> Option<(Pid, i32)> {
+    with_table(|table| {
+        let candidates: Vec<Pid> = table
+            .processes
+            .iter()
+            .filter(|p| {
+                p.parent == Some(parent)
+                    && (child == 0 || p.pid == child)
+                    && matches!(p.state, ProcessState::Zombie(_))
+            })
+            .map(|p| p.pid)
+            .collect();
+        if let Some(&zombie_pid) = candidates.first() {
+            let status = match table.get(zombie_pid)?.state {
+                ProcessState::Zombie(status) => status,
+                _ => return None,
+            };
+            table.reap(zombie_pid);
+            return Some((zombie_pid, status));
+        }
+        None
+    })
+}
+
+pub fn has_child(parent: Pid, child: Pid) -> bool {
+    with_table(|table| {
+        table
+            .processes
+            .iter()
+            .any(|p| p.parent == Some(parent) && (child == 0 || p.pid == child))
+    })
 }
 
 pub fn brk(new_break: usize) -> Result<usize, ()> {
@@ -918,12 +1065,6 @@ pub fn brk(new_break: usize) -> Result<usize, ()> {
 pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, Option<i32>)> {
     with_table(|table| {
         let p = table.get(pid)?;
-        Some((
-            p.name.clone(),
-            p.state,
-            p.parent,
-            p.exit_status,
-        ))
+        Some((p.name.clone(), p.state, p.parent, p.exit_status))
     })
 }
-

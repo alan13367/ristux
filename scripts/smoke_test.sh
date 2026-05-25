@@ -13,12 +13,37 @@ fi
 rm -f "$SERIAL_LOG"
 make iso
 
+send_text() {
+  local text="$1"
+  local i ch
+  for ((i = 0; i < ${#text}; i++)); do
+    ch="${text:i:1}"
+    case "$ch" in
+      [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
+      ' ') printf 'sendkey spc\n' ;;
+      '|') printf 'sendkey shift-backslash\n' ;;
+      '/') printf 'sendkey slash\n' ;;
+      '.') printf 'sendkey dot\n' ;;
+      '-') printf 'sendkey minus\n' ;;
+      '_') printf 'sendkey shift-minus\n' ;;
+      '>') printf 'sendkey shift-dot\n' ;;
+      '<') printf 'sendkey shift-comma\n' ;;
+      *) echo "smoke_test: unsupported key '$ch'" >&2; exit 1 ;;
+    esac
+    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.04}"
+  done
+}
+
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
-  printf 'sendkey a\n'
+  send_text "echo hello"
   sleep 1
   printf 'sendkey ret\n'
+  sleep 3
+  send_text "echo hello | cat"
   sleep 1
+  printf 'sendkey ret\n'
+  sleep 5
   printf 'quit\n'
 ) | "$QEMU_BIN" -cdrom "$ISO_IMAGE" $QEMU_FLAGS -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -35,51 +60,25 @@ grep -q "TCP MVP self-test passed" "$SERIAL_LOG"
 grep -q "Socket layer self-test passed" "$SERIAL_LOG"
 grep -q "Framebuffer graphics self-test passed" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
-grep -q "/bin/pwd exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "/bin/ls exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "/bin/pwd" "$SERIAL_LOG"
-grep -q "sh\$ /bin/mkdir /tmp/work" "$SERIAL_LOG"
-grep -q "/bin/mkdir exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "sh\$ /bin/touch /tmp/work/empty.txt" "$SERIAL_LOG"
-grep -q "/bin/touch exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "/tmp/work/empty.txt" "$SERIAL_LOG"
-grep -q "sh\$ /bin/rm /tmp/work/empty.txt" "$SERIAL_LOG"
-grep -q "/bin/rm exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "sh\$ /bin/cat /tmp/work/empty.txt" "$SERIAL_LOG"
-grep -q "/bin/cat exited with 1 after ring 3 exec" "$SERIAL_LOG"
-grep -q "sh\$ /bin/chmod 000 /tmp/message.txt" "$SERIAL_LOG"
-grep -q "Running /bin/cat as uid 1000 gid 1000" "$SERIAL_LOG"
-grep -q "sh\$ user /bin/cat /tmp/message.txt" "$SERIAL_LOG"
-grep -q "VFS permission denied: uid 1000 cannot read /tmp/message.txt" "$SERIAL_LOG"
-grep -q "sh\$ /bin/chmod 644 /tmp/message.txt" "$SERIAL_LOG"
-grep -q "/bin/chmod exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "sh\$ sigtest" "$SERIAL_LOG"
-grep -q "Signal smoke target pid" "$SERIAL_LOG"
-grep -q "Signal 15 delivered to pid" "$SERIAL_LOG"
-grep -q "/bin/kill exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "exited with 143 after /bin/kill" "$SERIAL_LOG"
-grep -q "sh\$ /bin/udp" "$SERIAL_LOG"
-grep -q "UDP socket" "$SERIAL_LOG"
-grep -q "udp recv: udp-reply" "$SERIAL_LOG"
-grep -q "/bin/udp exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "/bin/cat exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "hello from argv" "$SERIAL_LOG"
-grep -q "sh\$ /bin/echo redirected > /tmp/message.txt" "$SERIAL_LOG"
-grep -q "/bin/echo exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "sh\$ /bin/cat < /tmp/message.txt" "$SERIAL_LOG"
-grep -q "Ring 3 input redirection mapped /tmp/message.txt to /bin/cat stdin" "$SERIAL_LOG"
-grep -q "sh\$ /bin/cat /tmp/message.txt | /bin/cat" "$SERIAL_LOG"
-grep -q "Ring 3 pipeline connected /bin/cat -> /bin/cat through VFS pipe" "$SERIAL_LOG"
-grep -q "/bin/true exited with 0 after ring 3 exec" "$SERIAL_LOG"
-grep -q "/bin/false exited with 1 after ring 3 exec" "$SERIAL_LOG"
-grep -q "hello from sequence" "$SERIAL_LOG"
-grep -q "Ring 3 ELF program /bin/false pid" "$SERIAL_LOG"
-grep -q "Ring 3 ELF program /bin/false pid.*exited with status 1" "$SERIAL_LOG"
-grep -q "Ring 3 user program sequence passed: 4 program(s)" "$SERIAL_LOG"
+grep -q "init: spawning /bin/sh" "$SERIAL_LOG"
+grep -q "\\$ " "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: a" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
+if [[ "$(grep -o "hello" "$SERIAL_LOG" | wc -l | tr -d ' ')" -lt 4 ]]; then
+  echo "expected echo and pipeline output in $SERIAL_LOG" >&2
+  exit 1
+fi
+if [[ "$(grep -o "\\$ " "$SERIAL_LOG" | wc -l | tr -d ' ')" -lt 3 ]]; then
+  echo "expected prompt to return after pipeline in $SERIAL_LOG" >&2
+  exit 1
+fi
 if grep -q "kernel panic" "$SERIAL_LOG"; then
   echo "kernel panic found in $SERIAL_LOG" >&2
+  exit 1
+fi
+if grep -Eq "User page fault|userland panic|sh: (pipe|exec|fork) failed" "$SERIAL_LOG"; then
+  echo "userspace failure found in $SERIAL_LOG" >&2
   exit 1
 fi
 

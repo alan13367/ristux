@@ -77,7 +77,6 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     storage::init();
     shell::init();
     task::init();
-    userspace::run_userland_program_sequence();
 
     arch::x86_64::interrupts::init();
     println!(
@@ -88,6 +87,15 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     smp::init(boot_info.acpi_rsdp());
     testing::run_kernel_self_tests();
 
+    // Phase A: hand control to ring 3. /bin/init is responsible for spawning
+    // /bin/sh and reaping zombies forever; once we enter user mode the kernel
+    // only runs again via syscalls and interrupts.
+    println!("init: spawning /bin/init");
+    let _ = userspace::run_user_program("/bin/init", 1);
+
+    // /bin/init should never exit. If it does, fall back to halt to surface
+    // the failure on serial.
+    println!("init exited unexpectedly; halting.");
     crate::halt_loop();
 }
 

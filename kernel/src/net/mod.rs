@@ -3,10 +3,7 @@ use alloc::vec::Vec;
 pub mod socket;
 pub mod tcp;
 
-use crate::{
-    drivers::virtio_net::VirtioNetDriver,
-    sync::spinlock::SpinLock,
-};
+use crate::{drivers::virtio_net::VirtioNetDriver, sync::spinlock::SpinLock};
 
 const ETHERTYPE_IPV4: u16 = 0x0800;
 const ETHERTYPE_ARP: u16 = 0x0806;
@@ -366,8 +363,7 @@ pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
 }
 
 fn runtime_stack() -> NetworkStack {
-    let device =
-        VirtioNetDriver::probe().unwrap_or_else(VirtioNetDriver::software_fallback);
+    let device = VirtioNetDriver::probe().unwrap_or_else(VirtioNetDriver::software_fallback);
     let local_ip = Ipv4Addr([10, 0, 2, 15]);
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
     let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);

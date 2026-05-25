@@ -106,4 +106,3 @@ pub fn self_test() {
 
     crate::println!("Permissions self-test passed.");
 }
-

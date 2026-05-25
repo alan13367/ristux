@@ -75,8 +75,12 @@ enum OpenHandle {
         offset: usize,
         rights: OpenRights,
     },
-    PipeRead { pipe: usize },
-    PipeWrite { pipe: usize },
+    PipeRead {
+        pipe: usize,
+    },
+    PipeWrite {
+        pipe: usize,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -104,6 +108,8 @@ impl OpenRights {
 struct PipeState {
     buffer: VecDeque<u8>,
     capacity: usize,
+    readers: usize,
+    writers: usize,
 }
 
 impl PipeState {
@@ -111,10 +117,28 @@ impl PipeState {
         Self {
             buffer: VecDeque::new(),
             capacity,
+            readers: 1,
+            writers: 1,
         }
     }
 
-    fn read(&mut self, output: &mut [u8]) -> usize {
+    fn add_reader(&mut self) {
+        self.readers += 1;
+    }
+
+    fn add_writer(&mut self) {
+        self.writers += 1;
+    }
+
+    fn close_reader(&mut self) {
+        self.readers = self.readers.saturating_sub(1);
+    }
+
+    fn close_writer(&mut self) {
+        self.writers = self.writers.saturating_sub(1);
+    }
+
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, VfsError> {
         let mut read = 0;
         for byte in output {
             let Some(value) = self.buffer.pop_front() else {
@@ -123,10 +147,16 @@ impl PipeState {
             *byte = value;
             read += 1;
         }
-        read
+        if read == 0 && self.writers > 0 {
+            return Err(VfsError::WouldBlock);
+        }
+        Ok(read)
     }
 
-    fn write(&mut self, input: &[u8]) -> usize {
+    fn write(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        if self.readers == 0 {
+            return Err(VfsError::BadFd);
+        }
         let mut written = 0;
         for byte in input {
             if self.buffer.len() == self.capacity {
@@ -135,7 +165,10 @@ impl PipeState {
             self.buffer.push_back(*byte);
             written += 1;
         }
-        written
+        if written == 0 && !input.is_empty() {
+            return Err(VfsError::WouldBlock);
+        }
+        Ok(written)
     }
 }
 
@@ -170,7 +203,8 @@ impl Vfs {
         vfs.add_directory("/pkg");
         vfs.add_directory("/proc");
         vfs.add_directory("/tmp");
-        vfs.chmod("/tmp", 0o777).expect("failed to make /tmp writable");
+        vfs.chmod("/tmp", 0o777)
+            .expect("failed to make /tmp writable");
         vfs.add_device("/dev/null", DeviceKind::Null);
         vfs.add_device("/dev/zero", DeviceKind::Zero);
         vfs.add_device("/dev/console", DeviceKind::Console);
@@ -303,7 +337,11 @@ impl Vfs {
             }
             node.data.clear();
             node.timestamps.modified_at = crate::time::filesystem_timestamp();
-            let node = self.nodes.iter().position(|node| node.path == path).unwrap();
+            let node = self
+                .nodes
+                .iter()
+                .position(|node| node.path == path)
+                .unwrap();
             return self.push_open_handle(OpenHandle::Node {
                 node,
                 offset: 0,
@@ -424,6 +462,7 @@ impl Vfs {
             .get(fd)
             .and_then(|slot| *slot)
             .ok_or(VfsError::BadFd)?;
+        self.retain_handle(handle)?;
         self.push_open_handle(handle)
     }
 
@@ -566,7 +605,7 @@ impl Vfs {
             }
             OpenHandle::PipeRead { pipe } => {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
-                Ok(pipe.read(output))
+                pipe.read(output)
             }
             OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
         }
@@ -592,7 +631,7 @@ impl Vfs {
                         NodeKind::Device(DeviceKind::Null) => Ok(input.len()),
                         NodeKind::Device(DeviceKind::Console) => {
                             let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
-                            crate::print!("{}", text);
+                            crate::log::write_str(text);
                             Ok(input.len())
                         }
                         NodeKind::Device(DeviceKind::Framebuffer) => {
@@ -600,7 +639,7 @@ impl Vfs {
                         }
                         NodeKind::Device(DeviceKind::Tty) => {
                             let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
-                            crate::print!("{}", text);
+                            crate::log::write_str(text);
                             Ok(input.len())
                         }
                         NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
@@ -623,7 +662,11 @@ impl Vfs {
             }
             OpenHandle::PipeWrite { pipe } => {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
-                Ok(pipe.write(input))
+                let written = pipe.write(input)?;
+                if written > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(written)
             }
             OpenHandle::PipeRead { .. } => Err(VfsError::BadFd),
         }
@@ -633,7 +676,42 @@ impl Vfs {
         let Some(slot) = self.open_files.get_mut(fd) else {
             return Err(VfsError::BadFd);
         };
-        *slot = None;
+        let handle = slot.take().ok_or(VfsError::BadFd)?;
+        self.release_handle(handle)?;
+        Ok(())
+    }
+
+    fn retain_handle(&mut self, handle: OpenHandle) -> Result<(), VfsError> {
+        match handle {
+            OpenHandle::PipeRead { pipe } => self
+                .pipes
+                .get_mut(pipe)
+                .ok_or(VfsError::BadFd)?
+                .add_reader(),
+            OpenHandle::PipeWrite { pipe } => self
+                .pipes
+                .get_mut(pipe)
+                .ok_or(VfsError::BadFd)?
+                .add_writer(),
+            OpenHandle::Node { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn release_handle(&mut self, handle: OpenHandle) -> Result<(), VfsError> {
+        match handle {
+            OpenHandle::PipeRead { pipe } => self
+                .pipes
+                .get_mut(pipe)
+                .ok_or(VfsError::BadFd)?
+                .close_reader(),
+            OpenHandle::PipeWrite { pipe } => self
+                .pipes
+                .get_mut(pipe)
+                .ok_or(VfsError::BadFd)?
+                .close_writer(),
+            OpenHandle::Node { .. } => {}
+        }
         Ok(())
     }
 
@@ -665,6 +743,36 @@ impl Vfs {
         }
         *cursor = new_offset as usize;
         Ok(*cursor)
+    }
+
+    fn fstat(&self, fd: usize) -> Result<Stat, VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|h| h.as_ref())
+            .ok_or(VfsError::BadFd)?;
+        let OpenHandle::Node { node, .. } = handle else {
+            return Err(VfsError::BadFd);
+        };
+        let node = &self.nodes[*node];
+        Ok(Stat {
+            mode: node.metadata.mode.0,
+            size: node.data.len() as u64,
+            mtime: node.timestamps.modified_at,
+        })
+    }
+
+    fn is_tty_fd(&self, fd: usize) -> bool {
+        let Some(Some(handle)) = self.open_files.get(fd) else {
+            return false;
+        };
+        let OpenHandle::Node { node, .. } = handle else {
+            return false;
+        };
+        matches!(
+            self.nodes.get(*node).map(|n| n.kind),
+            Some(NodeKind::Device(DeviceKind::Tty))
+        )
     }
 
     fn stat(&self, path: &str) -> Result<Stat, VfsError> {
@@ -787,6 +895,15 @@ pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
 
 pub fn stat(path: &str) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.stat(path))
+}
+
+pub fn fstat(fd: usize) -> Result<Stat, VfsError> {
+    with_vfs(|vfs| vfs.fstat(fd))
+}
+
+pub fn is_tty_fd(fd: usize) -> bool {
+    let guard = VFS.lock();
+    guard.as_ref().map(|vfs| vfs.is_tty_fd(fd)).unwrap_or(false)
 }
 
 pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
