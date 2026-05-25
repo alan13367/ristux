@@ -1,0 +1,4 @@
+NAME=ristux
+VERSION=0.1.0
+ID=ristux
+PRETTY_NAME="ristux experimental unix-like kernel"

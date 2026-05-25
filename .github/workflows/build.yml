@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  kernel:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: Install boot tools
+        run: brew install i686-elf-grub xorriso mtools qemu
+      - name: Build kernel
+        run: cargo build
+      - name: Verify Multiboot2 image
+        run: make check-multiboot
+      - name: Build ISO
+        run: make iso
+      - name: Run QEMU smoke test
+        run: scripts/smoke_test.sh

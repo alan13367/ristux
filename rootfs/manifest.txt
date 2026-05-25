@@ -1,0 +1,7 @@
+# Deterministic root filesystem manifest.
+# Paths are archived in sorted order by tools/build_rootfs.rs.
+file /bin/init ../build/userland/init.elf
+file /etc/os-release etc/os-release
+file /lib/libc.so ../build/userland/libc.so
+package init 0.1.0 /bin/init
+package libc 0.1.0 /lib/libc.so

@@ -4,6 +4,7 @@ CLANG ?= clang
 GRUB_FILE ?= $(shell command -v grub-file 2>/dev/null || command -v i686-elf-grub-file 2>/dev/null || command -v x86_64-elf-grub-file 2>/dev/null || printf grub-file)
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v i686-elf-grub-mkrescue 2>/dev/null || command -v x86_64-elf-grub-mkrescue 2>/dev/null || printf grub-mkrescue)
 QEMU ?= qemu-system-x86_64
+QEMU_FLAGS ?= -m 256M -smp 4
 RUST_HOST := $(shell $(RUSTC) -vV | sed -n 's/^host: //p')
 RUST_LLD ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/$(RUST_HOST)/bin/rust-lld
 
@@ -18,9 +19,11 @@ USER_INIT_OBJ := build/userland/init.o
 USER_INIT_ELF := build/userland/init.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
-INITRD_BUILDER := build/build_initrd
+ROOTFS_BUILDER := build/build_rootfs
+ROOTFS_MANIFEST := rootfs/manifest.txt
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release
 
-.PHONY: all build check-multiboot iso run clean
+.PHONY: all build rootfs check-multiboot iso run run-headless smoke debug test clean
 
 all: build
 
@@ -44,12 +47,14 @@ $(USER_LIBC_OBJ): userland/libc.S
 $(USER_LIBC_SO): $(USER_LIBC_OBJ)
 	$(RUST_LLD) -flavor gnu -shared -o $@ $(USER_LIBC_OBJ)
 
-$(INITRD_BUILDER): tools/build_initrd.rs
+$(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_LIBC_SO) $(INITRD_BUILDER)
-	$(INITRD_BUILDER) $(USER_INIT_ELF) $(USER_LIBC_SO) $(ISO_INITRD)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
+
+rootfs: $(ISO_INITRD)
 
 check-multiboot: $(ISO_KERNEL)
 	$(GRUB_FILE) --is-x86-multiboot2 $(ISO_KERNEL)
@@ -59,7 +64,18 @@ iso: check-multiboot $(ISO_INITRD)
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_DIR)
 
 run: iso
-	$(QEMU) -cdrom $(ISO_IMAGE) -m 256M -no-reboot -no-shutdown
+	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS) -no-reboot -no-shutdown
+
+run-headless: iso
+	scripts/run_qemu.sh --headless
+
+smoke:
+	scripts/smoke_test.sh
+
+debug: iso
+	scripts/debug_qemu.sh
+
+test: smoke
 
 clean:
 	$(CARGO) clean

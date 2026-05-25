@@ -41,6 +41,12 @@ Build the release ELF used for the bootable ISO:
 make build
 ```
 
+Build the manifest-driven initrd/root filesystem:
+
+```sh
+make rootfs
+```
+
 ## Check Multiboot2 Compatibility
 
 ```sh
@@ -61,6 +67,9 @@ make iso
 
 The ISO is written to `build/ristux.iso`.
 
+The root filesystem is generated from `rootfs/manifest.txt`; the builder adds
+a deterministic package index at `/pkg/packages.txt`.
+
 ## Run in QEMU
 
 ```sh
@@ -70,17 +79,27 @@ make run
 Equivalent QEMU command:
 
 ```sh
-qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -no-reboot -no-shutdown
+qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -smp 4 -no-reboot -no-shutdown
 ```
 
 For a headless serial log:
 
 ```sh
-qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -display none -no-reboot \
+qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -smp 4 -display none -no-reboot \
   -serial file:/tmp/ristux-serial.log -monitor stdio
 ```
 
 Inside the QEMU monitor, `sendkey a` injects a keyboard event and `quit` exits.
+
+Convenience scripts:
+
+```sh
+scripts/build_iso.sh
+scripts/run_qemu.sh --headless
+scripts/debug_qemu.sh
+```
+
+`scripts/debug_qemu.sh` starts QEMU paused with the GDB stub on port `1234`.
 
 ## Smoke Test Checklist
 
@@ -89,22 +108,14 @@ Run these from the repository root:
 ```sh
 cargo build
 make check-multiboot
-make iso
-qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -display none -no-reboot \
-  -serial file:/tmp/ristux-serial.log -monitor stdio
+scripts/smoke_test.sh
 ```
 
-In the QEMU monitor, run:
-
-```text
-sendkey a
-quit
-```
-
-Then inspect the serial log:
+The smoke script builds the ISO, injects `sendkey a`, exits QEMU, and writes
+the serial log to `/tmp/ristux-smoke-serial.log`. To inspect the log manually:
 
 ```sh
-grep -E "Multiboot2 handoff|Timekeeping|Dynamic linker|Networking|Kernel self-test|keyboard scancode|panic" /tmp/ristux-serial.log
+grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|keyboard scancode|panic" /tmp/ristux-smoke-serial.log
 ```
 
 A passing boot reaches `Kernel self-test harness passed.`, logs the keyboard
@@ -129,3 +140,6 @@ scancode from `sendkey a`, and does not print `kernel panic`.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.
 - Packages `/lib/libc.so` into the initrd and resolves shared-library symbols for a PIE-style user program through the dynamic linker.
+- Initializes an SMP topology model with per-CPU state, IPI queues, shared-lock audit, and multi-CPU scheduler dispatch.
+- Requests a GRUB linear framebuffer, maps it, draws a double-buffered boot scene with a tiny bitmap font, and exposes `/dev/fb0`.
+- Uses a manifest-driven rootfs/package builder plus QEMU run, smoke-test, and GDB debug scripts.

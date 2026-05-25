@@ -78,8 +78,10 @@ impl Vfs {
 
         vfs.add_directory("/");
         vfs.add_directory("/bin");
+        vfs.add_directory("/etc");
         vfs.add_directory("/lib");
         vfs.add_directory("/dev");
+        vfs.add_directory("/pkg");
         vfs.add_directory("/proc");
         vfs.add_directory("/tmp");
         vfs.add_device("/dev/null", DeviceKind::Null);
@@ -368,6 +370,8 @@ pub fn self_test() {
 
     if read_file("/bin/init").is_none()
         || read_file("/lib/libc.so").is_none()
+        || read_file("/etc/os-release").is_none()
+        || read_file("/pkg/packages.txt").is_none()
         || read_file("/tmp/message.txt").is_none()
     {
         panic!("VFS path resolution self-test failed");
