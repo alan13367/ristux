@@ -634,6 +634,38 @@ pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
+pub fn user_open_options(
+    path: &str,
+    read: bool,
+    write: bool,
+    create: bool,
+    truncate: bool,
+    append: bool,
+) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        let vfs_fd = if create {
+            match fs::open_with_rights_as(path, p.credentials, read, write) {
+                Ok(fd) if !truncate => fd,
+                Ok(fd) => {
+                    let _ = fs::close(fd);
+                    fs::create_file_as(path, p.credentials)?
+                }
+                Err(fs::vfs::VfsError::NotFound) => fs::create_file_as(path, p.credentials)?,
+                Err(err) => return Err(err),
+            }
+        } else if truncate {
+            fs::create_file_as(path, p.credentials)?
+        } else {
+            fs::open_with_rights_as(path, p.credentials, read, write)?
+        };
+        if append {
+            let _ = fs::lseek(vfs_fd, 0, 2);
+        }
+        Ok(p.push_fd(vfs_fd))
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
         let vfs_fd = fs::create_file_as(path, p.credentials)?;

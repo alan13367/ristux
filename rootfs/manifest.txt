@@ -8,6 +8,7 @@ file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/ls ../build/userland/ls.elf
+file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/rm ../build/userland/rm.elf
@@ -24,6 +25,7 @@ package init 0.1.0 /bin/init
 package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
 package ls 0.1.0 /bin/ls
+package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir
 package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm

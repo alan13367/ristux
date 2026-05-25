@@ -24,7 +24,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false
+USERLAND_RS_BINS := init sh cat echo true false touch mount
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -32,6 +32,8 @@ USER_CAT_ELF := build/userland/cat.elf
 USER_ECHO_ELF := build/userland/echo.elf
 USER_TRUE_ELF := build/userland/true.elf
 USER_FALSE_ELF := build/userland/false.elf
+USER_TOUCH_ELF := build/userland/touch.elf
+USER_MOUNT_ELF := build/userland/mount.elf
 USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
@@ -40,8 +42,6 @@ USER_CHMOD_OBJ := build/userland/chmod.o
 USER_CHMOD_ELF := build/userland/chmod.elf
 USER_KILL_OBJ := build/userland/kill.o
 USER_KILL_ELF := build/userland/kill.elf
-USER_TOUCH_OBJ := build/userland/touch.o
-USER_TOUCH_ELF := build/userland/touch.elf
 USER_MKDIR_OBJ := build/userland/mkdir.o
 USER_MKDIR_ELF := build/userland/mkdir.elf
 USER_RM_OBJ := build/userland/rm.o
@@ -79,6 +79,8 @@ $(USER_CAT_ELF): $(USERLAND_RS_STAMP)
 $(USER_ECHO_ELF): $(USERLAND_RS_STAMP)
 $(USER_TRUE_ELF): $(USERLAND_RS_STAMP)
 $(USER_FALSE_ELF): $(USERLAND_RS_STAMP)
+$(USER_TOUCH_ELF): $(USERLAND_RS_STAMP)
+$(USER_MOUNT_ELF): $(USERLAND_RS_STAMP)
 
 $(USER_LS_OBJ): userland/ls.S
 	mkdir -p build/userland
@@ -107,13 +109,6 @@ $(USER_KILL_OBJ): userland/kill.S
 
 $(USER_KILL_ELF): $(USER_KILL_OBJ) userland/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_KILL_OBJ)
-
-$(USER_TOUCH_OBJ): userland/touch.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_TOUCH_ELF): $(USER_TOUCH_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_TOUCH_OBJ)
 
 $(USER_MKDIR_OBJ): userland/mkdir.S
 	mkdir -p build/userland
@@ -151,7 +146,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_TOUCH_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

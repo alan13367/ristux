@@ -68,7 +68,7 @@ struct Node {
     data: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum OpenHandle {
     Node {
         node: usize,
@@ -81,6 +81,11 @@ enum OpenHandle {
     PipeWrite {
         pipe: usize,
     },
+    Ext2File {
+        path: String,
+        offset: usize,
+        rights: OpenRights,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +95,10 @@ struct OpenRights {
 }
 
 impl OpenRights {
+    const fn new(read: bool, write: bool) -> Self {
+        Self { read, write }
+    }
+
     const fn read_only() -> Self {
         Self {
             read: true,
@@ -229,27 +238,40 @@ impl Vfs {
         }
         if fstype == "ext2" {
             let fs = ext2::Ext2Fs::mount().map_err(|_| VfsError::NotFound)?;
-            if let Ok(data) = fs.read_file("/etc/os-release") {
-                let path = format!("{}/etc/os-release", mountpoint.trim_end_matches('/'));
-                self.add_file(&path, &data);
-            }
-            if let Ok(data) = fs.read_file("README") {
-                let path = format!("{}/README", mountpoint.trim_end_matches('/'));
-                self.add_file(&path, &data);
-            }
             self.mounts.push(MountPoint {
                 mountpoint: String::from(mountpoint),
                 fstype: String::from(fstype),
                 ext2: Some(fs),
             });
-            crate::println!(
-                "VFS mounted {} on {} (hybrid initrd + ext2).",
-                fstype,
-                mountpoint
-            );
+            crate::println!("VFS mounted {} on {}.", fstype, mountpoint);
             return Ok(());
         }
         Err(VfsError::NotFound)
+    }
+
+    fn root_ext2(&self) -> Option<&ext2::Ext2Fs> {
+        self.mounts
+            .iter()
+            .find(|mount| mount.mountpoint == "/")
+            .and_then(|mount| mount.ext2.as_ref())
+    }
+
+    fn root_ext2_mut(&mut self) -> Option<&mut ext2::Ext2Fs> {
+        self.mounts
+            .iter_mut()
+            .find(|mount| mount.mountpoint == "/")
+            .and_then(|mount| mount.ext2.as_mut())
+    }
+
+    fn use_root_ext2(path: &str) -> bool {
+        !(path == "/dev"
+            || path.starts_with("/dev/")
+            || path == "/proc"
+            || path.starts_with("/proc/")
+            || path == "/tmp"
+            || path.starts_with("/tmp/")
+            || path == "/initrd"
+            || path.starts_with("/initrd/"))
     }
 
     fn resolve_mount_list_paths(&self, prefix: &str) -> Vec<String> {
@@ -327,6 +349,31 @@ impl Vfs {
     }
 
     fn create_file_as(&mut self, path: &str, creds: Credentials) -> Result<usize, VfsError> {
+        if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2_mut() {
+                match fs.metadata(path) {
+                    Ok(meta) => {
+                        if meta.kind != ext2::Ext2NodeKind::File {
+                            return Err(VfsError::NotFile);
+                        }
+                        if !meta.metadata.can_access(creds, Access::Write) {
+                            return Err(VfsError::PermissionDenied);
+                        }
+                        fs.truncate_file(path).map_err(map_ext2_error)?;
+                    }
+                    Err(_) => {
+                        fs.create_file(path, creds.uid, creds.gid, 0o644)
+                            .map_err(map_ext2_error)?;
+                    }
+                }
+                return self.push_open_handle(OpenHandle::Ext2File {
+                    path: String::from(path),
+                    offset: 0,
+                    rights: OpenRights::read_write(),
+                });
+            }
+        }
+
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
             if node.kind != NodeKind::File {
@@ -406,6 +453,25 @@ impl Vfs {
                 data: Vec::new(),
             });
             self.nodes.len() - 1
+        } else if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2() {
+                let meta = fs.metadata(path).map_err(|_| VfsError::NotFound)?;
+                if meta.kind == ext2::Ext2NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                if rights.read && !meta.metadata.can_access(creds, Access::Read) {
+                    return Err(VfsError::PermissionDenied);
+                }
+                if rights.write && !meta.metadata.can_access(creds, Access::Write) {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return self.push_open_handle(OpenHandle::Ext2File {
+                    path: String::from(path),
+                    offset: 0,
+                    rights,
+                });
+            }
+            return Err(VfsError::NotFound);
         } else {
             return Err(VfsError::NotFound);
         };
@@ -460,9 +526,9 @@ impl Vfs {
         let handle = self
             .open_files
             .get(fd)
-            .and_then(|slot| *slot)
+            .and_then(|slot| slot.as_ref().cloned())
             .ok_or(VfsError::BadFd)?;
-        self.retain_handle(handle)?;
+        self.retain_handle(&handle)?;
         self.push_open_handle(handle)
     }
 
@@ -548,6 +614,39 @@ impl Vfs {
     }
 
     fn read(&mut self, fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
+        if let Some((path, offset, rights)) = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|handle| match handle {
+                OpenHandle::Ext2File {
+                    path,
+                    offset,
+                    rights,
+                } => Some((path.clone(), *offset, *rights)),
+                _ => None,
+            })
+        {
+            if !rights.read {
+                return Err(VfsError::BadFd);
+            }
+            let data = self
+                .root_ext2()
+                .ok_or(VfsError::NotFound)?
+                .read_file(&path)
+                .map_err(map_ext2_error)?;
+            let remaining = data.len().saturating_sub(offset);
+            let count = remaining.min(output.len());
+            output[..count].copy_from_slice(&data[offset..offset + count]);
+            if let Some(Some(OpenHandle::Ext2File {
+                offset: cursor, ..
+            })) = self.open_files.get_mut(fd)
+            {
+                *cursor += count;
+            }
+            return Ok(count);
+        }
+
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
@@ -607,11 +706,54 @@ impl Vfs {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
                 pipe.read(output)
             }
+            OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
             OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
         }
     }
 
     fn write(&mut self, fd: usize, input: &[u8]) -> Result<usize, VfsError> {
+        if let Some((path, offset, rights)) = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|handle| match handle {
+                OpenHandle::Ext2File {
+                    path,
+                    offset,
+                    rights,
+                } => Some((path.clone(), *offset, *rights)),
+                _ => None,
+            })
+        {
+            if !rights.write {
+                return Err(VfsError::BadFd);
+            }
+            let mut data = self
+                .root_ext2()
+                .ok_or(VfsError::NotFound)?
+                .read_file(&path)
+                .map_err(map_ext2_error)?;
+            if offset > data.len() {
+                data.resize(offset, 0);
+            }
+            let end = offset + input.len();
+            if end > data.len() {
+                data.resize(end, 0);
+            }
+            data[offset..end].copy_from_slice(input);
+            self.root_ext2_mut()
+                .ok_or(VfsError::NotFound)?
+                .write_file(&path, &data)
+                .map_err(map_ext2_error)?;
+            if let Some(Some(OpenHandle::Ext2File {
+                offset: cursor, ..
+            })) = self.open_files.get_mut(fd)
+            {
+                *cursor = end;
+            }
+            return Ok(input.len());
+        }
+
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
@@ -668,6 +810,7 @@ impl Vfs {
                 }
                 Ok(written)
             }
+            OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
             OpenHandle::PipeRead { .. } => Err(VfsError::BadFd),
         }
     }
@@ -677,60 +820,97 @@ impl Vfs {
             return Err(VfsError::BadFd);
         };
         let handle = slot.take().ok_or(VfsError::BadFd)?;
-        self.release_handle(handle)?;
+        self.release_handle(&handle)?;
         Ok(())
     }
 
-    fn retain_handle(&mut self, handle: OpenHandle) -> Result<(), VfsError> {
+    fn retain_handle(&mut self, handle: &OpenHandle) -> Result<(), VfsError> {
         match handle {
             OpenHandle::PipeRead { pipe } => self
                 .pipes
-                .get_mut(pipe)
+                .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .add_reader(),
             OpenHandle::PipeWrite { pipe } => self
                 .pipes
-                .get_mut(pipe)
+                .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .add_writer(),
-            OpenHandle::Node { .. } => {}
+            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } => {}
         }
         Ok(())
     }
 
-    fn release_handle(&mut self, handle: OpenHandle) -> Result<(), VfsError> {
+    fn release_handle(&mut self, handle: &OpenHandle) -> Result<(), VfsError> {
         match handle {
             OpenHandle::PipeRead { pipe } => self
                 .pipes
-                .get_mut(pipe)
+                .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .close_reader(),
             OpenHandle::PipeWrite { pipe } => self
                 .pipes
-                .get_mut(pipe)
+                .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .close_writer(),
-            OpenHandle::Node { .. } => {}
+            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } => {}
         }
         Ok(())
     }
 
     fn lseek(&mut self, fd: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
+        if let Some((path, cursor)) = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|handle| match handle {
+                OpenHandle::Ext2File { path, offset, .. } => Some((path.clone(), *offset)),
+                _ => None,
+            })
+        {
+            let size = self
+                .root_ext2()
+                .and_then(|fs| fs.metadata(&path).ok())
+                .map(|meta| meta.size as usize)
+                .ok_or(VfsError::NotFound)?;
+            let new_offset = match whence {
+                0 => offset,
+                1 => cursor as isize + offset,
+                2 => size as isize + offset,
+                _ => return Err(VfsError::BadFd),
+            };
+            if new_offset < 0 {
+                return Err(VfsError::BadFd);
+            }
+            if let Some(Some(OpenHandle::Ext2File {
+                offset: cursor, ..
+            })) = self.open_files.get_mut(fd)
+            {
+                *cursor = new_offset as usize;
+            }
+            return Ok(new_offset as usize);
+        }
+
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
-        let OpenHandle::Node {
-            node,
-            offset: cursor,
-            ..
-        } = handle
-        else {
-            return Err(VfsError::BadFd);
-        };
-        let size = if let Some(pid) = proc_status_pid(&self.nodes[*node].path) {
-            format_proc_status(pid).len()
-        } else {
-            self.nodes[*node].data.len()
+        let (size, cursor) = match handle {
+            OpenHandle::Node {
+                node,
+                offset: cursor,
+                ..
+            } => {
+                let size = if let Some(pid) = proc_status_pid(&self.nodes[*node].path) {
+                    format_proc_status(pid).len()
+                } else {
+                    self.nodes[*node].data.len()
+                };
+                (size, cursor)
+            }
+            OpenHandle::Ext2File { .. } => return Err(VfsError::BadFd),
+            OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => {
+                return Err(VfsError::BadFd);
+            }
         };
         let new_offset = match whence {
             0 => offset,
@@ -751,15 +931,29 @@ impl Vfs {
             .get(fd)
             .and_then(|h| h.as_ref())
             .ok_or(VfsError::BadFd)?;
-        let OpenHandle::Node { node, .. } = handle else {
-            return Err(VfsError::BadFd);
-        };
-        let node = &self.nodes[*node];
-        Ok(Stat {
-            mode: node.metadata.mode.0,
-            size: node.data.len() as u64,
-            mtime: node.timestamps.modified_at,
-        })
+        match handle {
+            OpenHandle::Node { node, .. } => {
+                let node = &self.nodes[*node];
+                Ok(Stat {
+                    mode: node.metadata.mode.0,
+                    size: node.data.len() as u64,
+                    mtime: node.timestamps.modified_at,
+                })
+            }
+            OpenHandle::Ext2File { path, .. } => {
+                let meta = self
+                    .root_ext2()
+                    .ok_or(VfsError::NotFound)?
+                    .metadata(path)
+                    .map_err(map_ext2_error)?;
+                Ok(Stat {
+                    mode: meta.metadata.mode.0,
+                    size: meta.size,
+                    mtime: crate::time::filesystem_timestamp(),
+                })
+            }
+            OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
+        }
     }
 
     fn is_tty_fd(&self, fd: usize) -> bool {
@@ -783,6 +977,17 @@ impl Vfs {
                 mtime: crate::time::filesystem_timestamp(),
             });
         }
+        if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2() {
+                if let Ok(meta) = fs.metadata(path) {
+                    return Ok(Stat {
+                        mode: meta.metadata.mode.0,
+                        size: meta.size,
+                        mtime: crate::time::filesystem_timestamp(),
+                    });
+                }
+            }
+        }
         let node = self
             .nodes
             .iter()
@@ -800,6 +1005,13 @@ impl Vfs {
     }
 
     fn can_access(&self, path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {
+        if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2() {
+                if let Ok(meta) = fs.metadata(path) {
+                    return Ok(meta.metadata.can_access(creds, access));
+                }
+            }
+        }
         let node = self
             .nodes
             .iter()
@@ -809,6 +1021,13 @@ impl Vfs {
     }
 
     fn read_file(&self, path: &str) -> Option<Vec<u8>> {
+        if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2() {
+                if let Ok(data) = fs.read_file(path) {
+                    return Some(data);
+                }
+            }
+        }
         let node = self.nodes.iter().find(|node| node.path == path)?;
         if node.kind == NodeKind::File {
             Some(node.data.clone())
@@ -841,8 +1060,8 @@ pub fn mount(device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsErro
 }
 
 pub fn mount_hybrid_ext2() {
-    if mount("virtio0", "/mnt", "ext2").is_ok() {
-        crate::println!("Hybrid initrd root retained; ext2 mounted at /mnt.");
+    if mount("virtio0", "/", "ext2").is_ok() {
+        crate::println!("Ext2 mounted as / with devfs, procfs, and tmpfs overlays.");
     }
 }
 
@@ -852,6 +1071,15 @@ pub fn open(path: &str) -> Result<usize, VfsError> {
 
 pub fn open_read_as(path: &str, creds: Credentials) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.open_as(path, creds, OpenRights::read_only()))
+}
+
+pub fn open_with_rights_as(
+    path: &str,
+    creds: Credentials,
+    read: bool,
+    write: bool,
+) -> Result<usize, VfsError> {
+    with_vfs(|vfs| vfs.open_as(path, creds, OpenRights::new(read, write)))
 }
 
 pub fn create_pipe(capacity: usize) -> Result<(usize, usize), VfsError> {
@@ -956,6 +1184,19 @@ pub fn list_paths(prefix: &str) -> Vec<String> {
         .as_ref()
         .map(|vfs| vfs.list_paths(prefix))
         .unwrap_or_default()
+}
+
+fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
+    match err {
+        ext2::Ext2Error::NotFound => VfsError::NotFound,
+        ext2::Ext2Error::NotDirectory | ext2::Ext2Error::NotFile => VfsError::NotFile,
+        ext2::Ext2Error::AlreadyExists => VfsError::AlreadyExists,
+        ext2::Ext2Error::InvalidSuperblock
+        | ext2::Ext2Error::IoError
+        | ext2::Ext2Error::Unsupported
+        | ext2::Ext2Error::NoSpace
+        | ext2::Ext2Error::DirectoryFull => VfsError::BadFd,
+    }
 }
 
 fn proc_status_pid(path: &str) -> Option<u64> {

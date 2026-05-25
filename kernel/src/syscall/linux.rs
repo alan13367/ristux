@@ -179,9 +179,21 @@ fn linux_read(
     }
 }
 
-fn linux_open(path_ptr: usize, _flags: i32, _mode: u32) -> Result<u64, i64> {
+fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
+    const O_WRONLY: i32 = 1;
+    const O_RDWR: i32 = 2;
+    const O_CREAT: i32 = 0o100;
+    const O_TRUNC: i32 = 0o1000;
+    const O_APPEND: i32 = 0o2000;
+
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    process::user_open(&path)
+    let access = flags & 0b11;
+    let write = access == O_WRONLY || access == O_RDWR;
+    let read = access != O_WRONLY;
+    let create = flags & O_CREAT != 0;
+    let truncate = flags & O_TRUNC != 0;
+    let append = flags & O_APPEND != 0;
+    process::user_open_options(&path, read, write, create, truncate, append)
         .map(|fd| fd as u64)
         .map_err(|_| ENOENT)
 }

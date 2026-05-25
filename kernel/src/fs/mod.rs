@@ -16,6 +16,15 @@ pub fn open_read_as(path: &str, creds: Credentials) -> Result<usize, vfs::VfsErr
     vfs::open_read_as(path, creds)
 }
 
+pub fn open_with_rights_as(
+    path: &str,
+    creds: Credentials,
+    read: bool,
+    write: bool,
+) -> Result<usize, vfs::VfsError> {
+    vfs::open_with_rights_as(path, creds, read, write)
+}
+
 pub fn create_pipe(capacity: usize) -> Result<(usize, usize), vfs::VfsError> {
     vfs::create_pipe(capacity)
 }

@@ -180,7 +180,7 @@ impl Builder {
             let indirect = if blocks.len() > 12 {
                 let indirect = self.alloc_block();
                 let mut block_data = [0u8; BLOCK_SIZE];
-                for (index, block) in blocks.iter().enumerate() {
+                for (index, block) in blocks.iter().skip(12).enumerate() {
                     let offset = index * 4;
                     block_data[offset..offset + 4].copy_from_slice(&block.to_le_bytes());
                 }
