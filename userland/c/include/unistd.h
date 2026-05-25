@@ -6,6 +6,11 @@
 
 extern char **environ;
 
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
+
 ssize_t read(int fd, void *buf, size_t len);
 ssize_t write(int fd, const void *buf, size_t len);
 int close(int fd);
@@ -19,6 +24,8 @@ pid_t getpid(void);
 pid_t getppid(void);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
+int access(const char *path, int mode);
+int unlink(const char *path);
 int brk(void *addr);
 void *sbrk(long increment);
 void _exit(int status) __attribute__((noreturn));

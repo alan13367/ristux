@@ -24,6 +24,7 @@ pub const NR_brk: u64 = 12;
 pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
+pub const NR_access: u64 = 21;
 pub const NR_pipe: u64 = 22;
 pub const NR_sched_yield: u64 = 24;
 pub const NR_dup: u64 = 32;
@@ -43,10 +44,13 @@ pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
 pub const NR_wait4: u64 = 61;
 pub const NR_kill: u64 = 62;
+pub const NR_getdents: u64 = 78;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
 pub const NR_mkdir: u64 = 83;
+pub const NR_unlink: u64 = 87;
 pub const NR_chmod: u64 = 90;
+pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
 pub const NR_getuid: u64 = 102;
 pub const NR_getgid: u64 = 104;
@@ -59,6 +63,7 @@ pub const NR_getpgrp: u64 = 111;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
 pub const NR_time: u64 = 201;
+pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
 
 const ESRCH: i64 = -3;
@@ -97,6 +102,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
         NR_close => linux_close(a0 as usize),
+        NR_access => linux_access(a0 as usize, a1 as i32),
         NR_pipe => linux_pipe(a0 as usize),
         NR_sched_yield => linux_sched_yield(frame),
         NR_dup => linux_dup(a0 as usize),
@@ -141,12 +147,17 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             Ok(0)
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
+        NR_getdents | NR_getdents64 => {
+            linux_getdents64(a0 as usize, a1 as usize, a2 as usize)
+        }
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
         NR_mkdir => linux_mkdir(a0 as usize, a1 as u16),
+        NR_unlink => linux_unlink(a0 as usize),
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
+        NR_umask => Ok(0),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
@@ -396,6 +407,19 @@ fn linux_open(path_ptr: usize, flags: i32, _mode: u32) -> Result<u64, i64> {
 
 fn linux_close(fd: usize) -> Result<u64, i64> {
     process::user_close(fd).map(|_| 0).map_err(|_| EBADF)
+}
+
+fn linux_access(path_ptr: usize, mode: i32) -> Result<u64, i64> {
+    const R_OK: i32 = 4;
+    const W_OK: i32 = 2;
+    const X_OK: i32 = 1;
+    if mode & !(R_OK | W_OK | X_OK) != 0 {
+        return Err(EINVAL);
+    }
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_access(&path, mode & R_OK != 0, mode & W_OK != 0, mode & X_OK != 0)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
 }
 
 fn linux_pipe(pipefd: usize) -> Result<u64, i64> {
@@ -760,6 +784,13 @@ fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_unlink(&path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_brk(new_break: usize) -> Result<u64, i64> {
     if new_break == 0 {
         return Ok(process::current_heap_break() as u64);
@@ -884,6 +915,46 @@ fn linux_lseek(fd: usize, offset: i64, whence: u32) -> Result<u64, i64> {
     }
 }
 
+fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
+    const DT_CHR: u8 = 2;
+    const DT_DIR: u8 = 4;
+    const DT_REG: u8 = 8;
+    const DIRENT64_HEADER: usize = 19;
+
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let (entries, mut index) = fs::directory_entries(vfs_fd).map_err(map_vfs_error)?;
+    let out = process::write_user_buffer(dirp, count).ok_or(EFAULT)?;
+    let mut written = 0usize;
+    while index < entries.len() {
+        let entry = &entries[index];
+        let reclen = align8(DIRENT64_HEADER + entry.name.len() + 1);
+        if reclen > count {
+            return Err(EINVAL);
+        }
+        if written + reclen > count {
+            break;
+        }
+        let slot = &mut out[written..written + reclen];
+        slot.fill(0);
+        let ino = (index as u64) + 1;
+        let next_off = (index as i64) + 1;
+        slot[0..8].copy_from_slice(&ino.to_le_bytes());
+        slot[8..16].copy_from_slice(&next_off.to_le_bytes());
+        slot[16..18].copy_from_slice(&(reclen as u16).to_le_bytes());
+        slot[18] = match entry.kind {
+            fs::vfs::NodeKind::Directory => DT_DIR,
+            fs::vfs::NodeKind::File => DT_REG,
+            fs::vfs::NodeKind::Device(_) => DT_CHR,
+        };
+        let name = entry.name.as_bytes();
+        slot[DIRENT64_HEADER..DIRENT64_HEADER + name.len()].copy_from_slice(name);
+        written += reclen;
+        index += 1;
+    }
+    fs::set_directory_offset(vfs_fd, index).map_err(map_vfs_error)?;
+    Ok(written as u64)
+}
+
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
@@ -983,6 +1054,10 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::BadFd => EBADF,
         _ => EINVAL,
     }
+}
+
+fn align8(value: usize) -> usize {
+    (value + 7) & !7
 }
 
 fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {

@@ -1,7 +1,10 @@
 pub mod ext2;
 pub mod vfs;
 
-use crate::{initrd::Initrd, security::Credentials};
+use crate::{
+    initrd::Initrd,
+    security::{Access, Credentials},
+};
 
 pub fn init(initrd: &Initrd) {
     vfs::init(initrd);
@@ -61,12 +64,26 @@ pub fn unlink_as(path: &str, creds: Credentials) -> Result<(), vfs::VfsError> {
     vfs::unlink_as(path, creds)
 }
 
+pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, vfs::VfsError> {
+    vfs::can_access(path, creds, access)
+}
+
 pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
     vfs::read_file(path)
 }
 
 pub fn list_paths(prefix: &str) -> alloc::vec::Vec<alloc::string::String> {
     vfs::list_paths(prefix)
+}
+
+pub fn directory_entries(
+    fd: usize,
+) -> Result<(alloc::vec::Vec<vfs::DirectoryEntry>, usize), vfs::VfsError> {
+    vfs::directory_entries(fd)
+}
+
+pub fn set_directory_offset(fd: usize, offset: usize) -> Result<(), vfs::VfsError> {
+    vfs::set_directory_offset(fd, offset)
 }
 
 pub fn write_file(path: &str, data: &[u8]) {

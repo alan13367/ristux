@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -22,6 +23,7 @@
 #define SYS_FSTAT 5
 #define SYS_LSEEK 8
 #define SYS_BRK 12
+#define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_NANOSLEEP 35
 #define SYS_DUP 32
@@ -32,13 +34,17 @@
 #define SYS_EXIT 60
 #define SYS_WAIT4 61
 #define SYS_KILL 62
+#define SYS_GETDENTS 78
 #define SYS_GETCWD 79
 #define SYS_CHDIR 80
 #define SYS_MKDIR 83
+#define SYS_UNLINK 87
 #define SYS_CHMOD 90
+#define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
 #define SYS_GETPPID 110
 #define SYS_TIME 201
+#define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
 
 int errno;
@@ -149,6 +155,14 @@ int chdir(const char *path) {
     return (int)syscall_ret(syscall1(SYS_CHDIR, (long)path));
 }
 
+int access(const char *path, int mode) {
+    return (int)syscall_ret(syscall2(SYS_ACCESS, (long)path, mode));
+}
+
+int unlink(const char *path) {
+    return (int)syscall_ret(syscall1(SYS_UNLINK, (long)path));
+}
+
 char *getcwd(char *buf, size_t size) {
     long ret = syscall_ret(syscall2(SYS_GETCWD, (long)buf, (long)size));
     return ret < 0 ? NULL : (char *)ret;
@@ -168,6 +182,14 @@ int mkdir(const char *path, mode_t mode) {
 
 int chmod(const char *path, mode_t mode) {
     return (int)syscall_ret(syscall2(SYS_CHMOD, (long)path, mode));
+}
+
+mode_t umask(mode_t mask) {
+    return (mode_t)syscall1(SYS_UMASK, mask);
+}
+
+int getdents64(unsigned int fd, struct linux_dirent64 *dirp, unsigned int count) {
+    return (int)syscall_ret(syscall3(SYS_GETDENTS64, fd, (long)dirp, count));
 }
 
 int kill(int pid, int sig) {

@@ -907,6 +907,28 @@ pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
         .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
+pub fn user_access(
+    path: &str,
+    read: bool,
+    write: bool,
+    execute: bool,
+) -> Result<(), fs::vfs::VfsError> {
+    with_current_read(|p| {
+        fs::stat(path)?;
+        if read && !fs::can_access(path, p.credentials, Access::Read)? {
+            return Err(fs::vfs::VfsError::PermissionDenied);
+        }
+        if write && !fs::can_access(path, p.credentials, Access::Write)? {
+            return Err(fs::vfs::VfsError::PermissionDenied);
+        }
+        if execute && !fs::can_access(path, p.credentials, Access::Execute)? {
+            return Err(fs::vfs::VfsError::PermissionDenied);
+        }
+        Ok(())
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     let user_fault = error_code & 0x4 != 0;
     let present = error_code & 0x1 != 0;

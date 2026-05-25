@@ -66,6 +66,8 @@ USER_CRTN_OBJ := build/userland/c/crtn.o
 USER_C_LIBC_OBJ := build/userland/c/libc.o
 USER_CC_HELLO_OBJ := build/userland/c/cc_hello.o
 USER_CC_HELLO_ELF := build/userland/cc_hello.elf
+USER_CC_FS_OBJ := build/userland/c/cc_fs.o
+USER_CC_FS_ELF := build/userland/cc_fs.elf
 ROOTFS_BUILDER := build/build_rootfs
 EXT2_DISK_BUILDER := build/build_ext2_disk
 ROOTFS_MANIFEST := rootfs/manifest.txt
@@ -184,6 +186,13 @@ $(USER_CC_HELLO_OBJ): userland/c/bin/cc_hello.c $(USER_C_HEADERS)
 $(USER_CC_HELLO_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_HELLO_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_HELLO_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
 
+$(USER_CC_FS_OBJ): userland/c/bin/cc_fs.c $(USER_C_HEADERS)
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_CC_FS_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_FS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_FS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
+
 $(ROOTFS_BUILDER): tools/build_rootfs.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
@@ -192,7 +201,7 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_SIG_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_FS_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

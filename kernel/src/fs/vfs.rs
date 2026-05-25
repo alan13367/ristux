@@ -86,6 +86,10 @@ enum OpenHandle {
         offset: usize,
         rights: OpenRights,
     },
+    Ext2Dir {
+        path: String,
+        offset: usize,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +123,12 @@ struct PipeState {
     capacity: usize,
     readers: usize,
     writers: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub kind: NodeKind,
 }
 
 impl PipeState {
@@ -466,7 +476,16 @@ impl Vfs {
             if let Some(fs) = self.root_ext2() {
                 let meta = fs.metadata(path).map_err(|_| VfsError::NotFound)?;
                 if meta.kind == ext2::Ext2NodeKind::Directory {
-                    return Err(VfsError::NotFile);
+                    if rights.write {
+                        return Err(VfsError::NotFile);
+                    }
+                    if rights.read && !meta.metadata.can_access(creds, Access::Read) {
+                        return Err(VfsError::PermissionDenied);
+                    }
+                    return self.push_open_handle(OpenHandle::Ext2Dir {
+                        path: String::from(path),
+                        offset: 0,
+                    });
                 }
                 if rights.read && !meta.metadata.can_access(creds, Access::Read) {
                     return Err(VfsError::PermissionDenied);
@@ -484,7 +503,7 @@ impl Vfs {
         } else {
             return Err(VfsError::NotFound);
         };
-        if self.nodes[node].kind == NodeKind::Directory {
+        if self.nodes[node].kind == NodeKind::Directory && rights.write {
             return Err(VfsError::NotFile);
         }
         if rights.read && !self.nodes[node].metadata.can_access(creds, Access::Read) {
@@ -716,6 +735,7 @@ impl Vfs {
                 pipe.read(output)
             }
             OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
+            OpenHandle::Ext2Dir { .. } => Err(VfsError::NotFile),
             OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
         }
     }
@@ -819,7 +839,7 @@ impl Vfs {
                 }
                 Ok(written)
             }
-            OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
+            OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => Err(VfsError::BadFd),
             OpenHandle::PipeRead { .. } => Err(VfsError::BadFd),
         }
     }
@@ -845,7 +865,7 @@ impl Vfs {
                 .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .add_writer(),
-            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } => {}
+            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {}
         }
         Ok(())
     }
@@ -862,7 +882,7 @@ impl Vfs {
                 .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .close_writer(),
-            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } => {}
+            OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {}
         }
         Ok(())
     }
@@ -900,6 +920,39 @@ impl Vfs {
             return Ok(new_offset as usize);
         }
 
+        if let Some((path, cursor)) = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|handle| match handle {
+                OpenHandle::Ext2Dir { path, offset } => Some((path.clone(), *offset)),
+                _ => None,
+            })
+        {
+            let size = self
+                .root_ext2()
+                .ok_or(VfsError::NotFound)?
+                .list_dir(&path)
+                .map_err(map_ext2_error)?
+                .len();
+            let new_offset = match whence {
+                0 => offset,
+                1 => cursor as isize + offset,
+                2 => size as isize + offset,
+                _ => return Err(VfsError::BadFd),
+            };
+            if new_offset < 0 {
+                return Err(VfsError::BadFd);
+            }
+            if let Some(Some(OpenHandle::Ext2Dir {
+                offset: cursor, ..
+            })) = self.open_files.get_mut(fd)
+            {
+                *cursor = new_offset as usize;
+            }
+            return Ok(new_offset as usize);
+        }
+
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
             return Err(VfsError::BadFd);
         };
@@ -916,7 +969,9 @@ impl Vfs {
                 };
                 (size, cursor)
             }
-            OpenHandle::Ext2File { .. } => return Err(VfsError::BadFd),
+            OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {
+                return Err(VfsError::BadFd);
+            }
             OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => {
                 return Err(VfsError::BadFd);
             }
@@ -952,6 +1007,20 @@ impl Vfs {
                 })
             }
             OpenHandle::Ext2File { path, .. } => {
+                let meta = self
+                    .root_ext2()
+                    .ok_or(VfsError::NotFound)?
+                    .metadata(path)
+                    .map_err(map_ext2_error)?;
+                Ok(Stat {
+                    owner: meta.metadata.owner,
+                    group: meta.metadata.group,
+                    mode: meta.metadata.mode.0,
+                    size: meta.size,
+                    mtime: crate::time::filesystem_timestamp(),
+                })
+            }
+            OpenHandle::Ext2Dir { path, .. } => {
                 let meta = self
                     .root_ext2()
                     .ok_or(VfsError::NotFound)?
@@ -1060,6 +1129,84 @@ impl Vfs {
             .iter()
             .find(|node| node.path == path)
             .map(|node| node.timestamps)
+    }
+
+    fn directory_entries(&self, fd: usize) -> Result<(Vec<DirectoryEntry>, usize), VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .ok_or(VfsError::BadFd)?;
+        match handle {
+            OpenHandle::Node { node, offset, .. } => {
+                let node = self.nodes.get(*node).ok_or(VfsError::BadFd)?;
+                if node.kind != NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                Ok((self.node_directory_entries(&node.path), *offset))
+            }
+            OpenHandle::Ext2Dir { path, offset } => Ok((self.ext2_directory_entries(path)?, *offset)),
+            _ => Err(VfsError::NotFile),
+        }
+    }
+
+    fn set_directory_offset(&mut self, fd: usize, offset: usize) -> Result<(), VfsError> {
+        let handle = self
+            .open_files
+            .get_mut(fd)
+            .and_then(|slot| slot.as_mut())
+            .ok_or(VfsError::BadFd)?;
+        match handle {
+            OpenHandle::Node {
+                node,
+                offset: cursor,
+                ..
+            } => {
+                if self.nodes.get(*node).map(|node| node.kind) != Some(NodeKind::Directory) {
+                    return Err(VfsError::NotFile);
+                }
+                *cursor = offset;
+                Ok(())
+            }
+            OpenHandle::Ext2Dir { offset: cursor, .. } => {
+                *cursor = offset;
+                Ok(())
+            }
+            _ => Err(VfsError::NotFile),
+        }
+    }
+
+    fn node_directory_entries(&self, path: &str) -> Vec<DirectoryEntry> {
+        let mut entries = Vec::new();
+        for child in &self.nodes {
+            if child.path.is_empty() || child.path == path {
+                continue;
+            }
+            if parent_path(&child.path) != path {
+                continue;
+            }
+            entries.push(DirectoryEntry {
+                name: file_name(&child.path),
+                kind: child.kind,
+            });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
+
+    fn ext2_directory_entries(&self, path: &str) -> Result<Vec<DirectoryEntry>, VfsError> {
+        let fs = self.root_ext2().ok_or(VfsError::NotFound)?;
+        let mut entries = Vec::new();
+        for name in fs.list_dir(path).map_err(map_ext2_error)? {
+            let full = join_path(path, &name);
+            let kind = match fs.metadata(&full).map_err(map_ext2_error)?.kind {
+                ext2::Ext2NodeKind::File => NodeKind::File,
+                ext2::Ext2NodeKind::Directory => NodeKind::Directory,
+            };
+            entries.push(DirectoryEntry { name, kind });
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
     }
 
     fn list_paths(&self, prefix: &str) -> Vec<String> {
@@ -1199,6 +1346,14 @@ pub fn timestamps(path: &str) -> Option<FileTimestamps> {
     guard.as_ref().and_then(|vfs| vfs.timestamps(path))
 }
 
+pub fn directory_entries(fd: usize) -> Result<(Vec<DirectoryEntry>, usize), VfsError> {
+    with_vfs(|vfs| vfs.directory_entries(fd))
+}
+
+pub fn set_directory_offset(fd: usize, offset: usize) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_directory_offset(fd, offset))
+}
+
 pub fn list_paths(prefix: &str) -> Vec<String> {
     let guard = VFS.lock();
     guard
@@ -1225,6 +1380,22 @@ fn parent_path(path: &str) -> String {
     match trimmed.rfind('/') {
         Some(0) | None => String::from("/"),
         Some(index) => String::from(&trimmed[..index]),
+    }
+}
+
+fn file_name(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .into()
+}
+
+fn join_path(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{}", name)
+    } else {
+        format!("{}/{}", parent.trim_end_matches('/'), name)
     }
 }
 
