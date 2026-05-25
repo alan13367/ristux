@@ -42,3 +42,17 @@ close:
     mov $9, %rax
     int $0x80
     ret
+
+.global getcwd
+.type getcwd, @function
+getcwd:
+    mov $10, %rax
+    int $0x80
+    ret
+
+.global listdir
+.type listdir, @function
+listdir:
+    mov $11, %rax
+    int $0x80
+    ret

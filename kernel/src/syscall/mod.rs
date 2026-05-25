@@ -14,6 +14,8 @@ pub const SYS_GETPID: u64 = 6;
 pub const SYS_TIME: u64 = 7;
 pub const SYS_OPEN: u64 = 8;
 pub const SYS_CLOSE: u64 = 9;
+pub const SYS_GETCWD: u64 = 10;
+pub const SYS_LISTDIR: u64 = 11;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
@@ -133,6 +135,22 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_GETCWD => {
+            frame.rax = match sys_getcwd_active(frame.rdi as usize, frame.rsi as usize) {
+                Ok(written) => written,
+                Err(err) => err.0 as u64,
+            };
+        }
+        SYS_LISTDIR => {
+            frame.rax = match sys_listdir_active(
+                frame.rdi as usize,
+                frame.rsi as usize,
+                frame.rdx as usize,
+            ) {
+                Ok(written) => written,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -238,6 +256,42 @@ fn sys_close_active(fd: usize) -> SyscallResult {
     userspace::active_user_close(fd)
         .map(|_| 0)
         .map_err(map_vfs_error)
+}
+
+fn sys_getcwd_active(ptr: usize, len: usize) -> SyscallResult {
+    copy_bytes_to_user(b"/", ptr, len)
+}
+
+fn sys_listdir_active(prefix_ptr: usize, ptr: usize, len: usize) -> SyscallResult {
+    let mut prefix = [0u8; 128];
+    let prefix = read_user_cstr(prefix_ptr, &mut prefix)?;
+    let paths = crate::fs::list_paths(prefix);
+    let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
+    let mut offset = 0;
+
+    for path in paths {
+        let bytes = path.as_bytes();
+        let needed = bytes.len() + 1;
+        if offset + needed > buffer.len() {
+            break;
+        }
+        buffer[offset..offset + bytes.len()].copy_from_slice(bytes);
+        offset += bytes.len();
+        buffer[offset] = b'\n';
+        offset += 1;
+    }
+
+    Ok(offset as u64)
+}
+
+fn copy_bytes_to_user(bytes: &[u8], ptr: usize, len: usize) -> SyscallResult {
+    if bytes.len() > len {
+        return Err(SyscallError(EFAULT));
+    }
+
+    let buffer = userspace::active_user_write_buffer(ptr, len).ok_or(SyscallError(EFAULT))?;
+    buffer[..bytes.len()].copy_from_slice(bytes);
+    Ok(bytes.len() as u64)
 }
 
 fn read_user_cstr<'a>(ptr: usize, buffer: &'a mut [u8]) -> Result<&'a str, SyscallError> {

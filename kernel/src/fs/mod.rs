@@ -26,3 +26,7 @@ pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
 pub fn with_file_data<T>(path: &str, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
     vfs::with_file_data(path, f)
 }
+
+pub fn list_paths(prefix: &str) -> alloc::vec::Vec<alloc::string::String> {
+    vfs::list_paths(prefix)
+}

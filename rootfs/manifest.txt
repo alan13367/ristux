@@ -4,6 +4,8 @@ file /bin/init ../build/userland/init.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
+file /bin/ls ../build/userland/ls.elf
+file /bin/pwd ../build/userland/pwd.elf
 file /bin/true ../build/userland/true.elf
 file /etc/os-release etc/os-release
 file /lib/libc.so ../build/userland/libc.so
@@ -12,4 +14,6 @@ package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
 package init 0.1.0 /bin/init
 package libc 0.1.0 /lib/libc.so
+package ls 0.1.0 /bin/ls
+package pwd 0.1.0 /bin/pwd
 package true 0.1.0 /bin/true

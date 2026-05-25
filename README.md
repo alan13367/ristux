@@ -143,6 +143,8 @@ not print `kernel panic`.
   shell-launched `/bin/cat`, `/bin/true`, and `/bin/false` as real CPL3 ELFs.
 - Passes `argc`/`argv` into CPL3 programs and exercises shell-launched
   `/bin/echo` with user-space arguments.
+- Supports ring-3 `getcwd` and directory listing syscalls for shell-launched
+  `/bin/pwd` and `/bin/ls`.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

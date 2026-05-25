@@ -5,10 +5,10 @@ use crate::{fs, ipc::pipe::Pipe, process, userspace};
 pub fn init() {
     run_script(&[
         "help",
-        "pwd",
+        "/bin/pwd",
         "echo hello from shell",
         "/bin/echo hello from argv",
-        "ls /bin",
+        "/bin/ls /bin",
         "cat /tmp/message.txt",
         "echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
@@ -70,25 +70,13 @@ fn run_command(command: &str, cwd: &mut String) -> String {
             text.push('\n');
             output(&text)
         }
-        "pwd" => {
-            let mut text = cwd.clone();
-            text.push('\n');
-            output(&text)
-        }
+        "pwd" => run_external("/bin/pwd"),
         "cd" => {
             *cwd = String::from(args.first().copied().unwrap_or("/"));
             String::new()
         }
         "exit" => output("exit\n"),
-        "ls" => {
-            let prefix = args.first().copied().unwrap_or("/");
-            let mut text = String::new();
-            for path in fs::vfs::list_paths(prefix) {
-                text.push_str(&path);
-                text.push('\n');
-            }
-            output(&text)
-        }
+        "ls" => run_external_with_args("/bin/ls", &args),
         "cat" => {
             let Some(path) = args.first() else {
                 return String::new();
@@ -105,6 +93,8 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "false" => run_external("/bin/false"),
         "/bin/cat" => run_external("/bin/cat"),
         "/bin/echo" => run_external_with_args("/bin/echo", &args),
+        "/bin/ls" => run_external_with_args("/bin/ls", &args),
+        "/bin/pwd" => run_external("/bin/pwd"),
         other => {
             let mut text = String::from(other);
             text.push_str(": not found\n");
