@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::{fs, process, security::Credentials, userspace};
+use crate::{fs, process, security::Credentials, signal::Signal, userspace};
 
 pub fn init() {
     run_script(&[
@@ -19,6 +19,7 @@ pub fn init() {
         "user /bin/cat /tmp/message.txt",
         "/bin/chmod 644 /tmp/message.txt",
         "/bin/cat /tmp/message.txt",
+        "sigtest",
         "cat /tmp/message.txt",
         "/bin/echo redirected > /tmp/message.txt",
         "cat /tmp/message.txt",
@@ -103,6 +104,7 @@ fn external_path(program: &str) -> Option<&'static str> {
         "cat" | "/bin/cat" => Some("/bin/cat"),
         "chmod" | "/bin/chmod" => Some("/bin/chmod"),
         "/bin/echo" => Some("/bin/echo"),
+        "kill" | "/bin/kill" => Some("/bin/kill"),
         "ls" | "/bin/ls" => Some("/bin/ls"),
         "mkdir" | "/bin/mkdir" => Some("/bin/mkdir"),
         "pwd" | "/bin/pwd" => Some("/bin/pwd"),
@@ -171,7 +173,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
 
     match program {
         "help" => {
-            output("builtins: help clear echo pwd cd exit ls cat chmod mkdir rm touch user true false\n")
+            output("builtins: help clear echo pwd cd exit ls cat chmod kill mkdir rm sigtest touch user true false\n")
         }
         "clear" => output("\x0c"),
         "echo" => {
@@ -187,8 +189,10 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "exit" => output("exit\n"),
         "ls" => run_external_with_args("/bin/ls", &args),
         "chmod" => run_external_with_args("/bin/chmod", &args),
+        "kill" => run_external_with_args("/bin/kill", &args),
         "mkdir" => run_external_with_args("/bin/mkdir", &args),
         "rm" => run_external_with_args("/bin/rm", &args),
+        "sigtest" => run_signal_test(),
         "touch" => run_external_with_args("/bin/touch", &args),
         "user" => run_as_user(&args),
         "cat" => {
@@ -208,6 +212,7 @@ fn run_command(command: &str, cwd: &mut String) -> String {
         "/bin/cat" => run_external_with_args("/bin/cat", &args),
         "/bin/chmod" => run_external_with_args("/bin/chmod", &args),
         "/bin/echo" => run_external_with_args("/bin/echo", &args),
+        "/bin/kill" => run_external_with_args("/bin/kill", &args),
         "/bin/ls" => run_external_with_args("/bin/ls", &args),
         "/bin/mkdir" => run_external_with_args("/bin/mkdir", &args),
         "/bin/pwd" => run_external("/bin/pwd"),
@@ -219,6 +224,29 @@ fn run_command(command: &str, cwd: &mut String) -> String {
             output(&text)
         }
     }
+}
+
+fn run_signal_test() -> String {
+    let parent = 1;
+    let target = process::fork(parent).expect("signal smoke fork failed");
+    process::exec(target, "/bin/sleep");
+    crate::println!(
+        "Signal smoke target pid {} waiting for /bin/kill.",
+        target
+    );
+
+    let pid = alloc::format!("{}", target);
+    run_external_with_args("/bin/kill", &[pid.as_str(), "15"]);
+    let waited = process::wait(parent, target).unwrap_or(-1);
+    crate::println!(
+        "Signal smoke target pid {} exited with {} after /bin/kill.",
+        target,
+        waited
+    );
+    if waited != Signal::Term.default_status() {
+        crate::println!("signal smoke expected status {}", Signal::Term.default_status());
+    }
+    String::new()
 }
 
 fn run_as_user(args: &[&str]) -> String {

@@ -155,6 +155,8 @@ not print `kernel panic`.
   shell-launched `/bin/touch`, `/bin/mkdir`, and `/bin/rm`.
 - Enforces VFS read/write permissions against active user credentials and
   exposes `/bin/chmod` for mode changes.
+- Exposes a ring-3 `kill` syscall and packaged `/bin/kill`, with SIGTERM
+  delivery reflected in process wait status.
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.

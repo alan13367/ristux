@@ -5,6 +5,7 @@ file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
+file /bin/kill ../build/userland/kill.elf
 file /bin/ls ../build/userland/ls.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/pwd ../build/userland/pwd.elf
@@ -18,6 +19,7 @@ package chmod 0.1.0 /bin/chmod
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
 package init 0.1.0 /bin/init
+package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
 package ls 0.1.0 /bin/ls
 package mkdir 0.1.0 /bin/mkdir

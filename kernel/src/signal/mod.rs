@@ -9,6 +9,16 @@ pub enum Signal {
 }
 
 impl Signal {
+    pub const fn from_number(number: u8) -> Option<Self> {
+        match number {
+            15 => Some(Self::Term),
+            9 => Some(Self::Kill),
+            2 => Some(Self::Int),
+            17 => Some(Self::Child),
+            _ => None,
+        }
+    }
+
     pub const fn number(self) -> u8 {
         match self {
             Self::Term => 15,
@@ -28,10 +38,19 @@ pub fn init() {
 }
 
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
-    match signal {
+    let delivered = match signal {
         Signal::Kill | Signal::Term | Signal::Int => process::signal(pid, signal.default_status()),
         Signal::Child => true,
+    };
+    if delivered {
+        crate::println!(
+            "Signal {} delivered to pid {} with default status {}.",
+            signal.number(),
+            pid,
+            signal.default_status()
+        );
     }
+    delivered
 }
 
 fn self_test() {
@@ -48,4 +67,3 @@ fn self_test() {
     let _ = Signal::Child.number();
     crate::println!("Signals self-test passed.");
 }
-

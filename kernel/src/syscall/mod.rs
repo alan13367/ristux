@@ -22,12 +22,15 @@ pub const SYS_CREATE: u64 = 14;
 pub const SYS_MKDIR: u64 = 15;
 pub const SYS_UNLINK: u64 = 16;
 pub const SYS_CHMOD: u64 = 17;
+pub const SYS_KILL: u64 = 18;
 
 const EACCES: i64 = -13;
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
 const EEXIST: i64 = -17;
+const EINVAL: i64 = -22;
 const ENOENT: i64 = -2;
+const ESRCH: i64 = -3;
 const ENOSYS: i64 = -38;
 
 #[repr(C)]
@@ -195,6 +198,12 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 Err(err) => err.0 as u64,
             };
         }
+        SYS_KILL => {
+            frame.rax = match sys_kill_active(frame.rdi as u64, frame.rsi as u8) {
+                Ok(status) => status,
+                Err(err) => err.0 as u64,
+            };
+        }
         _ => {
             crate::println!(
                 "Unhandled ring 3 int 0x80 syscall {:#x} from rip {:#x}",
@@ -325,6 +334,16 @@ fn sys_chmod_active(path_ptr: usize, mode: u16) -> SyscallResult {
     userspace::active_user_chmod(path, mode)
         .map(|_| 0)
         .map_err(map_vfs_error)
+}
+
+fn sys_kill_active(pid: u64, signal_number: u8) -> SyscallResult {
+    let signal =
+        crate::signal::Signal::from_number(signal_number).ok_or(SyscallError(EINVAL))?;
+    if crate::signal::send(pid, signal) {
+        Ok(0)
+    } else {
+        Err(SyscallError(ESRCH))
+    }
 }
 
 fn sys_read_active(fd: usize, ptr: usize, len: usize) -> SyscallResult {
