@@ -23,6 +23,7 @@ pub enum DeviceKind {
     Zero,
     Console,
     Keyboard,
+    Tty,
     Framebuffer,
 }
 
@@ -161,6 +162,7 @@ impl Vfs {
         vfs.add_device("/dev/zero", DeviceKind::Zero);
         vfs.add_device("/dev/console", DeviceKind::Console);
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
+        vfs.add_device("/dev/tty", DeviceKind::Tty);
         vfs.add_device("/dev/fb0", DeviceKind::Framebuffer);
         vfs.add_file("/proc/version", b"ristux 0.1\n");
         vfs.add_file("/tmp/message.txt", b"hello from tmpfs\n");
@@ -451,6 +453,7 @@ impl Vfs {
                             }
                             Ok(count)
                         }
+                        NodeKind::Device(DeviceKind::Tty) => Ok(crate::tty::read(output)),
                         NodeKind::Device(DeviceKind::Console) => Ok(0),
                         NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),
@@ -497,6 +500,11 @@ impl Vfs {
                         }
                         NodeKind::Device(DeviceKind::Framebuffer) => {
                             Ok(drivers::framebuffer::write_bytes(input))
+                        }
+                        NodeKind::Device(DeviceKind::Tty) => {
+                            let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
+                            crate::print!("{}", text);
+                            Ok(input.len())
                         }
                         NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),

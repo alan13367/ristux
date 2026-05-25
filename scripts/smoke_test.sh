@@ -17,6 +17,8 @@ make iso
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-4}"
   printf 'sendkey a\n'
   sleep 1
+  printf 'sendkey ret\n'
+  sleep 1
   printf 'quit\n'
 ) | "$QEMU_BIN" -cdrom "$ISO_IMAGE" $QEMU_FLAGS -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -62,6 +64,7 @@ grep -q "hello from sequence" "$SERIAL_LOG"
 grep -q "Ring 3 ELF process /bin/false pid 4 exited with status 1" "$SERIAL_LOG"
 grep -q "Ring 3 user program sequence passed: 4 program(s)" "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: a" "$SERIAL_LOG"
 if grep -q "kernel panic" "$SERIAL_LOG"; then
   echo "kernel panic found in $SERIAL_LOG" >&2
   exit 1

@@ -46,6 +46,7 @@ pub fn timer_tick() {
 pub fn keyboard_interrupt() {
     let scancode = unsafe { port::inb(0x60) };
     crate::drivers::keyboard::push_scancode(scancode);
+    crate::tty::input_scancode(scancode);
     crate::println!("keyboard scancode {:#04x}", scancode);
     unsafe {
         end_of_interrupt(1);

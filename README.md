@@ -111,16 +111,17 @@ make check-multiboot
 scripts/smoke_test.sh
 ```
 
-The smoke script builds the ISO, injects `sendkey a`, exits QEMU, and writes
-the serial log to `/tmp/ristux-smoke-serial.log`. To inspect the log manually:
+The smoke script builds the ISO, injects `sendkey a` and `sendkey ret`, exits
+QEMU, and writes the serial log to `/tmp/ristux-smoke-serial.log`. To inspect
+the log manually:
 
 ```sh
-grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|Ring 3|keyboard scancode|panic" /tmp/ristux-smoke-serial.log
+grep -E "SMP|Framebuffer|Timekeeping|Dynamic linker|Networking|Kernel self-test|Ring 3|TTY|keyboard scancode|panic" /tmp/ristux-smoke-serial.log
 ```
 
 A passing boot reaches `Kernel self-test harness passed.`, runs the initrd
-ring-3 ELF sequence, logs the keyboard scancode from `sendkey a`, and does
-not print `kernel panic`.
+ring-3 ELF sequence, logs keyboard scancodes from the injected keys, assembles
+`TTY canonical line ready: a`, and does not print `kernel panic`.
 
 ## Current Kernel Milestones
 
@@ -128,6 +129,8 @@ not print `kernel panic`.
 - Parses Multiboot2 bootloader, command line, framebuffer, modules, and memory map tags.
 - Loads a GDT, TSS, IDT, and catches early CPU exceptions.
 - Handles PIT timer ticks and PS/2 keyboard scancodes through the remapped PIC.
+- Routes PS/2 set-1 scancodes through a canonical TTY line discipline and
+  exposes `/dev/tty`.
 - Initializes a bitmap physical frame allocator from the Multiboot2 memory map.
 - Maps and unmaps pages through early x86_64 paging abstractions.
 - Enables a bump-allocated kernel heap with `Box` and `Vec` smoke tests.
