@@ -23,6 +23,8 @@
 #define SYS_FSTAT 5
 #define SYS_LSEEK 8
 #define SYS_BRK 12
+#define SYS_RT_SIGACTION 13
+#define SYS_RT_SIGRETURN 15
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_NANOSLEEP 35
@@ -50,6 +52,7 @@
 int errno;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
+static sighandler_t signal_handlers[32];
 
 int main(int argc, char **argv, char **envp);
 
@@ -194,6 +197,31 @@ int getdents64(unsigned int fd, struct linux_dirent64 *dirp, unsigned int count)
 
 int kill(int pid, int sig) {
     return (int)syscall_ret(syscall2(SYS_KILL, pid, sig));
+}
+
+static void signal_trampoline(unsigned long signum, unsigned long frame) {
+    if (signum < 32 && signal_handlers[signum] != NULL) {
+        signal_handlers[signum]((int)signum);
+    }
+    syscall1(SYS_RT_SIGRETURN, (long)frame);
+    for (;;) {
+    }
+}
+
+sighandler_t signal(int signum, sighandler_t handler) {
+    if (signum <= 0 || signum >= 32) {
+        errno = EINVAL;
+        return SIG_ERR;
+    }
+    sighandler_t old = signal_handlers[signum];
+    signal_handlers[signum] = handler;
+    void *kernel_handler = (void *)signal_trampoline;
+    long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_handler, 0);
+    if (syscall_ret(ret) < 0) {
+        signal_handlers[signum] = old;
+        return SIG_ERR;
+    }
+    return old;
 }
 
 time_t time(time_t *tloc) {
