@@ -16,6 +16,7 @@ file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/ping ../build/userland/ping.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/rm ../build/userland/rm.elf
+file /bin/sig_demo ../build/userland/sig_demo.elf
 file /bin/touch ../build/userland/touch.elf
 file /bin/su ../build/userland/su.elf
 file /bin/sleep ../build/userland/sleep.elf
@@ -40,6 +41,7 @@ package ping 0.1.0 /bin/ping
 package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm
 package sh 0.1.0 /bin/sh
+package sig_demo 0.1.0 /bin/sig_demo
 package su 0.1.0 /bin/su
 package sleep 0.1.0 /bin/sleep
 package touch 0.1.0 /bin/touch

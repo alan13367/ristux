@@ -590,7 +590,7 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     }
 }
 
-pub fn take_pending_signal_current() -> Option<(Pid, i32)> {
+pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
     let pid = current_pid()?;
     let status = with_table(|table| {
         let process = table.get_mut(pid)?;
@@ -598,7 +598,12 @@ pub fn take_pending_signal_current() -> Option<(Pid, i32)> {
         process.pending_signals = 0;
         Some(status)
     })?;
-    Some((pid, status))
+    let signum = if status >= 128 {
+        (status - 128) as usize
+    } else {
+        0
+    };
+    Some((pid, signum, status))
 }
 
 pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
@@ -648,6 +653,13 @@ pub fn set_signal_handler(pid: Pid, signal: usize, handler: usize) -> Option<usi
         let old = process.signal_handlers[signal];
         process.signal_handlers[signal] = handler;
         Some(old)
+    })
+}
+
+pub fn signal_handler(pid: Pid, signal: usize) -> Option<usize> {
+    with_table(|table| {
+        let process = table.get(pid)?;
+        process.signal_handlers.get(signal).copied()
     })
 }
 

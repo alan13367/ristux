@@ -149,7 +149,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setresuid => linux_setresuid(a0, a1, a2),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
-        NR_rt_sigreturn => Ok(0),
+        NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
             Err(ENOSYS)
@@ -166,12 +166,128 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
 }
 
 fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
-    let Some((pid, status)) = process::take_pending_signal_current() else {
+    let Some((pid, signum, status)) = process::take_pending_signal_current() else {
         return false;
     };
+    if signum != 0 {
+        if let Some(handler) = process::signal_handler(pid, signum) {
+            if handler != 0 && deliver_signal_handler(frame, signum, handler).is_ok() {
+                return true;
+            }
+        }
+    }
     process::exit(pid, status);
     let _ = crate::syscall::yield_until_runnable(frame);
     true
+}
+
+fn deliver_signal_handler(
+    frame: &mut SyscallInterruptFrame,
+    signum: usize,
+    handler: usize,
+) -> Result<(), i64> {
+    let saved = saved_from_linux_frame(frame);
+    let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
+    let new_rsp = (frame.rsp as usize)
+        .saturating_sub(frame_size)
+        & !0xfusize;
+    let out = process::write_user_buffer(new_rsp, frame_size).ok_or(EFAULT)?;
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            &saved as *const process::SavedSyscallFrame as *const u8,
+            frame_size,
+        )
+    };
+    out.copy_from_slice(bytes);
+    frame.rip = handler as u64;
+    frame.rsp = new_rsp as u64;
+    frame.rdi = signum as u64;
+    frame.rsi = new_rsp as u64;
+    Ok(())
+}
+
+fn linux_rt_sigreturn(frame: &mut SyscallInterruptFrame, saved_ptr: usize) -> Result<u64, i64> {
+    let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
+    let bytes = process::read_user(saved_ptr, frame_size).ok_or(EFAULT)?;
+    let mut saved = process::SavedSyscallFrame {
+        rax: 0,
+        rbx: 0,
+        rcx: 0,
+        rdx: 0,
+        rsi: 0,
+        rdi: 0,
+        rbp: 0,
+        r8: 0,
+        r9: 0,
+        r10: 0,
+        r11: 0,
+        r12: 0,
+        r13: 0,
+        r14: 0,
+        r15: 0,
+        rip: 0,
+        cs: 0,
+        rflags: 0,
+        rsp: 0,
+        ss: 0,
+    };
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            &mut saved as *mut process::SavedSyscallFrame as *mut u8,
+            frame_size,
+        )
+    };
+    out.copy_from_slice(bytes);
+    apply_linux_saved_frame(frame, &saved);
+    Err(CONTEXT_SWITCHED)
+}
+
+fn saved_from_linux_frame(frame: &SyscallInterruptFrame) -> process::SavedSyscallFrame {
+    process::SavedSyscallFrame {
+        rax: frame.rax,
+        rbx: frame.rbx,
+        rcx: frame.rcx,
+        rdx: frame.rdx,
+        rsi: frame.rsi,
+        rdi: frame.rdi,
+        rbp: frame.rbp,
+        r8: frame.r8,
+        r9: frame.r9,
+        r10: frame.r10,
+        r11: frame.r11,
+        r12: frame.r12,
+        r13: frame.r13,
+        r14: frame.r14,
+        r15: frame.r15,
+        rip: frame.rip,
+        cs: frame.cs,
+        rflags: frame.rflags,
+        rsp: frame.rsp,
+        ss: frame.ss,
+    }
+}
+
+fn apply_linux_saved_frame(frame: &mut SyscallInterruptFrame, saved: &process::SavedSyscallFrame) {
+    frame.rax = saved.rax;
+    frame.rbx = saved.rbx;
+    frame.rcx = saved.rcx;
+    frame.rdx = saved.rdx;
+    frame.rsi = saved.rsi;
+    frame.rdi = saved.rdi;
+    frame.rbp = saved.rbp;
+    frame.r8 = saved.r8;
+    frame.r9 = saved.r9;
+    frame.r10 = saved.r10;
+    frame.r11 = saved.r11;
+    frame.r12 = saved.r12;
+    frame.r13 = saved.r13;
+    frame.r14 = saved.r14;
+    frame.r15 = saved.r15;
+    frame.rip = saved.rip;
+    frame.cs = saved.cs;
+    frame.rflags = saved.rflags;
+    frame.rsp = saved.rsp;
+    frame.ss = saved.ss;
 }
 
 fn linux_write(fd: usize, buf: usize, len: usize) -> Result<u64, i64> {

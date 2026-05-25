@@ -417,6 +417,16 @@ pub fn setgroups(groups: &[u32]) -> isize {
 }
 
 #[inline]
+pub fn rt_sigaction(signum: usize, handler: usize) -> isize {
+    unsafe { syscall3(NR_RT_SIGACTION, signum, &handler as *const usize as usize, 0) }
+}
+
+#[inline]
+pub fn rt_sigreturn(frame: usize) -> isize {
+    unsafe { syscall1(NR_RT_SIGRETURN, frame) }
+}
+
+#[inline]
 pub fn exit(status: i32) -> ! {
     unsafe { syscall1(NR_EXIT, status as usize) };
     loop {}

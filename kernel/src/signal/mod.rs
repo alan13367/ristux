@@ -57,7 +57,7 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
             true
         }
     };
-    if delivered {
+    if delivered && process::current_pid() != Some(pid) {
         crate::println!(
             "Signal {} delivered to pid {} with default status {}.",
             signal.number(),
