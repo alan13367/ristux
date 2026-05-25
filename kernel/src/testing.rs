@@ -66,6 +66,10 @@ fn run() -> KernelResult<()> {
     let smp = smp::stats();
     ensure(smp.started_cpus >= 2, "SMP did not start application CPUs")?;
     ensure(
+        smp.acpi_table_detected && smp.local_apic_mapped,
+        "SMP firmware/APIC discovery did not complete",
+    )?;
+    ensure(
         smp.shared_lock_audit_passed,
         "SMP lock audit did not pass",
     )?;
@@ -143,11 +147,13 @@ fn run() -> KernelResult<()> {
         linker.relocations_applied
     );
     crate::println!(
-        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, {} IPI(s), {} dispatch(es)",
+        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, APIC version {:#x}, mapped {}, {} IPI(s), {} dispatch(es)",
         smp.cpu_count,
         smp.firmware_cpu_count,
         smp.started_cpus,
         smp.local_apic_addr,
+        smp.apic_version,
+        smp.local_apic_mapped,
         smp.ipis_sent,
         smp.scheduled_tasks
     );

@@ -1,7 +1,14 @@
 use alloc::{vec, vec::Vec};
 use core::ptr;
 
-use crate::sync::spinlock::SpinLock;
+use crate::{
+    memory::{
+        frame_allocator::FRAME_SIZE,
+        paging::{self, PageFlags, PagingError},
+    },
+    multiboot::AcpiRsdp,
+    sync::spinlock::SpinLock,
+};
 
 static SMP: SpinLock<Option<SmpSystem>> = SpinLock::new(None);
 
@@ -29,7 +36,7 @@ struct IpiMessage {
 
 struct PerCpu {
     id: CpuId,
-    apic_id: u8,
+    apic_id: u32,
     state: CpuState,
     current_task: Option<&'static str>,
     run_count: u64,
@@ -41,6 +48,9 @@ struct SmpSystem {
     discovery_source: &'static str,
     firmware_cpu_count: usize,
     local_apic_addr: u32,
+    acpi_table_detected: bool,
+    local_apic_mapped: bool,
+    apic_version: u32,
     ipis_sent: usize,
     scheduled_tasks: usize,
     shared_lock_audit_passed: bool,
@@ -52,6 +62,9 @@ pub struct SmpStats {
     pub started_cpus: usize,
     pub firmware_cpu_count: usize,
     pub local_apic_addr: u32,
+    pub acpi_table_detected: bool,
+    pub local_apic_mapped: bool,
+    pub apic_version: u32,
     pub firmware_detected: bool,
     pub ipis_sent: usize,
     pub scheduled_tasks: usize,
@@ -59,16 +72,20 @@ pub struct SmpStats {
 }
 
 impl SmpSystem {
-    fn discover() -> Self {
-        let mut discovery = discover_mp_table().unwrap_or_else(|| CpuDiscovery {
-            source: "fallback topology",
-            firmware_cpu_count: 0,
-            local_apic_addr: 0xfee0_0000,
-            apic_ids: vec![0, 1, 2, 3],
-        });
+    fn discover(rsdp: Option<AcpiRsdp>) -> Self {
+        let mut discovery = rsdp
+            .and_then(discover_acpi_madt)
+            .or_else(discover_mp_table)
+            .unwrap_or_else(|| CpuDiscovery {
+                source: "fallback topology",
+                firmware_cpu_count: 0,
+                acpi_table_detected: false,
+                local_apic_addr: 0xfee0_0000,
+                apic_ids: vec![0, 1, 2, 3],
+            });
         let firmware_cpu_count = discovery.firmware_cpu_count;
         if discovery.apic_ids.len() < 4 {
-            let mut next_apic = 0u8;
+            let mut next_apic = 0u32;
             while discovery.apic_ids.len() < 4 {
                 if !discovery.apic_ids.contains(&next_apic) {
                     discovery.apic_ids.push(next_apic);
@@ -76,6 +93,7 @@ impl SmpSystem {
                 next_apic = next_apic.wrapping_add(1);
             }
         }
+        let (local_apic_mapped, apic_version) = map_local_apic(discovery.local_apic_addr);
         let mut cpus = Vec::new();
         for (index, apic_id) in discovery.apic_ids.iter().copied().enumerate() {
             cpus.push(PerCpu {
@@ -97,6 +115,9 @@ impl SmpSystem {
             discovery_source: discovery.source,
             firmware_cpu_count,
             local_apic_addr: discovery.local_apic_addr,
+            acpi_table_detected: discovery.acpi_table_detected,
+            local_apic_mapped,
+            apic_version,
             ipis_sent: 0,
             scheduled_tasks: 0,
             shared_lock_audit_passed: false,
@@ -154,6 +175,9 @@ impl SmpSystem {
                 .count(),
             firmware_cpu_count: self.firmware_cpu_count,
             local_apic_addr: self.local_apic_addr,
+            acpi_table_detected: self.acpi_table_detected,
+            local_apic_mapped: self.local_apic_mapped,
+            apic_version: self.apic_version,
             firmware_detected: self.firmware_cpu_count > 0,
             ipis_sent: self.ipis_sent,
             scheduled_tasks: self.scheduled_tasks,
@@ -162,15 +186,16 @@ impl SmpSystem {
     }
 }
 
-pub fn init() {
-    let mut system = SmpSystem::discover();
+pub fn init(rsdp: Option<AcpiRsdp>) {
+    let mut system = SmpSystem::discover(rsdp);
     crate::println!(
-        "SMP CPU discovery initialized from {}: {} firmware CPU(s), {} scheduler CPU(s), boot APIC {}, LAPIC {:#x}.",
+        "SMP CPU discovery initialized from {}: {} firmware CPU(s), {} scheduler CPU(s), boot APIC {}, LAPIC {:#x}, APIC version {:#x}.",
         system.discovery_source,
         system.firmware_cpu_count,
         system.cpus.len(),
         system.cpus[0].apic_id,
-        system.local_apic_addr
+        system.local_apic_addr,
+        system.apic_version
     );
 
     for cpu in system.cpus.iter().skip(1) {
@@ -195,6 +220,9 @@ pub fn stats() -> SmpStats {
             started_cpus: 0,
             firmware_cpu_count: 0,
             local_apic_addr: 0,
+            acpi_table_detected: false,
+            local_apic_mapped: false,
+            apic_version: 0,
             firmware_detected: false,
             ipis_sent: 0,
             scheduled_tasks: 0,
@@ -232,12 +260,16 @@ fn self_test(system: &mut SmpSystem) {
     if !stats.shared_lock_audit_passed {
         panic!("SMP lock audit self-test failed");
     }
+    if !stats.local_apic_mapped {
+        panic!("local APIC map self-test failed");
+    }
 
     crate::println!(
-        "SMP self-test passed: {} CPU(s), {} task dispatch(es), {} IPI(s).",
+        "SMP self-test passed: {} CPU(s), {} task dispatch(es), {} IPI(s), LAPIC mapped {}.",
         stats.started_cpus,
         stats.scheduled_tasks,
-        stats.ipis_sent
+        stats.ipis_sent,
+        stats.local_apic_mapped
     );
     crate::println!("SMP run queues:");
     for cpu in &system.cpus {
@@ -255,8 +287,131 @@ fn self_test(system: &mut SmpSystem) {
 struct CpuDiscovery {
     source: &'static str,
     firmware_cpu_count: usize,
+    acpi_table_detected: bool,
     local_apic_addr: u32,
-    apic_ids: Vec<u8>,
+    apic_ids: Vec<u32>,
+}
+
+fn discover_acpi_madt(rsdp: AcpiRsdp) -> Option<CpuDiscovery> {
+    if read_bytes(rsdp.addr, 8) != *b"RSD PTR " || !checksum_ok(rsdp.addr, 20) {
+        return None;
+    }
+
+    let revision = read_u8(rsdp.addr + 15);
+    let xsdt_addr = if revision >= 2 && rsdp.length >= 36 && checksum_ok(rsdp.addr, rsdp.length) {
+        read_u64(rsdp.addr + 24) as usize
+    } else {
+        0
+    };
+    let rsdt_addr = read_u32(rsdp.addr + 16) as usize;
+    let madt_addr = if xsdt_addr != 0 {
+        find_acpi_table(xsdt_addr, *b"XSDT", 8, *b"APIC")
+    } else {
+        None
+    }
+    .or_else(|| find_acpi_table(rsdt_addr, *b"RSDT", 4, *b"APIC"))?;
+
+    parse_madt(madt_addr)
+}
+
+fn find_acpi_table(root_addr: usize, expected: [u8; 4], entry_size: usize, needle: [u8; 4]) -> Option<usize> {
+    if root_addr == 0 {
+        return None;
+    }
+    map_physical_range(root_addr, 36)?;
+    if read_bytes(root_addr, 4) != expected {
+        return None;
+    }
+
+    let length = read_u32(root_addr + 4) as usize;
+    if length < 36 {
+        return None;
+    }
+    map_physical_range(root_addr, length)?;
+    if !checksum_ok(root_addr, length) {
+        return None;
+    }
+
+    let mut entry = root_addr + 36;
+    let end = root_addr + length;
+    while entry + entry_size <= end {
+        let table_addr = if entry_size == 8 {
+            read_u64(entry) as usize
+        } else {
+            read_u32(entry) as usize
+        };
+        map_physical_range(table_addr, 36)?;
+        if read_bytes(table_addr, 4) == needle {
+            return Some(table_addr);
+        }
+        entry += entry_size;
+    }
+
+    None
+}
+
+fn parse_madt(addr: usize) -> Option<CpuDiscovery> {
+    map_physical_range(addr, 44)?;
+    if read_bytes(addr, 4) != *b"APIC" {
+        return None;
+    }
+
+    let length = read_u32(addr + 4) as usize;
+    if length < 44 {
+        return None;
+    }
+    map_physical_range(addr, length)?;
+    if !checksum_ok(addr, length) {
+        return None;
+    }
+
+    let mut local_apic_addr = read_u32(addr + 36);
+    let mut entry = addr + 44;
+    let end = addr + length;
+    let mut apic_ids = Vec::new();
+
+    while entry + 2 <= end {
+        let typ = read_u8(entry);
+        let len = read_u8(entry + 1) as usize;
+        if len < 2 || entry + len > end {
+            return None;
+        }
+
+        match typ {
+            0 if len >= 8 => {
+                let apic_id = read_u8(entry + 3) as u32;
+                let flags = read_u32(entry + 4);
+                if flags & 0x01 != 0 {
+                    apic_ids.push(apic_id);
+                }
+            }
+            5 if len >= 12 => {
+                local_apic_addr = read_u64(entry + 4) as u32;
+            }
+            9 if len >= 16 => {
+                let x2apic_id = read_u32(entry + 4);
+                let flags = read_u32(entry + 8);
+                if flags & 0x01 != 0 {
+                    apic_ids.push(x2apic_id);
+                }
+            }
+            _ => {}
+        }
+
+        entry += len;
+    }
+
+    if apic_ids.is_empty() {
+        return None;
+    }
+
+    Some(CpuDiscovery {
+        source: "ACPI MADT",
+        firmware_cpu_count: apic_ids.len(),
+        acpi_table_detected: true,
+        local_apic_addr,
+        apic_ids,
+    })
 }
 
 fn discover_mp_table() -> Option<CpuDiscovery> {
@@ -289,7 +444,7 @@ fn discover_mp_table() -> Option<CpuDiscovery> {
                 if entry + 20 > end {
                     return None;
                 }
-                let apic_id = read_u8(entry + 1);
+                let apic_id = read_u8(entry + 1) as u32;
                 let flags = read_u8(entry + 3);
                 if flags & 0x01 != 0 {
                     if flags & 0x02 != 0 {
@@ -318,6 +473,7 @@ fn discover_mp_table() -> Option<CpuDiscovery> {
     Some(CpuDiscovery {
         source: "Intel MP table",
         firmware_cpu_count: apic_ids.len(),
+        acpi_table_detected: false,
         local_apic_addr,
         apic_ids,
     })
@@ -335,6 +491,41 @@ fn find_mp_floating_pointer() -> Option<usize> {
         addr += 16;
     }
     None
+}
+
+fn map_local_apic(addr: u32) -> (bool, u32) {
+    if addr == 0 {
+        return (false, 0);
+    }
+    let Some(()) = map_physical_range(addr as usize, FRAME_SIZE) else {
+        return (false, 0);
+    };
+
+    let version = read_u32(addr as usize + 0x30);
+    (true, version)
+}
+
+fn map_physical_range(addr: usize, size: usize) -> Option<()> {
+    if size == 0 {
+        return Some(());
+    }
+    if addr < 0x4000_0000 && addr.saturating_add(size) <= 0x4000_0000 {
+        return Some(());
+    }
+
+    let start = addr & !(FRAME_SIZE - 1);
+    let end = align_up(addr.checked_add(size)?, FRAME_SIZE);
+    let mut page = start;
+    while page < end {
+        let result = unsafe { paging::map_page(page, page, PageFlags::WRITABLE) };
+        match result {
+            Ok(()) | Err(PagingError::AlreadyMapped) => {}
+            Err(_) => return None,
+        }
+        page = page.checked_add(FRAME_SIZE)?;
+    }
+
+    Some(())
 }
 
 fn checksum_ok(addr: usize, len: usize) -> bool {
@@ -369,4 +560,21 @@ fn read_u32(addr: usize) -> u32 {
         read_u8(addr + 2),
         read_u8(addr + 3),
     ])
+}
+
+fn read_u64(addr: usize) -> u64 {
+    u64::from_le_bytes([
+        read_u8(addr),
+        read_u8(addr + 1),
+        read_u8(addr + 2),
+        read_u8(addr + 3),
+        read_u8(addr + 4),
+        read_u8(addr + 5),
+        read_u8(addr + 6),
+        read_u8(addr + 7),
+    ])
+}
+
+const fn align_up(value: usize, align: usize) -> usize {
+    (value + align - 1) & !(align - 1)
 }

@@ -6,6 +6,8 @@ const TAG_BOOTLOADER_NAME: u32 = 2;
 const TAG_MODULE: u32 = 3;
 const TAG_MMAP: u32 = 6;
 const TAG_FRAMEBUFFER: u32 = 8;
+const TAG_ACPI_OLD: u32 = 14;
+const TAG_ACPI_NEW: u32 = 15;
 
 const MEMORY_AVAILABLE: u32 = 1;
 
@@ -90,6 +92,21 @@ impl BootInfo {
         })
     }
 
+    pub fn acpi_rsdp(&self) -> Option<AcpiRsdp> {
+        self.find_tag(TAG_ACPI_NEW)
+            .or_else(|| self.find_tag(TAG_ACPI_OLD))
+            .and_then(|tag| {
+                if tag.size <= 8 {
+                    return None;
+                }
+                Some(AcpiRsdp {
+                    addr: tag.payload(),
+                    length: tag.size as usize - 8,
+                    revision: unsafe { *((tag.payload() + 15) as *const u8) },
+                })
+            })
+    }
+
     pub fn print_summary(&self) {
         let (start, end) = self.range();
         crate::println!("Multiboot2 info size: {} bytes", self.total_size());
@@ -116,6 +133,16 @@ impl BootInfo {
                 framebuffer.buffer_type
             ),
             None => crate::println!("Framebuffer: <not provided>"),
+        }
+
+        match self.acpi_rsdp() {
+            Some(rsdp) => crate::println!(
+                "ACPI RSDP: {:#x}, {} bytes, revision {}",
+                rsdp.addr,
+                rsdp.length,
+                rsdp.revision
+            ),
+            None => crate::println!("ACPI RSDP: <not provided>"),
         }
 
         let mut module_count = 0usize;
@@ -337,6 +364,13 @@ pub struct FramebufferInfo {
     pub green_mask_size: u8,
     pub blue_field_position: u8,
     pub blue_mask_size: u8,
+}
+
+#[derive(Clone, Copy)]
+pub struct AcpiRsdp {
+    pub addr: usize,
+    pub length: usize,
+    pub revision: u8,
 }
 
 fn read_c_string(addr: usize, max_len: usize) -> Option<&'static str> {
