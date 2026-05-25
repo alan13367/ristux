@@ -401,6 +401,9 @@ pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
 pub fn drive_tcp(tcp_stack: &mut tcp::TcpStack) -> bool {
     let mut made_progress = false;
     loop {
+        if tcp_stack.poll_retransmit(crate::time::monotonic_ticks()) {
+            made_progress = true;
+        }
         let mut sent_outbound = false;
         {
             let mut guard = NET_STACK.lock();
