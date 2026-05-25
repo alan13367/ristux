@@ -114,3 +114,93 @@ multiboot_info_addr:
 boot_stack_bottom:
     .skip 16384
 boot_stack_top:
+
+.section .ap_trampoline, "a"
+.align 16
+.global __ap_trampoline_start
+.global __ap_trampoline_end
+
+.set AP_TRAMPOLINE_BASE, 0x8000
+.set AP_GDT32_CODE, 0x08
+.set AP_GDT32_DATA, 0x10
+.set AP_GDT64_CODE, 0x18
+.set AP_GDT64_DATA, 0x20
+
+.code16
+__ap_trampoline_start:
+    cli
+    mov ax, cs
+    mov ds, ax
+    lgdt [AP_GDT_DESCRIPTOR_OFFSET]
+
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+
+    .byte 0x66, 0xea
+    .long AP_TRAMPOLINE_BASE + ap_protected - __ap_trampoline_start
+    .word AP_GDT32_CODE
+
+.code32
+ap_protected:
+    mov ax, AP_GDT32_DATA
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    mov eax, offset boot_p4_table
+    mov cr3, eax
+
+    mov eax, cr4
+    or eax, 1 << 5
+    mov cr4, eax
+
+    mov ecx, 0xc0000080
+    rdmsr
+    or eax, 1 << 8
+    wrmsr
+
+    mov eax, cr0
+    or eax, 1 << 31
+    mov cr0, eax
+
+    .byte 0xea
+    .long AP_TRAMPOLINE_BASE + ap_long_mode - __ap_trampoline_start
+    .word AP_GDT64_CODE
+
+.code64
+ap_long_mode:
+    mov ax, AP_GDT64_DATA
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    mov rsp, offset SMP_AP_BOOT_STACK + 4096
+    xor rbp, rbp
+    movabs rax, offset smp_ap_start
+    call rax
+
+.ap_halt:
+    hlt
+    jmp .ap_halt
+
+.align 8
+ap_gdt:
+    .quad 0
+    .quad 0x00cf9a000000ffff
+    .quad 0x00cf92000000ffff
+    .quad 0x00209a0000000000
+    .quad 0x0000920000000000
+ap_gdt_descriptor:
+    .word ap_gdt_descriptor - ap_gdt - 1
+    .long AP_TRAMPOLINE_BASE + ap_gdt - __ap_trampoline_start
+
+__ap_trampoline_end:
+
+.set AP_GDT_DESCRIPTOR_OFFSET, ap_gdt_descriptor - __ap_trampoline_start
+
+.code64

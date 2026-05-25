@@ -141,5 +141,6 @@ scancode from `sendkey a`, and does not print `kernel panic`.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.
 - Packages `/lib/libc.so` into the initrd and resolves shared-library symbols for a PIE-style user program through the dynamic linker.
 - Initializes an SMP topology model with per-CPU state, IPI queues, shared-lock audit, and multi-CPU scheduler dispatch.
+- Boots QEMU application processors through a low-memory trampoline and verifies APs reach Rust entry.
 - Requests a GRUB linear framebuffer, maps it, draws a double-buffered boot scene with a tiny bitmap font, and exposes `/dev/fb0`.
 - Uses a manifest-driven rootfs/package builder plus QEMU run, smoke-test, and GDB debug scripts.

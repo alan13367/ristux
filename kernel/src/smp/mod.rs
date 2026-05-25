@@ -1,5 +1,10 @@
 use alloc::{vec, vec::Vec};
-use core::{arch::asm, ptr};
+use core::{
+    arch::asm,
+    hint::spin_loop,
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{
     memory::{
@@ -11,14 +16,35 @@ use crate::{
 };
 
 static SMP: SpinLock<Option<SmpSystem>> = SpinLock::new(None);
+static AP_STARTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1b;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
 const APIC_BASE_MASK: u64 = 0x000f_ffff_ffff_f000;
+const AP_TRAMPOLINE_BASE: usize = 0x8000;
+const AP_TRAMPOLINE_VECTOR: u32 = (AP_TRAMPOLINE_BASE >> 12) as u32;
 const APIC_VERSION: usize = 0x30;
+const APIC_ICR_LOW: usize = 0x300;
+const APIC_ICR_HIGH: usize = 0x310;
 const APIC_SPURIOUS_VECTOR: usize = 0xf0;
 const APIC_SOFTWARE_ENABLE: u32 = 1 << 8;
 const APIC_SPURIOUS_IRQ_VECTOR: u32 = 0xff;
+const APIC_ICR_DELIVERY_STATUS: u32 = 1 << 12;
+const APIC_DELIVERY_INIT: u32 = 0b101 << 8;
+const APIC_DELIVERY_STARTUP: u32 = 0b110 << 8;
+const APIC_LEVEL_ASSERT: u32 = 1 << 14;
+const APIC_TRIGGER_LEVEL: u32 = 1 << 15;
+
+unsafe extern "C" {
+    static __ap_trampoline_start: u8;
+    static __ap_trampoline_end: u8;
+}
+
+#[repr(C, align(16))]
+pub struct ApBootStack([u8; 4096]);
+
+#[unsafe(no_mangle)]
+pub static SMP_AP_BOOT_STACK: ApBootStack = ApBootStack([0; 4096]);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuId(pub usize);
@@ -26,7 +52,8 @@ pub struct CpuId(pub usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CpuState {
     Bootstrap,
-    Started,
+    Prepared,
+    Running,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +86,9 @@ struct SmpSystem {
     acpi_table_detected: bool,
     local_apic_mapped: bool,
     apic_version: u32,
+    ap_start_attempts: usize,
+    booted_aps: usize,
+    trampoline_installed: bool,
     ipis_sent: usize,
     scheduled_tasks: usize,
     shared_lock_audit_passed: bool,
@@ -73,6 +103,9 @@ pub struct SmpStats {
     pub acpi_table_detected: bool,
     pub local_apic_mapped: bool,
     pub apic_version: u32,
+    pub ap_start_attempts: usize,
+    pub booted_aps: usize,
+    pub trampoline_installed: bool,
     pub firmware_detected: bool,
     pub ipis_sent: usize,
     pub scheduled_tasks: usize,
@@ -102,6 +135,7 @@ impl SmpSystem {
             }
         }
         let (local_apic_mapped, apic_version) = map_local_apic(discovery.local_apic_addr);
+        let trampoline_installed = install_ap_trampoline();
         let mut cpus = Vec::new();
         for (index, apic_id) in discovery.apic_ids.iter().copied().enumerate() {
             cpus.push(PerCpu {
@@ -110,7 +144,7 @@ impl SmpSystem {
                 state: if index == 0 {
                     CpuState::Bootstrap
                 } else {
-                    CpuState::Started
+                    CpuState::Prepared
                 },
                 current_task: None,
                 run_count: 0,
@@ -126,6 +160,9 @@ impl SmpSystem {
             acpi_table_detected: discovery.acpi_table_detected,
             local_apic_mapped,
             apic_version,
+            ap_start_attempts: 0,
+            booted_aps: 0,
+            trampoline_installed,
             ipis_sent: 0,
             scheduled_tasks: 0,
             shared_lock_audit_passed: false,
@@ -173,19 +210,46 @@ impl SmpSystem {
         self.shared_lock_audit_passed = *COUNTER.lock() == expected;
     }
 
+    fn start_application_processors(&mut self) {
+        if !self.local_apic_mapped || !self.trampoline_installed {
+            return;
+        }
+
+        let target_apics: Vec<u32> = self.cpus.iter().skip(1).map(|cpu| cpu.apic_id).collect();
+        for apic_id in target_apics {
+            let before = AP_STARTED_COUNT.load(Ordering::Acquire);
+            self.ap_start_attempts += 1;
+            send_init_sipi(self.local_apic_addr as usize, apic_id);
+            if wait_for_ap_started(before + 1) {
+                self.booted_aps += 1;
+                if let Some(cpu) = self.cpus.iter_mut().find(|cpu| cpu.apic_id == apic_id) {
+                    cpu.state = CpuState::Running;
+                }
+            }
+        }
+    }
+
     fn stats(&self) -> SmpStats {
         SmpStats {
             cpu_count: self.cpus.len(),
             started_cpus: self
                 .cpus
                 .iter()
-                .filter(|cpu| matches!(cpu.state, CpuState::Bootstrap | CpuState::Started))
+                .filter(|cpu| {
+                    matches!(
+                        cpu.state,
+                        CpuState::Bootstrap | CpuState::Prepared | CpuState::Running
+                    )
+                })
                 .count(),
             firmware_cpu_count: self.firmware_cpu_count,
             local_apic_addr: self.local_apic_addr,
             acpi_table_detected: self.acpi_table_detected,
             local_apic_mapped: self.local_apic_mapped,
             apic_version: self.apic_version,
+            ap_start_attempts: self.ap_start_attempts,
+            booted_aps: self.booted_aps,
+            trampoline_installed: self.trampoline_installed,
             firmware_detected: self.firmware_cpu_count > 0,
             ipis_sent: self.ipis_sent,
             scheduled_tasks: self.scheduled_tasks,
@@ -214,6 +278,13 @@ pub fn init(rsdp: Option<AcpiRsdp>) {
         );
     }
 
+    system.start_application_processors();
+    crate::println!(
+        "AP bootstrap attempted {} CPU(s), {} reached Rust entry.",
+        system.ap_start_attempts,
+        system.booted_aps
+    );
+
     self_test(&mut system);
     *SMP.lock() = Some(system);
 }
@@ -231,6 +302,9 @@ pub fn stats() -> SmpStats {
             acpi_table_detected: false,
             local_apic_mapped: false,
             apic_version: 0,
+            ap_start_attempts: 0,
+            booted_aps: 0,
+            trampoline_installed: false,
             firmware_detected: false,
             ipis_sent: 0,
             scheduled_tasks: 0,
@@ -271,10 +345,17 @@ fn self_test(system: &mut SmpSystem) {
     if !stats.local_apic_mapped {
         panic!("local APIC map self-test failed");
     }
+    if stats.trampoline_installed
+        && stats.ap_start_attempts > 0
+        && stats.booted_aps != stats.ap_start_attempts
+    {
+        panic!("AP trampoline self-test did not start every AP");
+    }
 
     crate::println!(
-        "SMP self-test passed: {} CPU(s), {} task dispatch(es), {} IPI(s), LAPIC mapped {}.",
+        "SMP self-test passed: {} CPU(s), {} AP boot(s), {} task dispatch(es), {} IPI(s), LAPIC mapped {}.",
         stats.started_cpus,
+        stats.booted_aps,
         stats.scheduled_tasks,
         stats.ipis_sent,
         stats.local_apic_mapped
@@ -501,6 +582,21 @@ fn find_mp_floating_pointer() -> Option<usize> {
     None
 }
 
+fn install_ap_trampoline() -> bool {
+    let start = ptr::addr_of!(__ap_trampoline_start) as *const u8;
+    let end = ptr::addr_of!(__ap_trampoline_end) as *const u8;
+    let size = (end as usize).saturating_sub(start as usize);
+    if size == 0 || size > FRAME_SIZE {
+        return false;
+    }
+
+    unsafe {
+        ptr::copy_nonoverlapping(start, AP_TRAMPOLINE_BASE as *mut u8, size);
+        ptr::write_bytes((AP_TRAMPOLINE_BASE + size) as *mut u8, 0, FRAME_SIZE - size);
+    }
+    true
+}
+
 fn map_local_apic(addr: u32) -> (bool, u32) {
     let msr_base = enable_local_apic();
     let base = if addr == 0 { msr_base as u32 } else { addr };
@@ -518,6 +614,51 @@ fn map_local_apic(addr: u32) -> (bool, u32) {
     );
     let version = read_u32(base as usize + APIC_VERSION);
     (true, version)
+}
+
+fn send_init_sipi(local_apic: usize, apic_id: u32) {
+    apic_write_icr(
+        local_apic,
+        apic_id,
+        APIC_DELIVERY_INIT | APIC_LEVEL_ASSERT | APIC_TRIGGER_LEVEL,
+    );
+    delay(100_000);
+    apic_write_icr(local_apic, apic_id, APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR);
+    delay(20_000);
+    apic_write_icr(local_apic, apic_id, APIC_DELIVERY_STARTUP | AP_TRAMPOLINE_VECTOR);
+    delay(20_000);
+}
+
+fn apic_write_icr(local_apic: usize, apic_id: u32, low: u32) {
+    wait_icr_idle(local_apic);
+    write_u32(local_apic + APIC_ICR_HIGH, apic_id << 24);
+    write_u32(local_apic + APIC_ICR_LOW, low);
+    wait_icr_idle(local_apic);
+}
+
+fn wait_icr_idle(local_apic: usize) {
+    for _ in 0..100_000 {
+        if read_u32(local_apic + APIC_ICR_LOW) & APIC_ICR_DELIVERY_STATUS == 0 {
+            return;
+        }
+        spin_loop();
+    }
+}
+
+fn wait_for_ap_started(target: usize) -> bool {
+    for _ in 0..1_000_000 {
+        if AP_STARTED_COUNT.load(Ordering::Acquire) >= target {
+            return true;
+        }
+        spin_loop();
+    }
+    false
+}
+
+fn delay(iterations: usize) {
+    for _ in 0..iterations {
+        spin_loop();
+    }
 }
 
 fn map_physical_range(addr: usize, size: usize) -> Option<()> {
@@ -631,5 +772,15 @@ fn write_msr(msr: u32, value: u64) {
             in("edx") (value >> 32) as u32,
             options(nomem, nostack, preserves_flags)
         );
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn smp_ap_start() -> ! {
+    AP_STARTED_COUNT.fetch_add(1, Ordering::AcqRel);
+    loop {
+        unsafe {
+            asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
     }
 }

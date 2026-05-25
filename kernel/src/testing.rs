@@ -70,6 +70,10 @@ fn run() -> KernelResult<()> {
         "SMP firmware/APIC discovery did not complete",
     )?;
     ensure(
+        smp.ap_start_attempts > 0 && smp.booted_aps == smp.ap_start_attempts,
+        "SMP AP trampoline did not boot every AP",
+    )?;
+    ensure(
         smp.shared_lock_audit_passed,
         "SMP lock audit did not pass",
     )?;
@@ -147,13 +151,16 @@ fn run() -> KernelResult<()> {
         linker.relocations_applied
     );
     crate::println!(
-        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, APIC version {:#x}, mapped {}, {} IPI(s), {} dispatch(es)",
+        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, APIC version {:#x}, mapped {}, AP boots {}/{}, trampoline {}, {} IPI(s), {} dispatch(es)",
         smp.cpu_count,
         smp.firmware_cpu_count,
         smp.started_cpus,
         smp.local_apic_addr,
         smp.apic_version,
         smp.local_apic_mapped,
+        smp.booted_aps,
+        smp.ap_start_attempts,
+        smp.trampoline_installed,
         smp.ipis_sent,
         smp.scheduled_tasks
     );

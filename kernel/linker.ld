@@ -13,6 +13,7 @@ SECTIONS
         KEEP(*(.multiboot2_header))
         *(.text.boot)
         *(.rodata.boot)
+        KEEP(*(.ap_trampoline))
     }
 
     .text ALIGN(4K) :

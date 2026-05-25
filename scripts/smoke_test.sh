@@ -22,6 +22,7 @@ make iso
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
 
 grep -q "SMP self-test passed" "$SERIAL_LOG"
+grep -q "AP bootstrap attempted 3 CPU(s), 3 reached Rust entry" "$SERIAL_LOG"
 grep -q "Framebuffer graphics self-test passed" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
 grep -q "keyboard scancode" "$SERIAL_LOG"
