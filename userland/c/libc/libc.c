@@ -152,6 +152,10 @@ pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
     return (pid_t)syscall_ret(syscall4(SYS_WAIT4, pid, (long)status, options, (long)rusage));
 }
 
+pid_t waitpid(pid_t pid, int *status, int options) {
+    return wait4(pid, status, options, NULL);
+}
+
 pid_t getpid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_GETPID));
 }
