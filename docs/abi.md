@@ -139,6 +139,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `chdir`, `getcwd`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
+- Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,
+  `/dev/urandom`, `/dev/tty`, `/dev/console`, `/dev/keyboard`, and `/dev/fb0`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,

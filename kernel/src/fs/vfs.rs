@@ -11,6 +11,7 @@ use crate::{
 use super::ext2;
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
+static RANDOM_STATE: SpinLock<u64> = SpinLock::new(0x9e37_79b9_7f4a_7c15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
@@ -24,6 +25,8 @@ pub enum NodeKind {
 pub enum DeviceKind {
     Null,
     Zero,
+    Random,
+    URandom,
     Console,
     Keyboard,
     Tty,
@@ -243,6 +246,8 @@ impl Vfs {
             .expect("failed to make /tmp writable");
         vfs.add_device("/dev/null", DeviceKind::Null);
         vfs.add_device("/dev/zero", DeviceKind::Zero);
+        vfs.add_device("/dev/random", DeviceKind::Random);
+        vfs.add_device("/dev/urandom", DeviceKind::URandom);
         vfs.add_device("/dev/console", DeviceKind::Console);
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
         vfs.add_device("/dev/tty", DeviceKind::Tty);
@@ -840,6 +845,10 @@ impl Vfs {
                             output.fill(0);
                             Ok(output.len())
                         }
+                        NodeKind::Device(DeviceKind::Random | DeviceKind::URandom) => {
+                            fill_random(output);
+                            Ok(output.len())
+                        }
                         NodeKind::Device(DeviceKind::Keyboard) => {
                             let mut count = 0;
                             for byte in output.iter_mut() {
@@ -952,7 +961,12 @@ impl Vfs {
                             crate::log::write_str(text);
                             Ok(input.len())
                         }
-                        NodeKind::Device(DeviceKind::Zero | DeviceKind::Keyboard) => Ok(0),
+                        NodeKind::Device(
+                            DeviceKind::Zero
+                            | DeviceKind::Random
+                            | DeviceKind::URandom
+                            | DeviceKind::Keyboard,
+                        ) => Ok(input.len()),
                         NodeKind::Directory => Err(VfsError::NotFile),
                         NodeKind::Symlink => Err(VfsError::NotFile),
                         NodeKind::File => unreachable!(),
@@ -1203,6 +1217,11 @@ impl Vfs {
                         ..PollReady::default()
                     },
                     NodeKind::Device(DeviceKind::Zero) => PollReady {
+                        read: rights.read,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
+                    NodeKind::Device(DeviceKind::Random | DeviceKind::URandom) => PollReady {
                         read: rights.read,
                         write: rights.write,
                         ..PollReady::default()
@@ -1691,6 +1710,23 @@ fn join_path(parent: &str, name: &str) -> String {
         format!("{}/{}", parent.trim_end_matches('/'), name)
     };
     normalize_path(&joined).unwrap_or(joined)
+}
+
+fn fill_random(output: &mut [u8]) {
+    let mut state = RANDOM_STATE.lock();
+    let tick_mix = crate::time::monotonic_ticks()
+        .wrapping_mul(0xd134_2543_de82_ef95)
+        ^ crate::time::uptime_millis().rotate_left(17);
+    *state ^= tick_mix;
+    for byte in output {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x = x.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        *state = x;
+        *byte = (x >> 56) as u8;
+    }
 }
 
 fn normalize_path(path: &str) -> Result<String, VfsError> {
