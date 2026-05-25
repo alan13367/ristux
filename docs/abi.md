@@ -141,6 +141,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,
   `/dev/urandom`, `/dev/tty`, `/dev/console`, `/dev/keyboard`, and `/dev/fb0`.
+- Procfs currently exposes `/proc/version`, `/proc/mounts`, `/proc/meminfo`,
+  `/proc/uptime`, `/proc/stat`, `/proc/self/status`, and
+  `/proc/<pid>/status`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,

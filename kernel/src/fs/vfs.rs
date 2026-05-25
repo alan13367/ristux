@@ -488,11 +488,19 @@ impl Vfs {
         let path = resolved.as_str();
         let node = if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
             index
-        } else if proc_status_pid(path).is_some() {
+        } else if let Some(kind) = proc_virtual_kind(path) {
             self.nodes.push(Node {
                 path: String::from(path),
-                kind: NodeKind::File,
-                metadata: FileMetadata::new(0, 0, 0o444),
+                kind,
+                metadata: FileMetadata::new(
+                    0,
+                    0,
+                    if kind == NodeKind::Directory {
+                        0o555
+                    } else {
+                        0o444
+                    },
+                ),
                 timestamps: FileTimestamps {
                     created_at: crate::time::filesystem_timestamp(),
                     modified_at: crate::time::filesystem_timestamp(),
@@ -832,8 +840,7 @@ impl Vfs {
                     return Err(VfsError::BadFd);
                 }
                 let path = self.nodes[*node].path.clone();
-                if let Some(pid) = proc_status_pid(&path) {
-                    let count = read_proc_status(pid, *offset, output)?;
+                if let Some(count) = read_proc_virtual(&path, *offset, output) {
                     *offset += count;
                     return Ok(count);
                 }
@@ -1116,8 +1123,8 @@ impl Vfs {
                 offset: cursor,
                 ..
             } => {
-                let size = if let Some(pid) = proc_status_pid(&self.nodes[*node].path) {
-                    format_proc_status(pid).len()
+                let size = if let Some(text) = format_proc_virtual(&self.nodes[*node].path) {
+                    text.len()
                 } else {
                     self.nodes[*node].data.len()
                 };
@@ -1152,11 +1159,14 @@ impl Vfs {
         match handle {
             OpenHandle::Node { node, .. } => {
                 let node = &self.nodes[*node];
+                let size = format_proc_virtual(&node.path)
+                    .map(|text| text.len() as u64)
+                    .unwrap_or(node.data.len() as u64);
                 Ok(Stat {
                     owner: node.metadata.owner,
                     group: node.metadata.group,
                     mode: node.metadata.mode.0,
-                    size: node.data.len() as u64,
+                    size,
                     mtime: node.timestamps.modified_at,
                 })
             }
@@ -1302,12 +1312,19 @@ impl Vfs {
         } else {
             normalized.as_str()
         };
-        if let Some(pid) = proc_status_pid(path) {
+        if let Some(kind) = proc_virtual_kind(path) {
+            let size = format_proc_virtual(path)
+                .map(|text| text.len() as u64)
+                .unwrap_or(0);
             return Ok(Stat {
                 owner: 0,
                 group: 0,
-                mode: 0o444,
-                size: format_proc_status(pid).len() as u64,
+                mode: if kind == NodeKind::Directory {
+                    0o555
+                } else {
+                    0o444
+                },
+                size,
                 mtime: crate::time::filesystem_timestamp(),
             });
         }
@@ -1363,6 +1380,9 @@ impl Vfs {
     fn read_file(&self, path: &str) -> Option<Vec<u8>> {
         let resolved = self.resolve_symlink_path(path).ok()?;
         let path = resolved.as_str();
+        if let Some(text) = format_proc_virtual(path) {
+            return Some(Vec::from(text.as_bytes()));
+        }
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2() {
                 if let Ok(data) = fs.read_file(path) {
@@ -1464,6 +1484,18 @@ impl Vfs {
                 name: file_name(&child.path),
                 kind: child.kind,
             });
+        }
+        if path == "/proc" {
+            push_unique_entry(&mut entries, "meminfo", NodeKind::File);
+            push_unique_entry(&mut entries, "mounts", NodeKind::File);
+            push_unique_entry(&mut entries, "self", NodeKind::Directory);
+            push_unique_entry(&mut entries, "stat", NodeKind::File);
+            push_unique_entry(&mut entries, "uptime", NodeKind::File);
+            if let Some(pid) = crate::process::current_pid() {
+                push_unique_entry(&mut entries, &format!("{}", pid), NodeKind::Directory);
+            }
+        } else if proc_process_dir_pid(path).is_some() {
+            push_unique_entry(&mut entries, "status", NodeKind::File);
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         entries
@@ -1757,7 +1789,72 @@ fn normalize_path(path: &str) -> Result<String, VfsError> {
 fn proc_status_pid(path: &str) -> Option<u64> {
     let rest = path.strip_prefix("/proc/")?;
     let pid_text = rest.strip_suffix("/status")?;
+    if pid_text == "self" {
+        return crate::process::current_pid();
+    }
     pid_text.parse().ok()
+}
+
+fn proc_process_dir_pid(path: &str) -> Option<u64> {
+    let pid_text = path.strip_prefix("/proc/")?;
+    if pid_text == "self" {
+        return crate::process::current_pid();
+    }
+    pid_text.parse().ok()
+}
+
+fn proc_virtual_kind(path: &str) -> Option<NodeKind> {
+    if matches!(
+        path,
+        "/proc/meminfo" | "/proc/mounts" | "/proc/stat" | "/proc/uptime"
+    ) || proc_status_pid(path).is_some()
+    {
+        return Some(NodeKind::File);
+    }
+    if proc_process_dir_pid(path).is_some() {
+        return Some(NodeKind::Directory);
+    }
+    None
+}
+
+fn format_proc_virtual(path: &str) -> Option<String> {
+    match path {
+        "/proc/meminfo" => {
+            let stats = crate::memory::stats();
+            Some(format!(
+                "MemTotal: {} kB\nMemFree: {} kB\nHeapUsed: {} bytes\nHeapFree: {} bytes\n",
+                stats.frames.total_frames * 4,
+                stats.frames.free_frames * 4,
+                stats.heap.used_bytes,
+                stats.heap.free_bytes
+            ))
+        }
+        "/proc/mounts" => Some(String::from(
+            "ext2 / ext2 rw 0 0\n\
+             devfs /dev devfs rw 0 0\n\
+             procfs /proc procfs ro 0 0\n\
+             tmpfs /tmp tmpfs rw 0 0\n",
+        )),
+        "/proc/stat" => {
+            let stats = crate::process::stats();
+            Some(format!(
+                "cpu  0 0 0 {}\nprocesses {}\nprocs_running {}\nfd_count {}\n",
+                crate::time::monotonic_ticks(),
+                stats.process_count,
+                stats.process_count,
+                stats.fd_count
+            ))
+        }
+        "/proc/uptime" => {
+            let millis = crate::time::uptime_millis();
+            Some(format!(
+                "{}.{:02} 0.00\n",
+                millis / 1000,
+                (millis % 1000) / 10
+            ))
+        }
+        _ => proc_status_pid(path).map(format_proc_status),
+    }
 }
 
 fn format_proc_status(pid: u64) -> alloc::string::String {
@@ -1784,13 +1881,27 @@ fn format_proc_status(pid: u64) -> alloc::string::String {
     )
 }
 
-fn read_proc_status(pid: u64, offset: usize, output: &mut [u8]) -> Result<usize, VfsError> {
-    let text = format_proc_status(pid);
+fn read_proc_virtual(path: &str, offset: usize, output: &mut [u8]) -> Option<usize> {
+    let text = format_proc_virtual(path)?;
+    read_proc_text(&text, offset, output).ok()
+}
+
+fn read_proc_text(text: &String, offset: usize, output: &mut [u8]) -> Result<usize, VfsError> {
     let bytes = text.as_bytes();
     let remaining = bytes.len().saturating_sub(offset);
     let count = remaining.min(output.len());
     output[..count].copy_from_slice(&bytes[offset..offset + count]);
     Ok(count)
+}
+
+fn push_unique_entry(entries: &mut Vec<DirectoryEntry>, name: &str, kind: NodeKind) {
+    if entries.iter().any(|entry| entry.name == name) {
+        return;
+    }
+    entries.push(DirectoryEntry {
+        name: String::from(name),
+        kind,
+    });
 }
 
 pub fn self_test() {

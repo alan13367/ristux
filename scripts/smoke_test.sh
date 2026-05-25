@@ -193,6 +193,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_procfs"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
@@ -323,6 +327,14 @@ grep -q "TTY canonical line ready: cc_proc" "$SERIAL_LOG"
 grep -q "cc_proc: pipe exec ok" "$SERIAL_LOG"
 grep -q "cc_proc: wait ok" "$SERIAL_LOG"
 grep -q "cc_proc: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_procfs" "$SERIAL_LOG"
+grep -q "cc_procfs: dir ok" "$SERIAL_LOG"
+grep -q "cc_procfs: mounts ok" "$SERIAL_LOG"
+grep -q "cc_procfs: meminfo ok" "$SERIAL_LOG"
+grep -q "cc_procfs: uptime ok" "$SERIAL_LOG"
+grep -q "cc_procfs: stat ok" "$SERIAL_LOG"
+grep -q "cc_procfs: self ok" "$SERIAL_LOG"
+grep -q "cc_procfs: done" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"
