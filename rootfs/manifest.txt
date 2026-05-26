@@ -66,6 +66,7 @@ file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
 file /bin/rm ../build/userland/rm.elf
+file /bin/sed ../build/userland/sed.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
 file /bin/sort ../build/userland/sort.elf
 file /bin/stty ../build/userland/stty.elf
@@ -166,6 +167,7 @@ package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
 package readlink 0.1.0 /bin/readlink
 package rm 0.1.0 /bin/rm
+package sed 0.1.0 /bin/sed
 package sh 0.1.0 /bin/sh
 package sig_demo 0.1.0 /bin/sig_demo
 package stty 0.1.0 /bin/stty
