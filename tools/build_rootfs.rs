@@ -17,6 +17,8 @@ struct PackageEntry {
     name: String,
     version: String,
     path: String,
+    dependencies: Vec<String>,
+    post_install: String,
 }
 
 fn main() {
@@ -51,14 +53,18 @@ fn main() {
                     }),
                 );
             }
-            ["package", name, version, path] => {
+            ["package", name, version, path, options @ ..] => {
+                let (dependencies, post_install) = parse_package_options(options);
                 packages.push(PackageEntry {
                     name: (*name).to_owned(),
                     version: (*version).to_owned(),
                     path: (*path).to_owned(),
+                    dependencies,
+                    post_install,
                 });
             }
-            ["package-archive", name, version, source, prefix] => {
+            ["package-archive", name, version, source, prefix, options @ ..] => {
+                let (dependencies, post_install) = parse_package_options(options);
                 let source = manifest_dir.join(source);
                 for file in package_archive::extract_package_archive(&source, prefix) {
                     let path = file.path;
@@ -68,6 +74,8 @@ fn main() {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
                         path,
+                        dependencies: dependencies.clone(),
+                        post_install: post_install.clone(),
                     });
                 }
             }
@@ -77,6 +85,7 @@ fn main() {
 
     let package_index = package_index(&packages, &files).into_bytes();
     insert_file(&mut files, PACKAGE_INDEX.to_owned(), package_index);
+    insert_package_metadata(&mut files, &packages);
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let mut archive = Vec::new();
@@ -91,6 +100,73 @@ fn main() {
         fs::create_dir_all(parent).expect("create rootfs output directory");
     }
     fs::write(output, archive).expect("write rootfs image");
+}
+
+fn parse_package_options(options: &[&str]) -> (Vec<String>, String) {
+    let mut dependencies = Vec::new();
+    let mut post_install = String::new();
+    for option in options {
+        if let Some(value) = option.strip_prefix("deps=") {
+            dependencies = value
+                .split(',')
+                .filter(|dep| !dep.is_empty())
+                .map(str::to_owned)
+                .collect();
+        } else if let Some(value) = option.strip_prefix("post-install=") {
+            post_install = value.to_owned();
+        } else {
+            panic!("unknown package option {}", option);
+        }
+    }
+    (dependencies, post_install)
+}
+
+fn insert_package_metadata(files: &mut Vec<FileEntry>, packages: &[PackageEntry]) {
+    let mut names = packages
+        .iter()
+        .map(|package| package.name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+
+    for name in names {
+        let mut entries = packages
+            .iter()
+            .filter(|package| package.name == name)
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        let first = entries[0];
+        let version = &first.version;
+        let dependencies = &first.dependencies;
+        let post_install = &first.post_install;
+
+        let mut file_list = String::new();
+        for entry in &entries {
+            if entry.version != *version {
+                panic!("package {} has mixed versions", name);
+            }
+            if entry.dependencies != *dependencies {
+                panic!("package {} has mixed dependencies", name);
+            }
+            if entry.post_install != *post_install {
+                panic!("package {} has mixed post-install hooks", name);
+            }
+            file_list.push_str(&entry.path);
+            file_list.push('\n');
+        }
+
+        let mut dependency_list = String::new();
+        for dependency in dependencies {
+            dependency_list.push_str(dependency);
+            dependency_list.push('\n');
+        }
+
+        let base = format!("/pkg/db/{}", name);
+        insert_file(files, format!("{}/version", base), format!("{}\n", version).into_bytes());
+        insert_file(files, format!("{}/files", base), file_list.into_bytes());
+        insert_file(files, format!("{}/dependencies", base), dependency_list.into_bytes());
+        insert_file(files, format!("{}/post-install", base), format!("{}\n", post_install).into_bytes());
+    }
 }
 
 fn insert_file(files: &mut Vec<FileEntry>, path: String, data: Vec<u8>) {

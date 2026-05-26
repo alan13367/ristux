@@ -79,6 +79,8 @@ struct PackageEntry {
     name: String,
     version: String,
     path: String,
+    dependencies: Vec<String>,
+    post_install: String,
 }
 
 impl Builder {
@@ -532,14 +534,18 @@ fn main() {
                 }
                 add_manifest_file(&mut builder, &mut installed_files, path, data);
             }
-            ["package", name, version, path] => {
+            ["package", name, version, path, options @ ..] => {
+                let (dependencies, post_install) = parse_package_options(options);
                 packages.push(PackageEntry {
                     name: (*name).to_owned(),
                     version: (*version).to_owned(),
                     path: (*path).to_owned(),
+                    dependencies,
+                    post_install,
                 });
             }
-            ["package-archive", name, version, source, prefix] => {
+            ["package-archive", name, version, source, prefix, options @ ..] => {
+                let (dependencies, post_install) = parse_package_options(options);
                 let source = manifest_dir.join(source);
                 for file in package_archive::extract_package_archive(&source, prefix) {
                     let path = file.path;
@@ -549,6 +555,8 @@ fn main() {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
                         path,
+                        dependencies: dependencies.clone(),
+                        post_install: post_install.clone(),
                     });
                 }
             }
@@ -563,6 +571,7 @@ fn main() {
         0,
         0,
     );
+    add_package_metadata(&mut builder, &packages);
     if let Some(data) = init_data {
         builder.add_file("/sbin/init", data, 0o755, 0, 0);
     }
@@ -644,6 +653,91 @@ fn metadata_block_count(entry: &Entry) -> usize {
     let double = usize::from(entry.double_indirect_block.is_some());
     let double_children = double_data.div_ceil(POINTERS_PER_BLOCK);
     single + double + double_children
+}
+
+fn parse_package_options(options: &[&str]) -> (Vec<String>, String) {
+    let mut dependencies = Vec::new();
+    let mut post_install = String::new();
+    for option in options {
+        if let Some(value) = option.strip_prefix("deps=") {
+            dependencies = value
+                .split(',')
+                .filter(|dep| !dep.is_empty())
+                .map(str::to_owned)
+                .collect();
+        } else if let Some(value) = option.strip_prefix("post-install=") {
+            post_install = value.to_owned();
+        } else {
+            panic!("unknown package option {}", option);
+        }
+    }
+    (dependencies, post_install)
+}
+
+fn add_package_metadata(builder: &mut Builder, packages: &[PackageEntry]) {
+    let mut names = packages
+        .iter()
+        .map(|package| package.name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+
+    for name in names {
+        let mut entries = packages
+            .iter()
+            .filter(|package| package.name == name)
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        let first = entries[0];
+        let version = &first.version;
+        let dependencies = &first.dependencies;
+        let post_install = &first.post_install;
+
+        let mut file_list = String::new();
+        for entry in &entries {
+            if entry.version != *version {
+                panic!("package {} has mixed versions", name);
+            }
+            if entry.dependencies != *dependencies {
+                panic!("package {} has mixed dependencies", name);
+            }
+            if entry.post_install != *post_install {
+                panic!("package {} has mixed post-install hooks", name);
+            }
+            file_list.push_str(&entry.path);
+            file_list.push('\n');
+        }
+
+        let mut dependency_list = String::new();
+        for dependency in dependencies {
+            dependency_list.push_str(dependency);
+            dependency_list.push('\n');
+        }
+
+        let base = format!("/pkg/db/{}", name);
+        builder.add_file(
+            &format!("{}/version", base),
+            format!("{}\n", version).into_bytes(),
+            0o644,
+            0,
+            0,
+        );
+        builder.add_file(&format!("{}/files", base), file_list.into_bytes(), 0o644, 0, 0);
+        builder.add_file(
+            &format!("{}/dependencies", base),
+            dependency_list.into_bytes(),
+            0o644,
+            0,
+            0,
+        );
+        builder.add_file(
+            &format!("{}/post-install", base),
+            format!("{}\n", post_install).into_bytes(),
+            0o644,
+            0,
+            0,
+        );
+    }
 }
 
 fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -> String {

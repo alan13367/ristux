@@ -179,6 +179,25 @@ case "$SCENARIO" in
       "^alpha$"
     )
     ;;
+  pkg)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "pkg list"
+      "pkg info tar"
+      "pkg files tar"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: pkg list"
+      "^tar 0.1.0$"
+      "^name: tar$"
+      "^version: 0.1.0$"
+      "^files:$"
+      "^  /bin/tar$"
+      "^dependencies:$"
+      "^post-install:$"
+      "^/bin/tar$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -231,7 +250,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
