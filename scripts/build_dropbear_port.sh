@@ -10,9 +10,17 @@ RUST_BIN="$RUST_SYSROOT/lib/rustlib/$RUST_HOST/bin"
 RUST_LLD="${RUST_LLD:-$RUST_BIN/rust-lld}"
 LLVM_AR="${LLVM_AR:-$RUST_BIN/llvm-ar}"
 
+OUT="${1:-$ROOT/build/userland/dropbear.elf}"
+BUILD="$ROOT/build/ports/dropbear"
+
 if [[ -z "${DROPBEAR_SRC:-}" ]]; then
   if [[ -d "$ROOT/third_party/dropbear-2026.91" ]]; then
     DROPBEAR_SRC="$ROOT/third_party/dropbear-2026.91"
+  elif [[ -f "$ROOT/third_party/dropbear-2026.91.tar.gz" ]]; then
+    rm -rf "$BUILD/source"
+    mkdir -p "$BUILD/source"
+    tar -xzf "$ROOT/third_party/dropbear-2026.91.tar.gz" -C "$BUILD/source"
+    DROPBEAR_SRC="$BUILD/source/dropbear-2026.91"
   else
     DROPBEAR_SRC="/tmp/dropbear-2026.91"
   fi
@@ -23,8 +31,6 @@ if [[ ! -d "$DROPBEAR_SRC/src" || ! -d "$DROPBEAR_SRC/libtomcrypt" || ! -d "$DRO
   exit 2
 fi
 
-OUT="${1:-$ROOT/build/userland/dropbear.elf}"
-BUILD="$ROOT/build/ports/dropbear"
 INCLUDE="$BUILD/include"
 OBJ="$BUILD/obj"
 LTM_OBJ="$BUILD/libtommath-obj"

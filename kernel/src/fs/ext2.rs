@@ -8,6 +8,7 @@ use crate::{
 const EXT2_MAGIC: u16 = 0xEF53;
 const EXT2_ROOT_INO: u32 = 2;
 const EXT2_N_BLOCKS: usize = 15;
+const EXT2_DIRECT_BLOCKS: usize = 12;
 const EXT2_S_IFMT: u16 = 0o170000;
 const EXT2_S_IFREG: u16 = 0o100000;
 const EXT2_S_IFDIR: u16 = 0o040000;
@@ -430,7 +431,10 @@ impl Ext2Fs {
         self.free_inode_blocks(&inode)?;
 
         let blocks_needed = data.len().div_ceil(self.block_size);
-        if blocks_needed > 12 + self.block_size / 4 {
+        let pointers_per_block = self.block_size / 4;
+        let max_blocks =
+            EXT2_DIRECT_BLOCKS + pointers_per_block + pointers_per_block * pointers_per_block;
+        if blocks_needed > max_blocks {
             return Err(Ext2Error::Unsupported);
         }
 
@@ -444,17 +448,45 @@ impl Ext2Fs {
         }
 
         inode.blocks = [0; EXT2_N_BLOCKS];
-        for (index, block) in data_blocks.iter().take(12).enumerate() {
+        for (index, block) in data_blocks.iter().take(EXT2_DIRECT_BLOCKS).enumerate() {
             inode.blocks[index] = *block;
         }
-        if data_blocks.len() > 12 {
+        let indirect_count = data_blocks
+            .len()
+            .saturating_sub(EXT2_DIRECT_BLOCKS)
+            .min(pointers_per_block);
+        if indirect_count > 0 {
             let indirect = self.allocate_block()?;
-            let mut indirect_data = [0u8; 1024];
-            for (index, block) in data_blocks.iter().skip(12).enumerate() {
+            let mut indirect_data = vec![0u8; self.block_size];
+            for (index, block) in data_blocks
+                .iter()
+                .skip(EXT2_DIRECT_BLOCKS)
+                .take(indirect_count)
+                .enumerate()
+            {
                 put_u32(&mut indirect_data, index * 4, *block);
             }
             write_block_sized(indirect as u64, self.block_size, &indirect_data)?;
             inode.blocks[12] = indirect;
+        }
+        let double_start = EXT2_DIRECT_BLOCKS + indirect_count;
+        if data_blocks.len() > double_start {
+            let double_indirect = self.allocate_block()?;
+            let mut double_data = vec![0u8; self.block_size];
+            for (index, chunk) in data_blocks[double_start..]
+                .chunks(pointers_per_block)
+                .enumerate()
+            {
+                let indirect = self.allocate_block()?;
+                let mut indirect_data = vec![0u8; self.block_size];
+                for (block_index, block) in chunk.iter().enumerate() {
+                    put_u32(&mut indirect_data, block_index * 4, *block);
+                }
+                write_block_sized(indirect as u64, self.block_size, &indirect_data)?;
+                put_u32(&mut double_data, index * 4, indirect);
+            }
+            write_block_sized(double_indirect as u64, self.block_size, &double_data)?;
+            inode.blocks[13] = double_indirect;
         }
         inode.size = data.len() as u64;
         self.write_inode(ino, &inode)
@@ -550,7 +582,11 @@ impl Ext2Fs {
             return Ok(out);
         }
 
-        for block in inode.blocks[..12].iter().copied().filter(|block| *block != 0) {
+        for block in inode.blocks[..EXT2_DIRECT_BLOCKS]
+            .iter()
+            .copied()
+            .filter(|block| *block != 0)
+        {
             self.append_data_block(block, &mut remaining, &mut out)?;
             if remaining == 0 {
                 return Ok(out);
@@ -568,6 +604,16 @@ impl Ext2Fs {
                 self.append_data_block(block, &mut remaining, &mut out)?;
                 if remaining == 0 {
                     return Ok(out);
+                }
+            }
+        }
+        if remaining > 0 && inode.blocks[13] != 0 {
+            for indirect in self.read_indirect_blocks(inode.blocks[13])? {
+                for block in self.read_indirect_blocks(indirect)? {
+                    self.append_data_block(block, &mut remaining, &mut out)?;
+                    if remaining == 0 {
+                        return Ok(out);
+                    }
                 }
             }
         }
@@ -667,7 +713,7 @@ impl Ext2Fs {
     }
 
     fn inode_sector_count(&self, inode: &Inode) -> u32 {
-        let mut blocks = inode.blocks[..12]
+        let mut blocks = inode.blocks[..EXT2_DIRECT_BLOCKS]
             .iter()
             .filter(|block| **block != 0)
             .count();
@@ -677,11 +723,22 @@ impl Ext2Fs {
                 blocks += indirect.len();
             }
         }
+        if inode.blocks[13] != 0 {
+            blocks += 1;
+            if let Ok(double_indirect) = self.read_indirect_blocks(inode.blocks[13]) {
+                for indirect_block in double_indirect {
+                    blocks += 1;
+                    if let Ok(indirect) = self.read_indirect_blocks(indirect_block) {
+                        blocks += indirect.len();
+                    }
+                }
+            }
+        }
         (blocks * (self.block_size / 512)) as u32
     }
 
     fn read_indirect_blocks(&self, block: u32) -> Result<Vec<u32>, Ext2Error> {
-        let mut indirect = [0u8; 1024];
+        let mut indirect = vec![0u8; self.block_size];
         read_block_sized(block as u64, self.block_size, &mut indirect)?;
         let mut blocks = Vec::new();
         for offset in (0..self.block_size).step_by(4) {
@@ -694,7 +751,11 @@ impl Ext2Fs {
     }
 
     fn free_inode_blocks(&mut self, inode: &Inode) -> Result<(), Ext2Error> {
-        for block in inode.blocks[..12].iter().copied().filter(|block| *block != 0) {
+        for block in inode.blocks[..EXT2_DIRECT_BLOCKS]
+            .iter()
+            .copied()
+            .filter(|block| *block != 0)
+        {
             self.free_block(block)?;
         }
         if inode.blocks[12] != 0 {
@@ -702,6 +763,15 @@ impl Ext2Fs {
                 self.free_block(block)?;
             }
             self.free_block(inode.blocks[12])?;
+        }
+        if inode.blocks[13] != 0 {
+            for indirect in self.read_indirect_blocks(inode.blocks[13])? {
+                for block in self.read_indirect_blocks(indirect)? {
+                    self.free_block(block)?;
+                }
+                self.free_block(indirect)?;
+            }
+            self.free_block(inode.blocks[13])?;
         }
         Ok(())
     }

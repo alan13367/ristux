@@ -161,6 +161,14 @@ case "$SCENARIO" in
       "loopback_check: done"
     )
     ;;
+  dropbear)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-8}"
+    COMMANDS=("dropbear -F -E -R -p 127.0.0.1:2222")
+    EXPECTS=(
+      "TTY canonical line ready: dropbear -F -E -R -p 127.0.0.1:2222"
+      "Not backgrounding"
+    )
+    ;;
   command)
     shift
     if [[ $# -eq 0 ]]; then
@@ -176,7 +184,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, dropbear, command)" >&2
     exit 2
     ;;
 esac
@@ -188,6 +196,10 @@ send_text() {
     ch="${text:i:1}"
     case "$ch" in
       [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
+      [A-Z])
+        lower="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')"
+        printf 'sendkey shift-%s\n' "$lower"
+        ;;
       ' ') printf 'sendkey spc\n' ;;
       '|') printf 'sendkey shift-backslash\n' ;;
       '&') printf 'sendkey shift-7\n' ;;

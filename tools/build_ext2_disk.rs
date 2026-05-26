@@ -18,6 +18,7 @@ const INODES_COUNT: u32 = GROUP_COUNT * INODES_PER_GROUP;
 const INODE_TABLE_BLOCKS: u32 = (INODES_PER_GROUP * INODE_SIZE as u32) / BLOCK_SIZE as u32;
 const ROOT_INODE: u32 = 2;
 const FIRST_NORMAL_INODE: u32 = 11;
+const POINTERS_PER_BLOCK: usize = BLOCK_SIZE / 4;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EntryKind {
@@ -34,6 +35,7 @@ struct Entry {
     inode: u32,
     data_blocks: Vec<u32>,
     indirect_block: Option<u32>,
+    double_indirect_block: Option<u32>,
 }
 
 impl Entry {
@@ -47,6 +49,7 @@ impl Entry {
             inode: 0,
             data_blocks: Vec::new(),
             indirect_block: None,
+            double_indirect_block: None,
         }
     }
 
@@ -60,6 +63,7 @@ impl Entry {
             inode: 0,
             data_blocks: Vec::new(),
             indirect_block: None,
+            double_indirect_block: None,
         }
     }
 }
@@ -185,15 +189,40 @@ impl Builder {
                 let block = self.alloc_block();
                 blocks.push(block);
             }
-            let indirect = if blocks.len() > 12 {
+            let indirect_count = blocks.len().saturating_sub(12).min(POINTERS_PER_BLOCK);
+            let indirect = if indirect_count > 0 {
                 let indirect = self.alloc_block();
                 let mut block_data = [0u8; BLOCK_SIZE];
-                for (index, block) in blocks.iter().skip(12).enumerate() {
+                for (index, block) in blocks.iter().skip(12).take(indirect_count).enumerate() {
                     let offset = index * 4;
                     block_data[offset..offset + 4].copy_from_slice(&block.to_le_bytes());
                 }
                 self.write_block(indirect, &block_data);
                 Some(indirect)
+            } else {
+                None
+            };
+            let double_start = 12 + indirect_count;
+            let double_indirect = if blocks.len() > double_start {
+                let double_indirect = self.alloc_block();
+                let mut double_data = [0u8; BLOCK_SIZE];
+                for (index, chunk) in blocks[double_start..].chunks(POINTERS_PER_BLOCK).enumerate()
+                {
+                    if index >= POINTERS_PER_BLOCK {
+                        panic!("file {} too large for double-indirect ext2 builder", path);
+                    }
+                    let indirect = self.alloc_block();
+                    let mut indirect_data = [0u8; BLOCK_SIZE];
+                    for (block_index, block) in chunk.iter().enumerate() {
+                        let offset = block_index * 4;
+                        indirect_data[offset..offset + 4].copy_from_slice(&block.to_le_bytes());
+                    }
+                    self.write_block(indirect, &indirect_data);
+                    let offset = index * 4;
+                    double_data[offset..offset + 4].copy_from_slice(&indirect.to_le_bytes());
+                }
+                self.write_block(double_indirect, &double_data);
+                Some(double_indirect)
             } else {
                 None
             };
@@ -203,6 +232,7 @@ impl Builder {
             }
             entry.data_blocks = blocks;
             entry.indirect_block = indirect;
+            entry.double_indirect_block = double_indirect;
         }
     }
 
@@ -403,13 +433,13 @@ impl Builder {
                 EntryKind::File => 1,
                 EntryKind::Directory => 2 + self.immediate_subdir_count(path) as u16,
             };
-            let sectors = ((entry.data_blocks.len() + entry.indirect_block.iter().count()) * 2)
-                as u32;
+            let sectors = ((entry.data_blocks.len() + metadata_block_count(entry)) * 2) as u32;
             let mode = type_bits | entry.mode;
             let uid = entry.uid;
             let gid = entry.gid;
             let data_blocks = entry.data_blocks.clone();
             let indirect_block = entry.indirect_block;
+            let double_indirect_block = entry.double_indirect_block;
 
             let inode = &mut self.image[offset..offset + INODE_SIZE];
             put_u16(inode, 0, mode);
@@ -426,6 +456,9 @@ impl Builder {
             }
             if let Some(indirect) = indirect_block {
                 put_u32(inode, 40 + 12 * 4, indirect);
+            }
+            if let Some(double_indirect) = double_indirect_block {
+                put_u32(inode, 40 + 13 * 4, double_indirect);
             }
         }
     }
@@ -602,6 +635,15 @@ fn manifest_file_mode(path: &str) -> u16 {
     } else {
         0o644
     }
+}
+
+fn metadata_block_count(entry: &Entry) -> usize {
+    let indirect_data = entry.data_blocks.len().saturating_sub(12);
+    let single = usize::from(entry.indirect_block.is_some());
+    let double_data = indirect_data.saturating_sub(POINTERS_PER_BLOCK);
+    let double = usize::from(entry.double_indirect_block.is_some());
+    let double_children = double_data.div_ceil(POINTERS_PER_BLOCK);
+    single + double + double_children
 }
 
 fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -> String {

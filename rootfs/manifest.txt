@@ -33,6 +33,7 @@ file /bin/cc_tcp ../build/userland/cc_tcp.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/cc_uio ../build/userland/cc_uio.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
+file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
@@ -88,6 +89,7 @@ package cc_tty 0.1.0 /bin/cc_tty
 package cc_uio 0.1.0 /bin/cc_uio
 package chmod 0.1.0 /bin/chmod
 package curl_lite 0.1.0 /bin/curl_lite
+package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
