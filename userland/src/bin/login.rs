@@ -107,7 +107,8 @@ fn exec_shell(account: &Account) -> ! {
     let _ = sys::chdir(home.as_ptr());
 
     let shell = cstr(&account.shell);
-    let argv: [*const u8; 2] = [shell.as_ptr(), ptr::null()];
+    let argv0 = cstr(b"-sh");
+    let argv: [*const u8; 2] = [argv0.as_ptr(), ptr::null()];
     let envp: [*const u8; 1] = [ptr::null()];
     let _ = sys::execve(shell.as_ptr(), argv.as_ptr(), envp.as_ptr());
     let _ = sys::write(2, b"login: exec shell failed\n");

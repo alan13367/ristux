@@ -32,6 +32,7 @@ pub const NR_EXIT: usize = 60;
 pub const NR_WAIT4: usize = 61;
 pub const NR_KILL: usize = 62;
 pub const NR_GETCWD: usize = 79;
+pub const NR_GETDENTS64: usize = 217;
 pub const NR_CHDIR: usize = 80;
 pub const NR_GETUID: usize = 102;
 pub const NR_GETGID: usize = 104;
@@ -349,6 +350,11 @@ pub fn chdir(path: *const u8) -> isize {
 #[inline]
 pub fn getcwd(buf: *mut u8, len: usize) -> isize {
     unsafe { syscall2(NR_GETCWD, buf as usize, len) }
+}
+
+#[inline]
+pub fn getdents64(fd: i32, buf: &mut [u8]) -> isize {
+    unsafe { syscall3(NR_GETDENTS64, fd as usize, buf.as_mut_ptr() as usize, buf.len()) }
 }
 
 #[inline]

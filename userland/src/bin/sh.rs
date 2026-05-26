@@ -39,6 +39,11 @@ struct Stage {
     append_stdout: bool,
 }
 
+struct LexToken {
+    bytes: Vec<u8>,
+    has_unquoted_glob: bool,
+}
+
 impl ShellEnv {
     fn new() -> Self {
         let mut env = Self { vars: Vec::new() };
@@ -151,6 +156,29 @@ fn read_line(fd: i32) -> Option<Vec<u8>> {
     }
 }
 
+fn read_file(path: &[u8]) -> Option<Vec<u8>> {
+    let path = cstr(path);
+    let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut buf = [0u8; 256];
+    loop {
+        let n = sys::read(fd as i32, &mut buf);
+        if n < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n as usize]);
+    }
+    let _ = sys::close(fd as i32);
+    Some(out)
+}
+
 fn split_pipeline(line: &[u8]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut cur: Vec<u8> = Vec::new();
@@ -200,6 +228,118 @@ fn expand_tilde(token: Vec<u8>, env: &ShellEnv) -> Vec<u8> {
     token
 }
 
+fn split_glob_path(token: &[u8]) -> (Vec<u8>, Vec<u8>, &[u8]) {
+    if let Some(pos) = token.iter().rposition(|&b| b == b'/') {
+        let dir = if pos == 0 {
+            b"/".to_vec()
+        } else {
+            token[..pos].to_vec()
+        };
+        let mut prefix = token[..=pos].to_vec();
+        if prefix.is_empty() {
+            prefix.extend_from_slice(b"./");
+        }
+        (dir, prefix, &token[pos + 1..])
+    } else {
+        (b".".to_vec(), Vec::new(), token)
+    }
+}
+
+fn glob_match(pattern: &[u8], name: &[u8]) -> bool {
+    if name.starts_with(b".") && !pattern.starts_with(b".") {
+        return false;
+    }
+
+    let mut p = 0usize;
+    let mut n = 0usize;
+    let mut star: Option<usize> = None;
+    let mut retry = 0usize;
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = n;
+        } else if let Some(star_pos) = star {
+            p = star_pos + 1;
+            retry += 1;
+            n = retry;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+fn expand_glob(token: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let (dir, prefix, pattern) = split_glob_path(token);
+    if pattern.is_empty() {
+        return None;
+    }
+    let dir_path = cstr(&dir);
+    let fd = sys::open(dir_path.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+
+    let mut matches: Vec<Vec<u8>> = Vec::new();
+    let mut storage = [0u8; 512];
+    loop {
+        let nread = sys::getdents64(fd as i32, &mut storage);
+        if nread < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if nread == 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        while offset + 19 <= nread as usize {
+            let reclen = u16::from_le_bytes([storage[offset + 16], storage[offset + 17]]) as usize;
+            if reclen == 0 || offset + reclen > nread as usize {
+                break;
+            }
+            let name_start = offset + 19;
+            let name_end = storage[name_start..offset + reclen]
+                .iter()
+                .position(|&b| b == 0)
+                .map(|pos| name_start + pos)
+                .unwrap_or(offset + reclen);
+            let name = &storage[name_start..name_end];
+            if glob_match(pattern, name) {
+                let mut matched = Vec::with_capacity(prefix.len() + name.len());
+                matched.extend_from_slice(&prefix);
+                matched.extend_from_slice(name);
+                matches.push(matched);
+            }
+            offset += reclen;
+        }
+    }
+    let _ = sys::close(fd as i32);
+
+    if matches.is_empty() {
+        None
+    } else {
+        matches.sort();
+        Some(matches)
+    }
+}
+
+fn expand_argv_token(token: LexToken, env: &ShellEnv) -> Vec<Vec<u8>> {
+    let bytes = expand_tilde(token.bytes, env);
+    if token.has_unquoted_glob {
+        if let Some(matches) = expand_glob(&bytes) {
+            return matches;
+        }
+    }
+    vec![bytes]
+}
+
 fn push_var_expansion(
     out: &mut Vec<u8>,
     bytes: &[u8],
@@ -232,9 +372,20 @@ fn push_var_expansion(
     *index = end - 1;
 }
 
-fn lex_segment(segment: &[u8], env: &ShellEnv, last_status: i32) -> Vec<Vec<u8>> {
-    let mut tokens: Vec<Vec<u8>> = Vec::new();
+fn push_token(tokens: &mut Vec<LexToken>, cur: &mut Vec<u8>, has_unquoted_glob: &mut bool) {
+    if !cur.is_empty() {
+        tokens.push(LexToken {
+            bytes: core::mem::take(cur),
+            has_unquoted_glob: *has_unquoted_glob,
+        });
+        *has_unquoted_glob = false;
+    }
+}
+
+fn lex_segment(segment: &[u8], env: &ShellEnv, last_status: i32) -> Vec<LexToken> {
+    let mut tokens: Vec<LexToken> = Vec::new();
     let mut cur: Vec<u8> = Vec::new();
+    let mut has_unquoted_glob = false;
     let mut quote = 0u8;
     let mut i = 0;
     while i < segment.len() {
@@ -256,34 +407,39 @@ fn lex_segment(segment: &[u8], env: &ShellEnv, last_status: i32) -> Vec<Vec<u8>>
                 push_var_expansion(&mut cur, segment, &mut i, env, last_status)
             }
             b' ' | b'\t' if quote == 0 => {
-                if !cur.is_empty() {
-                    tokens.push(core::mem::take(&mut cur));
-                }
+                push_token(&mut tokens, &mut cur, &mut has_unquoted_glob);
             }
             b'<' | b'>' if quote == 0 => {
-                if !cur.is_empty() {
-                    tokens.push(core::mem::take(&mut cur));
-                }
+                push_token(&mut tokens, &mut cur, &mut has_unquoted_glob);
                 if b == b'>' && i + 1 < segment.len() && segment[i + 1] == b'>' {
-                    tokens.push(b">>".to_vec());
+                    tokens.push(LexToken {
+                        bytes: b">>".to_vec(),
+                        has_unquoted_glob: false,
+                    });
                     i += 1;
                 } else {
-                    tokens.push(vec![b]);
+                    tokens.push(LexToken {
+                        bytes: vec![b],
+                        has_unquoted_glob: false,
+                    });
                 }
             }
             b'&' if quote == 0 => {
-                if !cur.is_empty() {
-                    tokens.push(core::mem::take(&mut cur));
-                }
-                tokens.push(vec![b]);
+                push_token(&mut tokens, &mut cur, &mut has_unquoted_glob);
+                tokens.push(LexToken {
+                    bytes: vec![b],
+                    has_unquoted_glob: false,
+                });
+            }
+            b'*' | b'?' if quote == 0 => {
+                has_unquoted_glob = true;
+                cur.push(b);
             }
             _ => cur.push(b),
         }
         i += 1;
     }
-    if !cur.is_empty() {
-        tokens.push(cur);
-    }
+    push_token(&mut tokens, &mut cur, &mut has_unquoted_glob);
     tokens
 }
 
@@ -295,41 +451,49 @@ fn parse_stage(segment: &[u8], env: &mut ShellEnv, last_status: i32) -> (Stage, 
 
     let mut i = 0;
     while i < tokens.len() {
-        if tokens[i].as_slice() == b"&" && i + 1 == tokens.len() {
+        if tokens[i].bytes.as_slice() == b"&" && i + 1 == tokens.len() {
             background = true;
             i += 1;
             continue;
         }
-        if tokens[i].as_slice() == b"<" {
+        if tokens[i].bytes.as_slice() == b"<" {
             if i + 1 < tokens.len() {
-                stage.stdin_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
+                stage.stdin_path =
+                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
                 i += 2;
                 continue;
             }
         }
-        if tokens[i].as_slice() == b">" {
+        if tokens[i].bytes.as_slice() == b">" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
+                stage.stdout_path =
+                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
                 stage.append_stdout = false;
                 i += 2;
                 continue;
             }
         }
-        if tokens[i].as_slice() == b">>" {
+        if tokens[i].bytes.as_slice() == b">>" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
+                stage.stdout_path =
+                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
                 stage.append_stdout = true;
                 i += 2;
                 continue;
             }
         }
-        if stage.argv.is_empty() && env.assignment(tokens[i].as_slice()) {
+        if stage.argv.is_empty() && env.assignment(tokens[i].bytes.as_slice()) {
             i += 1;
             continue;
         }
-        let tok = expand_tilde(core::mem::take(&mut tokens[i]), env);
-        if !tok.is_empty() {
-            stage.argv.push(tok);
+        let token = LexToken {
+            bytes: core::mem::take(&mut tokens[i].bytes),
+            has_unquoted_glob: tokens[i].has_unquoted_glob,
+        };
+        for tok in expand_argv_token(token, env) {
+            if !tok.is_empty() {
+                stage.argv.push(tok);
+            }
         }
         i += 1;
     }
@@ -622,7 +786,50 @@ fn run_line(
     last_status
 }
 
-fn main(_args: &[&[u8]]) -> i32 {
+fn run_profile(
+    path: &[u8],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: &mut i32,
+) {
+    let Some(data) = read_file(path) else {
+        return;
+    };
+    for raw in data.split(|byte| *byte == b'\n') {
+        let line = raw
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != b'\r')
+            .collect::<Vec<u8>>();
+        let trimmed = line
+            .iter()
+            .position(|byte| *byte != b' ' && *byte != b'\t')
+            .map(|start| &line[start..])
+            .unwrap_or(&[]);
+        if trimmed.is_empty() || trimmed.starts_with(b"#") {
+            continue;
+        }
+        *last_status = run_line(trimmed, jobs, next_job_id, env, *last_status);
+    }
+}
+
+fn run_login_profiles(
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: &mut i32,
+) {
+    run_profile(b"/etc/profile", jobs, next_job_id, env, last_status);
+    if let Some(home) = env.get(b"HOME") {
+        let mut profile = Vec::with_capacity(home.len() + b"/.profile".len());
+        profile.extend_from_slice(home);
+        profile.extend_from_slice(b"/.profile");
+        run_profile(&profile, jobs, next_job_id, env, last_status);
+    }
+}
+
+fn main(args: &[&[u8]]) -> i32 {
     let _ = sys::setpgid(0, 0);
     let shell_pgrp = sys::getpgrp();
     set_tty_foreground(shell_pgrp);
@@ -630,6 +837,14 @@ fn main(_args: &[&[u8]]) -> i32 {
     let mut next_job_id = 1usize;
     let mut env = ShellEnv::new();
     let mut last_status = 0;
+    let login_shell = args
+        .first()
+        .map(|arg| arg.starts_with(b"-") || *arg == b"-l")
+        .unwrap_or(false)
+        || args.iter().any(|arg| *arg == b"--login");
+    if login_shell {
+        run_login_profiles(&mut jobs, &mut next_job_id, &mut env, &mut last_status);
+    }
     loop {
         let prompt = env.get(b"PS1").unwrap_or(PS1);
         let _ = sys::write(FD_STDOUT, prompt);

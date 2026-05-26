@@ -556,8 +556,22 @@ fn main() {
         0,
     );
     builder.add_file(
+        "/etc/profile",
+        b"# Ristux system profile\nexport system_profile=profile-system\n".to_vec(),
+        0o644,
+        0,
+        0,
+    );
+    builder.add_file(
+        "/root/.profile",
+        b"# Ristux root profile\nexport user_profile=profile-root\n".to_vec(),
+        0o600,
+        0,
+        0,
+    );
+    builder.add_file(
         "/home/alice/.profile",
-        b"# Ristux user profile\n".to_vec(),
+        b"# Ristux user profile\nexport user_profile=profile-alice\n".to_vec(),
         0o644,
         1000,
         1000,
