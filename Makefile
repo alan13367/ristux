@@ -140,7 +140,7 @@ ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
 ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
 ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
 ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc $(ROOTFS_BASE_PACKAGE_ARCHIVE)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
 .PHONY: all build rootfs disk dropbear-port check-multiboot iso run run-headless smoke quick quick-% debug test clean
 

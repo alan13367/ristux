@@ -79,6 +79,22 @@ fn main() {
                     });
                 }
             }
+            ["package-tree", name, version, source, prefix, options @ ..] => {
+                let (dependencies, post_install) = parse_package_options(options);
+                let source = manifest_dir.join(source);
+                for file in collect_tree_files(&source, prefix) {
+                    let path = file.path;
+                    let data = file.data;
+                    insert_file(&mut files, path.clone(), data);
+                    packages.push(PackageEntry {
+                        name: (*name).to_owned(),
+                        version: (*version).to_owned(),
+                        path,
+                        dependencies: dependencies.clone(),
+                        post_install: post_install.clone(),
+                    });
+                }
+            }
             _ => panic!("invalid rootfs manifest line {}: {}", line_index + 1, line),
         }
     }
@@ -174,6 +190,46 @@ fn insert_file(files: &mut Vec<FileEntry>, path: String, data: Vec<u8>) {
         file.data = data;
     } else {
         files.push(FileEntry { path, data });
+    }
+}
+
+fn collect_tree_files(source: &Path, prefix: &str) -> Vec<FileEntry> {
+    let mut files = Vec::new();
+    collect_tree_files_inner(source, source, prefix.trim_end_matches('/'), &mut files);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+fn collect_tree_files_inner(root: &Path, current: &Path, prefix: &str, files: &mut Vec<FileEntry>) {
+    let mut entries = fs::read_dir(current)
+        .unwrap_or_else(|err| panic!("read package tree {}: {}", current.display(), err))
+        .map(|entry| entry.expect("read package tree entry"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .unwrap_or_else(|err| panic!("stat package tree {}: {}", path.display(), err));
+        if kind.is_dir() {
+            collect_tree_files_inner(root, &path, prefix, files);
+        } else if kind.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .expect("package tree path escaped root")
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            let target = if prefix.is_empty() {
+                format!("/{}", relative)
+            } else {
+                format!("{}/{}", prefix, relative)
+            };
+            files.push(FileEntry {
+                path: target,
+                data: fs::read(&path)
+                    .unwrap_or_else(|err| panic!("read package tree {}: {}", path.display(), err)),
+            });
+        }
     }
 }
 
