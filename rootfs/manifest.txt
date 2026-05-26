@@ -4,6 +4,7 @@ file /bin/init ../build/userland/init.elf
 file /bin/sh ../build/userland/sh.elf
 file /bin/ansi_demo ../build/userland/ansi_demo.elf
 file /bin/ar ../build/userland/ar.elf
+file /bin/basename ../build/userland/basename.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/cp ../build/userland/cp.elf
@@ -36,6 +37,7 @@ file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/cc_uio ../build/userland/cc_uio.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/dbclient ../build/userland/dbclient.elf
+file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
@@ -90,6 +92,7 @@ package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
+package basename 0.1.0 /bin/basename
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow
@@ -122,6 +125,7 @@ package chmod 0.1.0 /bin/chmod
 package cp 0.1.0 /bin/cp
 package curl_lite 0.1.0 /bin/curl_lite
 package dbclient 2026.91 /bin/dbclient
+package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit
 package echo 0.1.0 /bin/echo
