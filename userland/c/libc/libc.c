@@ -119,11 +119,12 @@ static sighandler_t signal_handlers[32];
 
 struct FILE {
     int fd;
+    int owned;
 };
 
-static FILE stdin_file = { 0 };
-static FILE stdout_file = { 1 };
-static FILE stderr_file = { 2 };
+static FILE stdin_file = { 0, 0 };
+static FILE stdout_file = { 1, 0 };
+static FILE stderr_file = { 2, 0 };
 FILE *stdin = &stdin_file;
 FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
@@ -876,6 +877,38 @@ pid_t setsid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_SETSID));
 }
 
+int daemon(int nochdir, int noclose) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid > 0) {
+        _exit(0);
+    }
+    if (setsid() < 0) {
+        return -1;
+    }
+    if (!nochdir && chdir("/") < 0) {
+        return -1;
+    }
+    if (!noclose) {
+        int fd = open("/dev/null", O_RDWR, 0);
+        if (fd < 0) {
+            return -1;
+        }
+        if (dup2(fd, STDIN_FILENO) < 0 ||
+            dup2(fd, STDOUT_FILENO) < 0 ||
+            dup2(fd, STDERR_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        if (fd > STDERR_FILENO) {
+            close(fd);
+        }
+    }
+    return 0;
+}
+
 uid_t getuid(void) {
     return (uid_t)syscall_ret(syscall0(SYS_GETUID));
 }
@@ -1413,28 +1446,100 @@ int kill(int pid, int sig) {
 }
 
 static void signal_trampoline(unsigned long signum, unsigned long frame) {
-    if (signum < 32 && signal_handlers[signum] != NULL) {
-        signal_handlers[signum]((int)signum);
+    if (signum < 32) {
+        sighandler_t handler = signal_handlers[signum];
+        if (handler != NULL && handler != SIG_IGN) {
+            handler((int)signum);
+        }
     }
     syscall1(SYS_RT_SIGRETURN, (long)frame);
     for (;;) {
     }
 }
 
-sighandler_t signal(int signum, sighandler_t handler) {
+static int valid_signal_number(int signum) {
+    return signum > 0 && signum < 32;
+}
+
+int sigemptyset(sigset_t *set) {
+    if (set == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set = 0;
+    return 0;
+}
+
+int sigfillset(sigset_t *set) {
+    if (set == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set = ~0UL;
+    return 0;
+}
+
+int sigaddset(sigset_t *set, int signum) {
+    if (set == NULL || !valid_signal_number(signum)) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set |= 1UL << signum;
+    return 0;
+}
+
+int sigdelset(sigset_t *set, int signum) {
+    if (set == NULL || !valid_signal_number(signum)) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set &= ~(1UL << signum);
+    return 0;
+}
+
+int sigismember(const sigset_t *set, int signum) {
+    if (set == NULL || !valid_signal_number(signum)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ((*set & (1UL << signum)) != 0) ? 1 : 0;
+}
+
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
     if (signum <= 0 || signum >= 32) {
         errno = EINVAL;
-        return SIG_ERR;
+        return -1;
     }
     sighandler_t old = signal_handlers[signum];
-    signal_handlers[signum] = handler;
-    void *kernel_handler = (void *)signal_trampoline;
+    if (oldact != NULL) {
+        oldact->sa_handler = old;
+        oldact->sa_mask = 0;
+        oldact->sa_flags = 0;
+    }
+    if (act == NULL) {
+        return 0;
+    }
+
+    signal_handlers[signum] = act->sa_handler;
+    void *kernel_handler = act->sa_handler == SIG_DFL ? NULL : (void *)signal_trampoline;
     long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_handler, 0);
     if (syscall_ret(ret) < 0) {
         signal_handlers[signum] = old;
+        return -1;
+    }
+    return 0;
+}
+
+sighandler_t signal(int signum, sighandler_t handler) {
+    struct sigaction act;
+    struct sigaction oldact;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    act.sa_handler = handler;
+    if (sigaction(signum, &act, &oldact) < 0) {
         return SIG_ERR;
     }
-    return old;
+    return oldact.sa_handler;
 }
 
 time_t time(time_t *tloc) {
@@ -2171,6 +2276,173 @@ int fprintf(FILE *stream, const char *fmt, ...) {
     int ret = vfprintf(stream, fmt, ap);
     va_end(ap);
     return ret;
+}
+
+static int stdio_mode_flags(const char *mode) {
+    if (mode == NULL || mode[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    int plus = strchr(mode, '+') != NULL;
+    switch (mode[0]) {
+    case 'r':
+        return plus ? O_RDWR : O_RDONLY;
+    case 'w':
+        return (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC;
+    case 'a':
+        return (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+FILE *fdopen(int fd, const char *mode) {
+    if (fd < 0 || stdio_mode_flags(mode) < 0) {
+        if (errno == 0) {
+            errno = EBADF;
+        }
+        return NULL;
+    }
+    FILE *stream = malloc(sizeof(FILE));
+    if (stream == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    stream->fd = fd;
+    stream->owned = 1;
+    return stream;
+}
+
+FILE *fopen(const char *path, const char *mode) {
+    int flags = stdio_mode_flags(mode);
+    if (flags < 0) {
+        return NULL;
+    }
+    int fd = open(path, flags, 0644);
+    if (fd < 0) {
+        return NULL;
+    }
+    FILE *stream = fdopen(fd, mode);
+    if (stream == NULL) {
+        close(fd);
+        return NULL;
+    }
+    return stream;
+}
+
+int fclose(FILE *stream) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    int ret = 0;
+    if (stream->owned) {
+        ret = close(stream->fd);
+        free(stream);
+    }
+    return ret;
+}
+
+int fflush(FILE *stream) {
+    (void)stream;
+    return 0;
+}
+
+int fileno(FILE *stream) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return stream->fd;
+}
+
+int fputc(int ch, FILE *stream) {
+    unsigned char byte = (unsigned char)ch;
+    if (stream == NULL || write(stream->fd, &byte, 1) != 1) {
+        return EOF;
+    }
+    return byte;
+}
+
+int fputs(const char *s, FILE *stream) {
+    if (s == NULL || stream == NULL) {
+        errno = EINVAL;
+        return EOF;
+    }
+    size_t len = strlen(s);
+    return write(stream->fd, s, len) == (ssize_t)len ? 0 : EOF;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (ptr == NULL || stream == NULL || size == 0 || nmemb == 0) {
+        return 0;
+    }
+    size_t total = size * nmemb;
+    ssize_t written = write(stream->fd, ptr, total);
+    if (written <= 0) {
+        return 0;
+    }
+    return (size_t)written / size;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (ptr == NULL || stream == NULL || size == 0 || nmemb == 0) {
+        return 0;
+    }
+    size_t total = size * nmemb;
+    ssize_t got = read(stream->fd, ptr, total);
+    if (got <= 0) {
+        return 0;
+    }
+    return (size_t)got / size;
+}
+
+int fgetc(FILE *stream) {
+    unsigned char byte;
+    if (stream == NULL || read(stream->fd, &byte, 1) != 1) {
+        return EOF;
+    }
+    return byte;
+}
+
+char *fgets(char *s, int size, FILE *stream) {
+    if (s == NULL || stream == NULL || size <= 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int pos = 0;
+    while (pos + 1 < size) {
+        int ch = fgetc(stream);
+        if (ch == EOF) {
+            break;
+        }
+        s[pos++] = (char)ch;
+        if (ch == '\n') {
+            break;
+        }
+    }
+    if (pos == 0) {
+        return NULL;
+    }
+    s[pos] = '\0';
+    return s;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return lseek(stream->fd, offset, whence) < 0 ? -1 : 0;
+}
+
+long ftell(FILE *stream) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return (long)lseek(stream->fd, 0, SEEK_CUR);
 }
 
 int vprintf(const char *fmt, va_list ap) {

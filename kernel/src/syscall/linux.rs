@@ -1429,6 +1429,7 @@ fn linux_wait4(
     status_ptr: usize,
     options: i32,
 ) -> Result<u64, i64> {
+    const WNOHANG: i32 = 1;
     const WUNTRACED: i32 = 2;
     let parent = process::current_pid().ok_or(ESRCH)?;
     let child = if pid == u64::MAX || pid as i64 == -1 {
@@ -1455,6 +1456,9 @@ fn linux_wait4(
             None => {
                 if !process::has_child(parent, child) {
                     return Err(ESRCH);
+                }
+                if options & WNOHANG != 0 {
+                    return Ok(0);
                 }
                 process::block_current(process::BlockReason::WaitChild(child));
                 if !crate::syscall::yield_blocked(frame) {

@@ -165,6 +165,49 @@ static int check_dropbear_types(void) {
     return 0;
 }
 
+static int check_stdio_file(void) {
+    FILE *fp = fopen("/tmp/cc_libc_stdio.txt", "w");
+    if (fp == NULL) {
+        puts("cc_libc_compat: fopen write failed");
+        return 1;
+    }
+    if (fprintf(fp, "alpha %d\n", 7) < 0 ||
+        fputs("beta", fp) == EOF ||
+        fputc('\n', fp) == EOF ||
+        fwrite("gamma\n", 1, 6, fp) != 6 ||
+        fileno(fp) < 0 ||
+        fflush(fp) < 0 ||
+        fclose(fp) < 0) {
+        puts("cc_libc_compat: stdio write failed");
+        return 1;
+    }
+
+    fp = fopen("/tmp/cc_libc_stdio.txt", "r");
+    if (fp == NULL) {
+        puts("cc_libc_compat: fopen read failed");
+        return 1;
+    }
+    char line[32];
+    if (fgets(line, sizeof(line), fp) == NULL ||
+        strcmp(line, "alpha 7\n") != 0 ||
+        fgetc(fp) != 'b' ||
+        fseek(fp, 0, SEEK_SET) < 0 ||
+        ftell(fp) != 0) {
+        puts("cc_libc_compat: stdio read failed");
+        fclose(fp);
+        return 1;
+    }
+    char bytes[6];
+    if (fread(bytes, 1, sizeof(bytes), fp) != sizeof(bytes) ||
+        memcmp(bytes, "alpha ", sizeof(bytes)) != 0 ||
+        fclose(fp) < 0) {
+        puts("cc_libc_compat: stdio fread failed");
+        return 1;
+    }
+    puts("cc_libc_compat: stdio file ok");
+    return 0;
+}
+
 int main(void) {
     assert(PATH_MAX >= 1024);
     if (check_ctype() != 0 ||
@@ -174,7 +217,8 @@ int main(void) {
         check_path() != 0 ||
         check_resource_syslog() != 0 ||
         check_setjmp() != 0 ||
-        check_dropbear_types() != 0) {
+        check_dropbear_types() != 0 ||
+        check_stdio_file() != 0) {
         return 1;
     }
     puts("cc_libc_compat: done");

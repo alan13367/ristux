@@ -56,6 +56,7 @@ ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 int chown(const char *path, uid_t owner, gid_t group);
 int brk(void *addr);
 void *sbrk(long increment);
+int daemon(int nochdir, int noclose);
 void _exit(int status) __attribute__((noreturn));
 
 #endif

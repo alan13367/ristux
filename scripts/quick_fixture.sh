@@ -90,6 +90,7 @@ case "$SCENARIO" in
       "cc_libc_compat: resource syslog ok"
       "cc_libc_compat: setjmp ok"
       "cc_libc_compat: dropbear types ok"
+      "cc_libc_compat: stdio file ok"
       "cc_libc_compat: done"
     )
     ;;
@@ -98,6 +99,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_session: leader rejection ok"
       "cc_session: child setsid ok"
+      "cc_session: wait nohang ok"
       "cc_session: done"
     )
     ;;

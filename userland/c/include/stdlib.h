@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+
 void exit(int status) __attribute__((noreturn));
 void abort(void) __attribute__((noreturn));
 void *malloc(size_t size);
