@@ -2376,6 +2376,7 @@ fn format_proc_status(pid: u64) -> alloc::string::String {
         crate::process::ProcessState::Ready => "ready",
         crate::process::ProcessState::Running => "running",
         crate::process::ProcessState::Blocked(_) => "blocked",
+        crate::process::ProcessState::Stopped(_) => "stopped",
         crate::process::ProcessState::Zombie(_) => "zombie",
     };
     alloc::format!(

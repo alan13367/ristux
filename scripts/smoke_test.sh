@@ -214,6 +214,30 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "sleep 60"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  printf 'sendkey ctrl-z\n'
+  sleep 4
+  send_text "jobs"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "bg"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "fg"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  printf 'sendkey ctrl-c\n'
+  sleep 4
+  send_text "echo after ctrlz"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "ping 10.0.2.2"
   sleep 1
   printf 'sendkey ret\n'
@@ -402,6 +426,13 @@ grep -q "TTY canonical line ready: fg" "$SERIAL_LOG"
 grep -q "TTY delivered signal 2 to foreground pgrp" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo after ctrlc" "$SERIAL_LOG"
 grep -q "after ctrlc" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: sleep 60" "$SERIAL_LOG"
+grep -q "TTY delivered signal 20 to foreground pgrp" "$SERIAL_LOG"
+grep -q "\\[2\\] Stopped sleep 60" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: bg" "$SERIAL_LOG"
+grep -q "\\[2\\] Running sleep 60" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo after ctrlz" "$SERIAL_LOG"
+grep -q "after ctrlz" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: ping 10.0.2.2" "$SERIAL_LOG"
 grep -q "1 packets transmitted, 1 received" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: curl_lite http://10.0.2.2/" "$SERIAL_LOG"

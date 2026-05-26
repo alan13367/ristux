@@ -91,8 +91,8 @@ The current Linux-like syscall surface is:
 | 57 | `fork` | Copy-on-write user address-space clone. |
 | 59 | `execve` | Replaces image and preserves descriptors. |
 | 60 | `exit` | Terminates the current process. |
-| 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15. |
-| 62 | `kill` | Sends process signals. |
+| 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15 and stopped children as `WIFSTOPPED` when `WUNTRACED` is set. |
+| 62 | `kill` | Sends process signals, including `SIGCONT` to resume stopped jobs. |
 | 72 | `fcntl` | `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`. |
 | 78 | `getdents` | Alias of the `getdents64` implementation. |
 | 79 | `getcwd` | Copies the current working directory. |
@@ -159,9 +159,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
   and slave descriptors are pollable byte streams with hangup/error readiness
   when their peer closes.
-- Shell: `/bin/sh` supports pipelines, redirects, background jobs, `jobs`, `fg`,
-  `bg`, `cd`, quote-aware tokenization, unquoted `*`/`?` globbing, `$name` and
-  `$?` expansion, `~` expansion through `HOME`, login profile sourcing from
+- Shell: `/bin/sh` supports pipelines, redirects, background jobs, stopped jobs
+  via Ctrl-Z/`SIGTSTP`, `jobs`, `fg`, `bg`, `SIGCONT` resume, `cd`,
+  quote-aware tokenization, unquoted `*`/`?` globbing, `$name` and `$?`
+  expansion, `~` expansion through `HOME`, login profile sourcing from
   `/etc/profile` and `$HOME/.profile`, and `export NAME=value` environment
   propagation.
 - Editor: `/bin/edit` is a tiny line editor with append, insert, delete, print,

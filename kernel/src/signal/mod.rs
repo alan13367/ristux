@@ -6,6 +6,7 @@ pub enum Signal {
     Kill,
     Int,
     Tstp,
+    Cont,
     Quit,
     Child,
 }
@@ -17,6 +18,7 @@ impl Signal {
             9 => Some(Self::Kill),
             2 => Some(Self::Int),
             20 => Some(Self::Tstp),
+            18 => Some(Self::Cont),
             3 => Some(Self::Quit),
             17 => Some(Self::Child),
             _ => None,
@@ -29,6 +31,7 @@ impl Signal {
             Self::Kill => 9,
             Self::Int => 2,
             Self::Tstp => 20,
+            Self::Cont => 18,
             Self::Quit => 3,
             Self::Child => 17,
         }
@@ -48,6 +51,7 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
         Signal::Kill | Signal::Term | Signal::Int | Signal::Tstp | Signal::Quit => {
             process::signal(pid, signal.default_status())
         }
+        Signal::Cont => process::continue_process(pid),
         Signal::Child => {
             if let Some((_, _, parent, _)) = process::get_process_info(pid) {
                 if let Some(parent) = parent {
@@ -64,6 +68,15 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
             pid,
             signal.default_status()
         );
+    }
+    delivered
+}
+
+pub fn send_pgrp(pgrp: process::Pid, signal: Signal) -> bool {
+    let pids = process::pids_in_pgrp(pgrp);
+    let mut delivered = false;
+    for pid in pids {
+        delivered |= send(pid, signal);
     }
     delivered
 }

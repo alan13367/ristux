@@ -263,6 +263,13 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
     let Some((pid, signum, status)) = process::take_pending_signal_current() else {
         return false;
     };
+    if signum == crate::signal::Signal::Tstp.number() as usize {
+        let saved = saved_from_linux_frame(frame);
+        process::save_syscall_frame(pid, &saved);
+        process::stop_current_signal(pid, signum as u8);
+        let _ = crate::syscall::yield_until_runnable(frame);
+        return true;
+    }
     if signum != 0 {
         if let Some(handler) = process::signal_handler(pid, signum) {
             if handler != 0 && deliver_signal_handler(frame, signum, handler).is_ok() {
@@ -1064,25 +1071,32 @@ fn linux_wait4(
     frame: &mut SyscallInterruptFrame,
     pid: u64,
     status_ptr: usize,
-    _options: i32,
+    options: i32,
 ) -> Result<u64, i64> {
+    const WUNTRACED: i32 = 2;
     let parent = process::current_pid().ok_or(ESRCH)?;
     let child = if pid == u64::MAX || pid as i64 == -1 {
         0 // wait for any child
     } else {
         pid
     };
+    let include_stopped = options & WUNTRACED != 0;
 
     loop {
-        match process::wait_any(parent, child) {
-            Some((reaped_pid, status)) => {
+        match process::wait_any(parent, child, include_stopped) {
+            Some((waited_pid, status)) => {
                 if status_ptr != 0 {
                     if let Some(out) = process::write_user_buffer(status_ptr, 4) {
-                        let encoded = (status & 0xff) << 8;
+                        let encoded = match status {
+                            process::WaitStatus::Exited(status) => (status & 0xff) << 8,
+                            process::WaitStatus::Stopped(signal) => {
+                                ((signal as i32) << 8) | 0x7f
+                            }
+                        };
                         out.copy_from_slice(&(encoded as u32).to_le_bytes());
                     }
                 }
-                return Ok(reaped_pid as u64);
+                return Ok(waited_pid as u64);
             }
             None => {
                 if !process::has_child(parent, child) {
@@ -1583,10 +1597,10 @@ fn write_linux_stat(
 fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     let signal = crate::signal::Signal::from_number(sig).ok_or(EINVAL)?;
     let delivered = if pid < 0 {
-        process::signal_pgrp((-pid) as u64, signal.default_status())
+        crate::signal::send_pgrp((-pid) as u64, signal)
     } else if pid == 0 {
         process::current_pgrp()
-            .map(|pgrp| process::signal_pgrp(pgrp, signal.default_status()))
+            .map(|pgrp| crate::signal::send_pgrp(pgrp, signal))
             .unwrap_or(false)
     } else {
         crate::signal::send(pid as u64, signal)

@@ -29,6 +29,7 @@ pub enum ProcessState {
     Ready,
     Running,
     Blocked(BlockReason),
+    Stopped(u8),
     Zombie(i32),
 }
 
@@ -104,6 +105,12 @@ pub struct SavedSyscallFrame {
 pub struct ProcessTable {
     processes: Vec<Process>,
     next_pid: Pid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WaitStatus {
+    Exited(i32),
+    Stopped(u8),
 }
 
 impl Process {
@@ -533,6 +540,57 @@ impl ProcessTable {
         wake
     }
 
+    fn wake_waiters_for(&mut self, pid: Pid) -> Vec<Pid> {
+        let mut wake = Vec::new();
+        let waiters = self
+            .get_mut(pid)
+            .map(|process| core::mem::take(&mut process.waiters))
+            .unwrap_or_default();
+        for waiter in waiters {
+            if let Some(parent) = self.get_mut(waiter) {
+                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
+                {
+                    parent.state = ProcessState::Ready;
+                    wake.push(waiter);
+                }
+            }
+        }
+        if let Some(parent) = self.get(pid).and_then(|p| p.parent) {
+            if let Some(parent_proc) = self.get_mut(parent) {
+                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
+                {
+                    parent_proc.state = ProcessState::Ready;
+                    wake.push(parent);
+                }
+            }
+        }
+        wake
+    }
+
+    fn stop(&mut self, pid: Pid, signal: u8) -> Option<Vec<Pid>> {
+        let process = self.get_mut(pid)?;
+        if matches!(process.state, ProcessState::Zombie(_)) {
+            return Some(Vec::new());
+        }
+        process.state = ProcessState::Stopped(signal);
+        process.exit_status = None;
+        if current_pid() == Some(pid) {
+            clear_current();
+        }
+        Some(self.wake_waiters_for(pid))
+    }
+
+    fn continue_process(&mut self, pid: Pid) -> bool {
+        let Some(process) = self.get_mut(pid) else {
+            return false;
+        };
+        if matches!(process.state, ProcessState::Stopped(_)) {
+            process.state = ProcessState::Ready;
+            return true;
+        }
+        !matches!(process.state, ProcessState::Zombie(_))
+    }
+
     fn wait(&mut self, parent: Pid, child: Pid) -> Option<i32> {
         let state = self.get(child).map(|p| p.state);
         match state {
@@ -571,6 +629,9 @@ impl ProcessTable {
             }
             Some(Vec::new())
         } else if self.get(pid).is_some() {
+            if status == crate::signal::Signal::Tstp.default_status() {
+                return self.stop(pid, crate::signal::Signal::Tstp.number());
+            }
             Some(self.exit(pid, status))
         } else {
             None
@@ -734,6 +795,26 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     }
 }
 
+pub fn stop_current_signal(pid: Pid, signal: u8) -> bool {
+    let wake = with_table(|table| table.stop(pid, signal));
+    if let Some(wake) = wake {
+        for pid in wake {
+            scheduler::wake_blocked(pid);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub fn continue_process(pid: Pid) -> bool {
+    let continued = with_table(|table| table.continue_process(pid));
+    if continued {
+        scheduler::wake_blocked(pid);
+    }
+    continued
+}
+
 pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
     let pid = current_pid()?;
     let status = with_table(|table| {
@@ -750,8 +831,8 @@ pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
     Some((pid, signum, status))
 }
 
-pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
-    let pids = with_table(|table| {
+pub fn pids_in_pgrp(pgrp: Pid) -> Vec<Pid> {
+    with_table(|table| {
         table
             .processes
             .iter()
@@ -760,7 +841,11 @@ pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
             })
             .map(|process| process.pid)
             .collect::<Vec<_>>()
-    });
+    })
+}
+
+pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
+    let pids = pids_in_pgrp(pgrp);
     let mut delivered = false;
     for pid in pids {
         delivered |= signal(pid, status);
@@ -851,7 +936,7 @@ pub fn mark_ready(pid: Pid) -> bool {
         let Some(process) = table.get_mut(pid) else {
             return false;
         };
-        if matches!(process.state, ProcessState::Zombie(_)) {
+        if matches!(process.state, ProcessState::Zombie(_) | ProcessState::Stopped(_)) {
             return false;
         }
         process.state = ProcessState::Ready;
@@ -1536,10 +1621,30 @@ pub fn current_heap_break() -> usize {
     with_current_read(|p| p.address_space.heap_break).unwrap_or(0)
 }
 
-/// Wait for any child matching `child` (0 = any). Returns Some((pid, status)) when
-/// a zombie child is reaped, None otherwise.
-pub fn wait_any(parent: Pid, child: Pid) -> Option<(Pid, i32)> {
+/// Wait for any child matching `child` (0 = any). Zombies are reaped; stopped
+/// children are reported when requested and left waitable for a later `fg`.
+pub fn wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, WaitStatus)> {
     with_table(|table| {
+        if include_stopped {
+            let stopped = table
+                .processes
+                .iter()
+                .find(|p| {
+                    p.parent == Some(parent)
+                        && (child == 0 || p.pid == child)
+                        && matches!(p.state, ProcessState::Stopped(_))
+                })
+                .map(|p| {
+                    let ProcessState::Stopped(signal) = p.state else {
+                        unreachable!();
+                    };
+                    (p.pid, signal)
+                });
+            if let Some((pid, signal)) = stopped {
+                return Some((pid, WaitStatus::Stopped(signal)));
+            }
+        }
+
         let candidates: Vec<Pid> = table
             .processes
             .iter()
@@ -1556,7 +1661,7 @@ pub fn wait_any(parent: Pid, child: Pid) -> Option<(Pid, i32)> {
                 _ => return None,
             };
             table.reap(zombie_pid);
-            return Some((zombie_pid, status));
+            return Some((zombie_pid, WaitStatus::Exited(status)));
         }
         None
     })

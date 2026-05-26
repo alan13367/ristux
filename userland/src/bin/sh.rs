@@ -15,11 +15,26 @@ const FD_STDIN: i32 = 0;
 const FD_STDOUT: i32 = 1;
 const FD_STDERR: i32 = 2;
 const TIOCSPGRP: usize = 0x5410;
+const WUNTRACED: i32 = 2;
+const STOPPED_STATUS: i32 = 0x7f;
+const SIGCONT: u8 = 18;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum JobState {
+    Running,
+    Stopped,
+}
 
 struct Job {
     id: usize,
     pid: isize,
     command: Vec<u8>,
+    state: JobState,
+}
+
+enum ForegroundResult {
+    Exited(i32),
+    Stopped(u8),
 }
 
 struct EnvVar {
@@ -511,22 +526,40 @@ fn set_tty_foreground(pgrp: isize) {
     let _ = sys::ioctl(FD_STDIN, TIOCSPGRP, &raw as *const u32 as usize);
 }
 
-fn wait_foreground(pid: isize) -> i32 {
+fn wait_foreground(pid: isize) -> ForegroundResult {
     let mut status: i32 = 0;
-    let r = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    let r = sys::wait4(pid, &mut status as *mut i32, WUNTRACED, 0);
     if r >= 0 {
-        (status >> 8) & 0xff
+        if (status & 0xff) == STOPPED_STATUS {
+            ForegroundResult::Stopped(((status >> 8) & 0xff) as u8)
+        } else {
+            ForegroundResult::Exited((status >> 8) & 0xff)
+        }
     } else {
-        1
+        ForegroundResult::Exited(1)
     }
 }
 
 fn print_job(job: &Job) {
     let _ = sys::write(FD_STDOUT, b"[");
     write_number(FD_STDOUT, job.id as isize);
-    let _ = sys::write(FD_STDOUT, b"] Running ");
+    let state: &[u8] = match job.state {
+        JobState::Running => b"] Running ",
+        JobState::Stopped => b"] Stopped ",
+    };
+    let _ = sys::write(FD_STDOUT, state);
     let _ = sys::write(FD_STDOUT, &job.command);
     let _ = sys::write(FD_STDOUT, b"\n");
+}
+
+fn stopped_status(signal: u8) -> i32 {
+    128 + signal as i32
+}
+
+fn continue_job(job: &Job) {
+    if job.pid > 0 {
+        let _ = sys::kill(-job.pid, SIGCONT);
+    }
 }
 
 fn builtin(stage: &Stage, jobs: &mut Vec<Job>, env: &mut ShellEnv) -> Option<i32> {
@@ -580,18 +613,36 @@ fn builtin(stage: &Stage, jobs: &mut Vec<Job>, env: &mut ShellEnv) -> Option<i32
             Some(0)
         }
         b"fg" => {
-            let Some(job) = jobs.pop() else {
+            let Some(mut job) = jobs.pop() else {
                 let _ = sys::write(FD_STDERR, b"fg: no current job\n");
                 return Some(1);
             };
             let shell_pgrp = sys::getpgrp();
             set_tty_foreground(job.pid);
-            let status = wait_foreground(job.pid);
+            if job.state == JobState::Stopped {
+                continue_job(&job);
+            }
+            let result = wait_foreground(job.pid);
             set_tty_foreground(shell_pgrp);
+            let status = match result {
+                ForegroundResult::Exited(status) => status,
+                ForegroundResult::Stopped(signal) => {
+                    job.state = JobState::Stopped;
+                    jobs.push(job);
+                    if let Some(job) = jobs.last() {
+                        print_job(job);
+                    }
+                    stopped_status(signal)
+                }
+            };
             Some(status)
         }
         b"bg" => {
-            if let Some(job) = jobs.last() {
+            if let Some(job) = jobs.last_mut() {
+                if job.state == JobState::Stopped {
+                    continue_job(job);
+                    job.state = JobState::Running;
+                }
                 print_job(job);
                 Some(0)
             } else {
@@ -765,6 +816,7 @@ fn run_line(
                 id: *next_job_id,
                 pid,
                 command: trimmed.clone(),
+                state: JobState::Running,
             });
             *next_job_id += 1;
             if let Some(job) = jobs.last() {
@@ -779,10 +831,33 @@ fn run_line(
     if let Some(pid) = pids.last().copied() {
         set_tty_foreground(pid);
     }
+    let mut stopped_signal: Option<u8> = None;
     for pid in pids.iter() {
-        last_status = wait_foreground(*pid);
+        match wait_foreground(*pid) {
+            ForegroundResult::Exited(status) => last_status = status,
+            ForegroundResult::Stopped(signal) => {
+                stopped_signal = Some(signal);
+                last_status = stopped_status(signal);
+                break;
+            }
+        }
     }
     set_tty_foreground(shell_pgrp);
+    if let Some(signal) = stopped_signal {
+        if let Some(pid) = pids.last().copied() {
+            jobs.push(Job {
+                id: *next_job_id,
+                pid,
+                command: trimmed.clone(),
+                state: JobState::Stopped,
+            });
+            *next_job_id += 1;
+            if let Some(job) = jobs.last() {
+                print_job(job);
+            }
+        }
+        return stopped_status(signal);
+    }
     last_status
 }
 
