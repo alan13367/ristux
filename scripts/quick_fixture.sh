@@ -509,6 +509,31 @@ case "$SCENARIO" in
       "^  /bin/sort$"
     )
     ;;
+  uniq)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/uniqcheck"
+      "cd /tmp/uniqcheck"
+      "echo apple > words.txt"
+      "echo apple >> words.txt"
+      "echo banana >> words.txt"
+      "echo apple >> words.txt"
+      "uniq words.txt | wc -l"
+      "sort words.txt | uniq"
+      "uniq -c words.txt"
+      "pkg info uniq"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: uniq words.txt | wc -l"
+      "^3$"
+      "TTY canonical line ready: sort words.txt | uniq"
+      "^banana$"
+      "TTY canonical line ready: uniq -c words.txt"
+      "^2 apple$"
+      "^name: uniq$"
+      "^  /bin/uniq$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -561,7 +586,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
