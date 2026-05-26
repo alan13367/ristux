@@ -56,6 +56,10 @@ pub fn write(fd: usize, input: &[u8]) -> Result<usize, vfs::VfsError> {
     vfs::write(fd, input)
 }
 
+pub fn truncate_fd(fd: usize, len: usize) -> Result<(), vfs::VfsError> {
+    vfs::truncate_fd(fd, len)
+}
+
 pub fn close(fd: usize) -> Result<(), vfs::VfsError> {
     vfs::close(fd)
 }

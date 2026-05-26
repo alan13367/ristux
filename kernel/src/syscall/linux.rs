@@ -65,6 +65,8 @@ pub const NR_exit: u64 = 60;
 pub const NR_wait4: u64 = 61;
 pub const NR_kill: u64 = 62;
 pub const NR_fcntl: u64 = 72;
+pub const NR_fsync: u64 = 74;
+pub const NR_ftruncate: u64 = 77;
 pub const NR_getdents: u64 = 78;
 pub const NR_getcwd: u64 = 79;
 pub const NR_chdir: u64 = 80;
@@ -228,6 +230,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
+        NR_fsync => linux_fsync(a0 as usize),
+        NR_ftruncate => linux_ftruncate(a0 as usize, a1 as i64),
         NR_getdents | NR_getdents64 => linux_getdents64(a0 as usize, a1 as usize, a2 as usize),
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
@@ -631,6 +635,23 @@ fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
         }
         _ => Err(EINVAL),
     }
+}
+
+fn linux_fsync(fd: usize) -> Result<u64, i64> {
+    if process::user_vfs_fd(fd).is_some() {
+        return Ok(0);
+    }
+    Err(EBADF)
+}
+
+fn linux_ftruncate(fd: usize, len: i64) -> Result<u64, i64> {
+    if len < 0 {
+        return Err(EINVAL);
+    }
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    fs::truncate_fd(vfs_fd, len as usize)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
 }
 
 fn linux_socket_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {

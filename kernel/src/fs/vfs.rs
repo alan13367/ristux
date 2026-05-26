@@ -1366,6 +1366,50 @@ impl Vfs {
         }
     }
 
+    fn truncate_fd(&mut self, fd: usize, len: usize) -> Result<(), VfsError> {
+        if let Some((path, rights)) = self
+            .open_files
+            .get(fd)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|handle| match handle {
+                OpenHandle::Ext2File { path, rights, .. } => Some((path.clone(), *rights)),
+                _ => None,
+            })
+        {
+            if !rights.write {
+                return Err(VfsError::BadFd);
+            }
+            let mut data = self
+                .root_ext2()
+                .ok_or(VfsError::NotFound)?
+                .read_file(&path)
+                .map_err(map_ext2_error)?;
+            data.resize(len, 0);
+            self.root_ext2_mut()
+                .ok_or(VfsError::NotFound)?
+                .write_file(&path, &data)
+                .map_err(map_ext2_error)?;
+            return Ok(());
+        }
+
+        let Some(handle) = self.open_files.get(fd).and_then(Option::as_ref) else {
+            return Err(VfsError::BadFd);
+        };
+        let OpenHandle::Node { node, rights, .. } = handle else {
+            return Err(VfsError::BadFd);
+        };
+        if !rights.write {
+            return Err(VfsError::BadFd);
+        }
+        let data_node = canonical_node_index(&self.nodes, *node);
+        if self.nodes[data_node].kind != NodeKind::File {
+            return Err(VfsError::NotFile);
+        }
+        self.nodes[data_node].data.resize(len, 0);
+        self.nodes[data_node].timestamps.modified_at = crate::time::filesystem_timestamp();
+        Ok(())
+    }
+
     fn close(&mut self, fd: usize) -> Result<(), VfsError> {
         let Some(slot) = self.open_files.get_mut(fd) else {
             return Err(VfsError::BadFd);
@@ -2055,6 +2099,10 @@ pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
 
 pub fn write(fd: usize, input: &[u8]) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.write(fd, input))
+}
+
+pub fn truncate_fd(fd: usize, len: usize) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.truncate_fd(fd, len))
 }
 
 pub fn close(fd: usize) -> Result<(), VfsError> {

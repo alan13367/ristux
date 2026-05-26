@@ -286,6 +286,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_file_sync"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_cow"
   sleep 1
   printf 'sendkey ret\n'
@@ -515,6 +519,10 @@ grep -q "TTY canonical line ready: cc_fcntl" "$SERIAL_LOG"
 grep -q "cc_fcntl: nonblock ok" "$SERIAL_LOG"
 grep -q "cc_fcntl: cloexec ok" "$SERIAL_LOG"
 grep -q "cc_fcntl: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_file_sync" "$SERIAL_LOG"
+grep -q "cc_file_sync: truncate sync ok" "$SERIAL_LOG"
+grep -q "cc_file_sync: readonly rejection ok" "$SERIAL_LOG"
+grep -q "cc_file_sync: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_cow" "$SERIAL_LOG"
 grep -q "cc_cow: fork storm ok" "$SERIAL_LOG"
 grep -q "cc_cow: isolation ok" "$SERIAL_LOG"

@@ -44,6 +44,14 @@ case "$SCENARIO" in
       "cc_dev: done"
     )
     ;;
+  filesync)
+    COMMANDS=("cc_file_sync")
+    EXPECTS=(
+      "cc_file_sync: truncate sync ok"
+      "cc_file_sync: readonly rejection ok"
+      "cc_file_sync: done"
+    )
+    ;;
   passwd)
     COMMANDS=("cc_passwd")
     EXPECTS=(

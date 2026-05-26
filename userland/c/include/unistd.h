@@ -26,6 +26,8 @@ off_t lseek(int fd, off_t offset, int whence);
 int pipe(int pipefd[2]);
 int dup(int oldfd);
 int dup2(int oldfd, int newfd);
+int fsync(int fd);
+int ftruncate(int fd, off_t length);
 pid_t fork(void);
 int execve(const char *path, char *const argv[], char *const envp[]);
 pid_t getpid(void);

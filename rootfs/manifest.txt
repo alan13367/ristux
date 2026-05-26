@@ -11,6 +11,7 @@ file /bin/cc_dev ../build/userland/cc_dev.elf
 file /bin/cc_dns ../build/userland/cc_dns.elf
 file /bin/cc_ext2 ../build/userland/cc_ext2.elf
 file /bin/cc_fcntl ../build/userland/cc_fcntl.elf
+file /bin/cc_file_sync ../build/userland/cc_file_sync.elf
 file /bin/cc_fs ../build/userland/cc_fs.elf
 file /bin/cc_hello ../build/userland/cc_hello.elf
 file /bin/cc_links ../build/userland/cc_links.elf
@@ -63,6 +64,7 @@ package cc_dev 0.1.0 /bin/cc_dev
 package cc_dns 0.1.0 /bin/cc_dns
 package cc_ext2 0.1.0 /bin/cc_ext2
 package cc_fcntl 0.1.0 /bin/cc_fcntl
+package cc_file_sync 0.1.0 /bin/cc_file_sync
 package cc_fs 0.1.0 /bin/cc_fs
 package cc_hello 0.1.0 /bin/cc_hello
 package cc_links 0.1.0 /bin/cc_links

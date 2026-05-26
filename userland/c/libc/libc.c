@@ -76,6 +76,8 @@
 #define SYS_WAIT4 61
 #define SYS_KILL 62
 #define SYS_FCNTL 72
+#define SYS_FSYNC 74
+#define SYS_FTRUNCATE 77
 #define SYS_GETDENTS 78
 #define SYS_GETCWD 79
 #define SYS_CHDIR 80
@@ -230,6 +232,14 @@ int fcntl(int fd, int cmd, ...) {
         va_end(ap);
     }
     return (int)syscall_ret(syscall3(SYS_FCNTL, fd, cmd, arg));
+}
+
+int fsync(int fd) {
+    return (int)syscall_ret(syscall1(SYS_FSYNC, fd));
+}
+
+int ftruncate(int fd, off_t length) {
+    return (int)syscall_ret(syscall2(SYS_FTRUNCATE, fd, length));
 }
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
