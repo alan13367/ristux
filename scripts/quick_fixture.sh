@@ -606,6 +606,30 @@ case "$SCENARIO" in
       "^  /bin/env$"
     )
     ;;
+  cut)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/cutcheck"
+      "cd /tmp/cutcheck"
+      "echo root:x:0:0 > users.txt"
+      "echo alice:x:1000:1000 >> users.txt"
+      "cut -d : -f 1 users.txt"
+      "cut -d : -f 3-4 users.txt | tail -1"
+      "cut -c 1-5 users.txt | head -1"
+      "pkg info cut"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cut -d : -f 1 users.txt"
+      "^root$"
+      "^alice$"
+      "TTY canonical line ready: cut -d : -f 3-4 users.txt | tail -1"
+      "^1000:1000$"
+      "TTY canonical line ready: cut -c 1-5 users.txt | head -1"
+      "^root:$"
+      "^name: cut$"
+      "^  /bin/cut$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -658,7 +682,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
