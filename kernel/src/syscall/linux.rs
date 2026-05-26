@@ -429,7 +429,7 @@ fn linux_read(
         .map(|flags| flags & O_NONBLOCK != 0)
         .unwrap_or(false);
 
-    if fs::is_tty_fd(vfs_fd) {
+    if fs::is_kernel_tty_fd(vfs_fd) {
         loop {
             if let Some(data) = tty::try_read() {
                 let out = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
@@ -1420,10 +1420,27 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const TIOCGPGRP: u64 = 0x540f;
     const TIOCSPGRP: u64 = 0x5410;
     const TIOCGWINSZ: u64 = 0x5413;
+    const TIOCGPTN: u64 = 0x8004_5430;
+    const TIOCSPTLCK: u64 = 0x4004_5431;
 
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let is_tty = fs::is_tty_fd(vfs_fd);
     match request {
+        TIOCGPTN => {
+            let number = fs::pty_number(vfs_fd).ok_or(ENOTTY)?;
+            let out = process::write_user_buffer(argp, 4).ok_or(EFAULT)?;
+            out.copy_from_slice(&(number as u32).to_le_bytes());
+            Ok(0)
+        }
+        TIOCSPTLCK => {
+            if fs::pty_number(vfs_fd).is_none() {
+                return Err(ENOTTY);
+            }
+            let input = process::read_user(argp, 4).ok_or(EFAULT)?;
+            let locked = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) != 0;
+            fs::set_pty_locked(vfs_fd, locked).map_err(|_| ENOTTY)?;
+            Ok(0)
+        }
         TIOCGPGRP => {
             if !is_tty {
                 return Err(ENOTTY);

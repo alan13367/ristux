@@ -193,6 +193,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_pty"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_fs"
   sleep 1
   printf 'sendkey ret\n'
@@ -347,6 +351,11 @@ grep -q "cc_tty: cfmakeraw ok" "$SERIAL_LOG"
 grep -q "cc_tty: tcsetattr ok" "$SERIAL_LOG"
 grep -q "cc_tty: restore ok" "$SERIAL_LOG"
 grep -q "cc_tty: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_pty" "$SERIAL_LOG"
+grep -q "cc_pty: open ok" "$SERIAL_LOG"
+grep -q "cc_pty: master-to-slave ok" "$SERIAL_LOG"
+grep -q "cc_pty: slave-to-master ok" "$SERIAL_LOG"
+grep -q "cc_pty: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_fs" "$SERIAL_LOG"
 grep -q "cc_fs: access ok" "$SERIAL_LOG"
 grep -q "cc_fs: getdents ok" "$SERIAL_LOG"

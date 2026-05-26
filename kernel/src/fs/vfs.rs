@@ -30,6 +30,8 @@ pub enum DeviceKind {
     Console,
     Keyboard,
     Tty,
+    Ptmx,
+    PtySlave(usize),
     Framebuffer,
 }
 
@@ -86,6 +88,14 @@ enum OpenHandle {
     PipeWrite {
         pipe: usize,
     },
+    PtyMaster {
+        pty: usize,
+        rights: OpenRights,
+    },
+    PtySlave {
+        pty: usize,
+        rights: OpenRights,
+    },
     Ext2File {
         path: String,
         offset: usize,
@@ -128,6 +138,15 @@ struct PipeState {
     capacity: usize,
     readers: usize,
     writers: usize,
+}
+
+struct PtyState {
+    master_to_slave: VecDeque<u8>,
+    slave_to_master: VecDeque<u8>,
+    capacity: usize,
+    masters: usize,
+    slaves: usize,
+    locked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -212,10 +231,104 @@ impl PipeState {
     }
 }
 
+impl PtyState {
+    fn new(capacity: usize) -> Self {
+        Self {
+            master_to_slave: VecDeque::new(),
+            slave_to_master: VecDeque::new(),
+            capacity,
+            masters: 1,
+            slaves: 0,
+            locked: true,
+        }
+    }
+
+    fn add_master(&mut self) {
+        self.masters += 1;
+    }
+
+    fn add_slave(&mut self) {
+        self.slaves += 1;
+    }
+
+    fn close_master(&mut self) {
+        self.masters = self.masters.saturating_sub(1);
+    }
+
+    fn close_slave(&mut self) {
+        self.slaves = self.slaves.saturating_sub(1);
+    }
+
+    fn read_master(&mut self, output: &mut [u8]) -> Result<usize, VfsError> {
+        read_queue(&mut self.slave_to_master, self.slaves, output)
+    }
+
+    fn read_slave(&mut self, output: &mut [u8]) -> Result<usize, VfsError> {
+        read_queue(&mut self.master_to_slave, self.masters, output)
+    }
+
+    fn write_master(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        write_queue(&mut self.master_to_slave, self.capacity, self.slaves, input)
+    }
+
+    fn write_slave(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        write_queue(&mut self.slave_to_master, self.capacity, self.masters, input)
+    }
+}
+
+fn read_queue(
+    queue: &mut VecDeque<u8>,
+    writers: usize,
+    output: &mut [u8],
+) -> Result<usize, VfsError> {
+    if output.is_empty() {
+        return Ok(0);
+    }
+    let mut read = 0;
+    for byte in output {
+        let Some(value) = queue.pop_front() else {
+            break;
+        };
+        *byte = value;
+        read += 1;
+    }
+    if read == 0 && writers > 0 {
+        return Err(VfsError::WouldBlock);
+    }
+    Ok(read)
+}
+
+fn write_queue(
+    queue: &mut VecDeque<u8>,
+    capacity: usize,
+    readers: usize,
+    input: &[u8],
+) -> Result<usize, VfsError> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+    if readers == 0 {
+        return Err(VfsError::BadFd);
+    }
+    let mut written = 0;
+    for byte in input {
+        if queue.len() == capacity {
+            break;
+        }
+        queue.push_back(*byte);
+        written += 1;
+    }
+    if written == 0 && !input.is_empty() {
+        return Err(VfsError::WouldBlock);
+    }
+    Ok(written)
+}
+
 pub struct Vfs {
     nodes: Vec<Node>,
     open_files: Vec<Option<OpenHandle>>,
     pipes: Vec<PipeState>,
+    ptys: Vec<PtyState>,
     mounts: Vec<MountPoint>,
 }
 
@@ -232,6 +345,7 @@ impl Vfs {
             nodes: Vec::new(),
             open_files: Vec::new(),
             pipes: Vec::new(),
+            ptys: Vec::new(),
             mounts: Vec::new(),
         };
 
@@ -240,6 +354,7 @@ impl Vfs {
         vfs.add_directory("/etc");
         vfs.add_directory("/lib");
         vfs.add_directory("/dev");
+        vfs.add_directory("/dev/pts");
         vfs.add_directory("/pkg");
         vfs.add_directory("/proc");
         vfs.add_directory("/tmp");
@@ -252,6 +367,7 @@ impl Vfs {
         vfs.add_device("/dev/console", DeviceKind::Console);
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
         vfs.add_device("/dev/tty", DeviceKind::Tty);
+        vfs.add_device("/dev/ptmx", DeviceKind::Ptmx);
         vfs.add_device("/dev/fb0", DeviceKind::Framebuffer);
         vfs.add_file("/proc/version", b"ristux 0.1\n");
         vfs.add_file("/tmp/message.txt", b"hello from tmpfs\n");
@@ -573,6 +689,12 @@ impl Vfs {
             return Err(VfsError::PermissionDenied);
         }
 
+        match self.nodes[node].kind {
+            NodeKind::Device(DeviceKind::Ptmx) => return self.open_pty_master(rights),
+            NodeKind::Device(DeviceKind::PtySlave(pty)) => return self.open_pty_slave(pty, rights),
+            _ => {}
+        }
+
         self.push_open_handle(OpenHandle::Node {
             node,
             offset: 0,
@@ -598,6 +720,30 @@ impl Vfs {
         let read_fd = self.push_open_handle(OpenHandle::PipeRead { pipe })?;
         let write_fd = self.push_open_handle(OpenHandle::PipeWrite { pipe })?;
         Ok((read_fd, write_fd))
+    }
+
+    fn open_pty_master(&mut self, rights: OpenRights) -> Result<usize, VfsError> {
+        let pty = self.ptys.len();
+        self.ptys.push(PtyState::new(4096));
+        self.ensure_pty_slave_node(pty);
+        self.push_open_handle(OpenHandle::PtyMaster { pty, rights })
+    }
+
+    fn open_pty_slave(&mut self, pty: usize, rights: OpenRights) -> Result<usize, VfsError> {
+        let state = self.ptys.get_mut(pty).ok_or(VfsError::NotFound)?;
+        if state.locked {
+            return Err(VfsError::PermissionDenied);
+        }
+        state.add_slave();
+        self.push_open_handle(OpenHandle::PtySlave { pty, rights })
+    }
+
+    fn ensure_pty_slave_node(&mut self, pty: usize) {
+        let path = format!("/dev/pts/{}", pty);
+        if self.nodes.iter().any(|node| node.path == path) {
+            return;
+        }
+        self.add_device(&path, DeviceKind::PtySlave(pty));
     }
 
     fn duplicate_fd(&mut self, fd: usize) -> Result<usize, VfsError> {
@@ -1041,6 +1187,9 @@ impl Vfs {
                             Ok(count)
                         }
                         NodeKind::Device(DeviceKind::Tty) => Ok(crate::tty::read(output)),
+                        NodeKind::Device(DeviceKind::Ptmx | DeviceKind::PtySlave(_)) => {
+                            Err(VfsError::BadFd)
+                        }
                         NodeKind::Device(DeviceKind::Console) => Ok(0),
                         NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),
@@ -1060,6 +1209,20 @@ impl Vfs {
             OpenHandle::PipeRead { pipe } => {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
                 pipe.read(output)
+            }
+            OpenHandle::PtyMaster { pty, rights } => {
+                if !rights.read {
+                    return Err(VfsError::BadFd);
+                }
+                let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
+                pty.read_master(output)
+            }
+            OpenHandle::PtySlave { pty, rights } => {
+                if !rights.read {
+                    return Err(VfsError::BadFd);
+                }
+                let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
+                pty.read_slave(output)
             }
             OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
             OpenHandle::Ext2Dir { .. } => Err(VfsError::NotFile),
@@ -1146,6 +1309,9 @@ impl Vfs {
                             | DeviceKind::URandom
                             | DeviceKind::Keyboard,
                         ) => Ok(input.len()),
+                        NodeKind::Device(DeviceKind::Ptmx | DeviceKind::PtySlave(_)) => {
+                            Err(VfsError::BadFd)
+                        }
                         NodeKind::Directory => Err(VfsError::NotFile),
                         NodeKind::Symlink => Err(VfsError::NotFile),
                         NodeKind::File => unreachable!(),
@@ -1169,6 +1335,28 @@ impl Vfs {
             OpenHandle::PipeWrite { pipe } => {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
                 let written = pipe.write(input)?;
+                if written > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(written)
+            }
+            OpenHandle::PtyMaster { pty, rights } => {
+                if !rights.write {
+                    return Err(VfsError::BadFd);
+                }
+                let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
+                let written = pty.write_master(input)?;
+                if written > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(written)
+            }
+            OpenHandle::PtySlave { pty, rights } => {
+                if !rights.write {
+                    return Err(VfsError::BadFd);
+                }
+                let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
+                let written = pty.write_slave(input)?;
                 if written > 0 {
                     crate::process::wake_io_waiters();
                 }
@@ -1200,6 +1388,16 @@ impl Vfs {
                 .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .add_writer(),
+            OpenHandle::PtyMaster { pty, .. } => self
+                .ptys
+                .get_mut(*pty)
+                .ok_or(VfsError::BadFd)?
+                .add_master(),
+            OpenHandle::PtySlave { pty, .. } => self
+                .ptys
+                .get_mut(*pty)
+                .ok_or(VfsError::BadFd)?
+                .add_slave(),
             OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {}
         }
         Ok(())
@@ -1217,6 +1415,16 @@ impl Vfs {
                 .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .close_writer(),
+            OpenHandle::PtyMaster { pty, .. } => self
+                .ptys
+                .get_mut(*pty)
+                .ok_or(VfsError::BadFd)?
+                .close_master(),
+            OpenHandle::PtySlave { pty, .. } => self
+                .ptys
+                .get_mut(*pty)
+                .ok_or(VfsError::BadFd)?
+                .close_slave(),
             OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {}
         }
         Ok(())
@@ -1308,7 +1516,10 @@ impl Vfs {
             OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {
                 return Err(VfsError::BadFd);
             }
-            OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => {
+            OpenHandle::PipeRead { .. }
+            | OpenHandle::PipeWrite { .. }
+            | OpenHandle::PtyMaster { .. }
+            | OpenHandle::PtySlave { .. } => {
                 return Err(VfsError::BadFd);
             }
         };
@@ -1378,6 +1589,14 @@ impl Vfs {
                     mtime: crate::time::filesystem_timestamp(),
                 })
             }
+            OpenHandle::PtyMaster { .. } | OpenHandle::PtySlave { .. } => Ok(Stat {
+                owner: 0,
+                group: 0,
+                mode: 0o666,
+                size: 0,
+                nlink: 1,
+                mtime: crate::time::filesystem_timestamp(),
+            }),
             OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
         }
     }
@@ -1426,6 +1645,11 @@ impl Vfs {
                         write: rights.write,
                         ..PollReady::default()
                     },
+                    NodeKind::Device(DeviceKind::Ptmx | DeviceKind::PtySlave(_)) => PollReady {
+                        read: false,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
                     NodeKind::Device(DeviceKind::Framebuffer) => PollReady {
                         write: rights.write,
                         ..PollReady::default()
@@ -1459,6 +1683,28 @@ impl Vfs {
                     ..PollReady::default()
                 })
             }
+            OpenHandle::PtyMaster { pty, rights } => {
+                let pty = self.ptys.get(*pty).ok_or(VfsError::BadFd)?;
+                Ok(PollReady {
+                    read: rights.read && (!pty.slave_to_master.is_empty() || pty.slaves == 0),
+                    write: rights.write
+                        && pty.slaves > 0
+                        && pty.master_to_slave.len() < pty.capacity,
+                    error: pty.slaves == 0,
+                    hangup: pty.slaves == 0 && pty.slave_to_master.is_empty(),
+                })
+            }
+            OpenHandle::PtySlave { pty, rights } => {
+                let pty = self.ptys.get(*pty).ok_or(VfsError::BadFd)?;
+                Ok(PollReady {
+                    read: rights.read && (!pty.master_to_slave.is_empty() || pty.masters == 0),
+                    write: rights.write
+                        && pty.masters > 0
+                        && pty.slave_to_master.len() < pty.capacity,
+                    error: pty.masters == 0,
+                    hangup: pty.masters == 0 && pty.master_to_slave.is_empty(),
+                })
+            }
         }
     }
 
@@ -1466,13 +1712,38 @@ impl Vfs {
         let Some(Some(handle)) = self.open_files.get(fd) else {
             return false;
         };
-        let OpenHandle::Node { node, .. } = handle else {
+        match handle {
+            OpenHandle::Node { node, .. } => matches!(
+                self.nodes.get(*node).map(|n| n.kind),
+                Some(NodeKind::Device(DeviceKind::Tty))
+            ),
+            OpenHandle::PtyMaster { .. } | OpenHandle::PtySlave { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn is_kernel_tty_fd(&self, fd: usize) -> bool {
+        let Some(Some(OpenHandle::Node { node, .. })) = self.open_files.get(fd) else {
             return false;
         };
         matches!(
             self.nodes.get(*node).map(|n| n.kind),
             Some(NodeKind::Device(DeviceKind::Tty))
         )
+    }
+
+    fn pty_number(&self, fd: usize) -> Option<usize> {
+        match self.open_files.get(fd).and_then(|slot| slot.as_ref())? {
+            OpenHandle::PtyMaster { pty, .. } => Some(*pty),
+            _ => None,
+        }
+    }
+
+    fn set_pty_locked(&mut self, fd: usize, locked: bool) -> Result<(), VfsError> {
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        let state = self.ptys.get_mut(pty).ok_or(VfsError::BadFd)?;
+        state.locked = locked;
+        Ok(())
     }
 
     fn stat(&self, path: &str) -> Result<Stat, VfsError> {
@@ -1828,6 +2099,23 @@ pub fn is_tty_fd(fd: usize) -> bool {
     guard.as_ref().map(|vfs| vfs.is_tty_fd(fd)).unwrap_or(false)
 }
 
+pub fn is_kernel_tty_fd(fd: usize) -> bool {
+    let guard = VFS.lock();
+    guard
+        .as_ref()
+        .map(|vfs| vfs.is_kernel_tty_fd(fd))
+        .unwrap_or(false)
+}
+
+pub fn pty_number(fd: usize) -> Option<usize> {
+    let guard = VFS.lock();
+    guard.as_ref().and_then(|vfs| vfs.pty_number(fd))
+}
+
+pub fn set_pty_locked(fd: usize, locked: bool) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_pty_locked(fd, locked))
+}
+
 pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.chmod(path, mode))
 }
@@ -2169,6 +2457,23 @@ pub fn self_test() {
     let fd = open("/dev/console").expect("open /dev/console failed");
     write(fd, b"console device online\n").expect("write /dev/console failed");
     close(fd).expect("close /dev/console failed");
+
+    let master = open("/dev/ptmx").expect("open /dev/ptmx failed");
+    let pty = pty_number(master).expect("pty number missing");
+    set_pty_locked(master, false).expect("unlock pty failed");
+    let slave_path = format!("/dev/pts/{}", pty);
+    let slave = open(&slave_path).expect("open pty slave failed");
+    write(master, b"abc").expect("write pty master failed");
+    let mut slave_bytes = [0; 3];
+    read(slave, &mut slave_bytes).expect("read pty slave failed");
+    write(slave, b"xyz").expect("write pty slave failed");
+    let mut master_bytes = [0; 3];
+    read(master, &mut master_bytes).expect("read pty master failed");
+    close(slave).expect("close pty slave failed");
+    close(master).expect("close pty master failed");
+    if &slave_bytes != b"abc" || &master_bytes != b"xyz" {
+        panic!("PTY self-test failed");
+    }
 
     if read_file("/bin/init").is_none()
         || read_file("/lib/libc.so").is_none()

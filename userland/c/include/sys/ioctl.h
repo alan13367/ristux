@@ -10,6 +10,8 @@
 #define TIOCGPGRP 0x540f
 #define TIOCSPGRP 0x5410
 #define TIOCGWINSZ 0x5413
+#define TIOCGPTN 0x80045430
+#define TIOCSPTLCK 0x40045431
 
 struct winsize {
     uint16_t ws_row;

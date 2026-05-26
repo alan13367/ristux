@@ -150,6 +150,10 @@ int open(const char *path, int flags, unsigned int mode) {
     return (int)syscall_ret(syscall3(SYS_OPEN, (long)path, flags, mode));
 }
 
+int posix_openpt(int flags) {
+    return open("/dev/ptmx", flags, 0);
+}
+
 int close(int fd) {
     return (int)syscall_ret(syscall1(SYS_CLOSE, fd));
 }
@@ -287,6 +291,43 @@ void cfmakeraw(struct termios *termios_p) {
     termios_p->c_cflag |= CS8;
     termios_p->c_cc[VMIN] = 1;
     termios_p->c_cc[VTIME] = 0;
+}
+
+int grantpt(int fd) {
+    (void)fd;
+    return 0;
+}
+
+int unlockpt(int fd) {
+    int unlock = 0;
+    return ioctl(fd, TIOCSPTLCK, &unlock);
+}
+
+char *ptsname(int fd) {
+    static char path[32];
+    unsigned int number = 0;
+    if (ioctl(fd, TIOCGPTN, &number) < 0) {
+        return NULL;
+    }
+
+    const char prefix[] = "/dev/pts/";
+    size_t pos = 0;
+    for (; prefix[pos] != '\0'; pos++) {
+        path[pos] = prefix[pos];
+    }
+
+    char digits[10];
+    size_t count = 0;
+    do {
+        digits[count++] = (char)('0' + (number % 10));
+        number /= 10;
+    } while (number != 0 && count < sizeof(digits));
+
+    while (count > 0 && pos + 1 < sizeof(path)) {
+        path[pos++] = digits[--count];
+    }
+    path[pos] = '\0';
+    return path;
 }
 
 int chdir(const char *path) {

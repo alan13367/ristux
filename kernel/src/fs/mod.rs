@@ -159,3 +159,15 @@ pub fn poll(fd: usize) -> Result<vfs::PollReady, vfs::VfsError> {
 pub fn is_tty_fd(fd: usize) -> bool {
     vfs::is_tty_fd(fd)
 }
+
+pub fn is_kernel_tty_fd(fd: usize) -> bool {
+    vfs::is_kernel_tty_fd(fd)
+}
+
+pub fn pty_number(fd: usize) -> Option<usize> {
+    vfs::pty_number(fd)
+}
+
+pub fn set_pty_locked(fd: usize, locked: bool) -> Result<(), vfs::VfsError> {
+    vfs::set_pty_locked(fd, locked)
+}

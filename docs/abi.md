@@ -141,17 +141,21 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,
-  `/dev/urandom`, `/dev/tty`, `/dev/console`, `/dev/keyboard`, and `/dev/fb0`.
+  `/dev/urandom`, `/dev/tty`, `/dev/console`, `/dev/keyboard`, `/dev/ptmx`,
+  `/dev/pts/N`, and `/dev/fb0`.
 - Procfs currently exposes `/proc/version`, `/proc/mounts`, `/proc/meminfo`,
   `/proc/uptime`, `/proc/stat`, `/proc/self/status`, and
   `/proc/<pid>/status`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
-  `TIOCGPGRP`, `TIOCSPGRP`, and `TIOCGWINSZ`.
+  `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads
   honor `ICANON`, `ISIG`, `VMIN`, and the standard control characters used by
   the in-tree `stty` utility.
+- PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
+  and slave descriptors are pollable byte streams with hangup/error readiness
+  when their peer closes.
 - Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,

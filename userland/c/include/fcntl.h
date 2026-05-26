@@ -18,5 +18,6 @@
 
 int open(const char *path, int flags, unsigned int mode);
 int fcntl(int fd, int cmd, ...);
+int posix_openpt(int flags);
 
 #endif

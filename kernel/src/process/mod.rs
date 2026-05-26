@@ -1184,7 +1184,11 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
 }
 
 pub fn wake_io_waiters() {
-    let woken: Vec<Pid> = with_table(|table| {
+    let woken: Vec<Pid> = {
+        let mut guard = PROCESS_TABLE.lock();
+        let Some(table) = guard.as_mut() else {
+            return;
+        };
         let mut woken = Vec::new();
         for process in &mut table.processes {
             if matches!(process.state, ProcessState::Blocked(BlockReason::WaitIo)) {
@@ -1193,22 +1197,29 @@ pub fn wake_io_waiters() {
             }
         }
         woken
-    });
+    };
     for pid in woken {
         crate::sched::wake_blocked(pid);
     }
 }
 
 pub fn wake_io_waiters_for(pid: Pid) {
-    let woke = with_table(|table| {
+    let woke = {
+        let mut guard = PROCESS_TABLE.lock();
+        let Some(table) = guard.as_mut() else {
+            return;
+        };
         if let Some(p) = table.get_mut(pid) {
             if matches!(p.state, ProcessState::Blocked(BlockReason::WaitIo)) {
                 p.state = ProcessState::Ready;
-                return true;
+                true
+            } else {
+                false
             }
+        } else {
+            false
         }
-        false
-    });
+    };
     if woke {
         crate::sched::wake_blocked(pid);
     }
