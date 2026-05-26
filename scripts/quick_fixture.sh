@@ -100,6 +100,14 @@ case "$SCENARIO" in
       "cc_pty: done"
     )
     ;;
+  pty-shell)
+    COMMANDS=("pty_shell_check")
+    EXPECTS=(
+      "TTY canonical line ready: pty_shell_check"
+      "pty_shell_check: shell output ok"
+      "pty_shell_check: done"
+    )
+    ;;
   libc)
     COMMANDS=("cc_libc_compat")
     EXPECTS=(
@@ -192,7 +200,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, dropbear, dropbear-banner, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, pty, pty-shell, dropbear, dropbear-banner, command)" >&2
     exit 2
     ;;
 esac
