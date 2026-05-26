@@ -65,6 +65,7 @@ file /bin/stty ../build/userland/stty.elf
 file /bin/test ../build/userland/test.elf
 file /bin/[ ../build/userland/test.elf
 file /bin/tail ../build/userland/tail.elf
+file /bin/tee ../build/userland/tee.elf
 file /bin/touch ../build/userland/touch.elf
 file /bin/su ../build/userland/su.elf
 file /bin/sleep ../build/userland/sleep.elf
@@ -160,6 +161,7 @@ package sleep 0.1.0 /bin/sleep
 package ssh_banner 0.1.0 /bin/ssh_banner
 package tail 0.1.0 /bin/tail
 package tar 0.1.0 /bin/tar
+package tee 0.1.0 /bin/tee
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp
