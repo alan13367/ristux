@@ -559,6 +559,33 @@ case "$SCENARIO" in
       "^  /bin/dirname$"
     )
     ;;
+  install)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/installcheck"
+      "cd /tmp/installcheck"
+      "echo payload > src.txt"
+      "install -m 600 src.txt dst.txt"
+      "cat dst.txt"
+      "install -d -m 755 made/deep"
+      "install src.txt made/deep/copied.txt"
+      "cat made/deep/copied.txt"
+      "install -D -m 644 src.txt nested/bin/copied.txt"
+      "cat nested/bin/copied.txt"
+      "pkg info install"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: install -m 600 src.txt dst.txt"
+      "TTY canonical line ready: cat dst.txt"
+      "^payload$"
+      "TTY canonical line ready: install src.txt made/deep/copied.txt"
+      "TTY canonical line ready: cat made/deep/copied.txt"
+      "TTY canonical line ready: install -D -m 644 src.txt nested/bin/copied.txt"
+      "TTY canonical line ready: cat nested/bin/copied.txt"
+      "^name: install$"
+      "^  /bin/install$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -611,7 +638,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

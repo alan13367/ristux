@@ -45,6 +45,7 @@ file /bin/false ../build/userland/false.elf
 file /bin/grep ../build/userland/grep.elf
 file /bin/head ../build/userland/head.elf
 file /bin/id ../build/userland/id.elf
+file /bin/install ../build/userland/install.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
 file /bin/ln ../build/userland/ln.elf
@@ -134,6 +135,7 @@ package grep 0.1.0 /bin/grep
 package head 0.1.0 /bin/head
 package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
+package install 0.1.0 /bin/install
 package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
 package libc-dev 0.1.0 /lib/crt0.o deps=libc
