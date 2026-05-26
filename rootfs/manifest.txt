@@ -32,7 +32,7 @@ file /bin/false ../build/userland/false.elf
 file /bin/id ../build/userland/id.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
-file /bin/loopback_demo ../build/userland/loopback_demo.elf
+file /bin/loopback_check ../build/userland/loopback_check.elf
 file /bin/ls ../build/userland/ls.elf
 file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
@@ -82,7 +82,7 @@ package init 0.1.0 /bin/init
 package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
 package login 0.1.0 /bin/login
-package loopback_demo 0.1.0 /bin/loopback_demo
+package loopback_check 0.1.0 /bin/loopback_check
 package ls 0.1.0 /bin/ls
 package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir

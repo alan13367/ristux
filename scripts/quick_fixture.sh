@@ -53,12 +53,12 @@ case "$SCENARIO" in
     )
     ;;
   loopback)
-    COMMANDS=("ping 127.0.0.1" "loopback_demo")
+    COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
       "64 bytes from 127.0.0.1"
-      "loopback: server received"
-      "loopback: client received"
-      "loopback: done"
+      "loopback_check: server received"
+      "loopback_check: client received"
+      "loopback_check: done"
     )
     ;;
   command)

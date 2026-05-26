@@ -250,7 +250,7 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
-  send_text "loopback_demo"
+  send_text "loopback_check"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -455,10 +455,10 @@ grep -q "TTY canonical line ready: ping 127.0.0.1" "$SERIAL_LOG"
 grep -q "64 bytes from 127.0.0.1" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: curl_lite http://10.0.2.2/" "$SERIAL_LOG"
 grep -q "ristux tcp ok" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: loopback_demo" "$SERIAL_LOG"
-grep -q "loopback: server received" "$SERIAL_LOG"
-grep -q "loopback: client received" "$SERIAL_LOG"
-grep -q "loopback: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: loopback_check" "$SERIAL_LOG"
+grep -q "loopback_check: server received" "$SERIAL_LOG"
+grep -q "loopback_check: client received" "$SERIAL_LOG"
+grep -q "loopback_check: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: sig_demo" "$SERIAL_LOG"
 grep -q "sig_demo: handler ran" "$SERIAL_LOG"
 grep -q "sig_demo: after sigreturn" "$SERIAL_LOG"
