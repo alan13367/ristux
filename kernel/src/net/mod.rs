@@ -14,6 +14,8 @@ const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
+const LOCAL_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
+const LOOPBACK_IP: Ipv4Addr = Ipv4Addr([127, 0, 0, 1]);
 
 static NET_STATS: SpinLock<NetStats> = SpinLock::new(NetStats::empty());
 static NET_STACK: SpinLock<Option<NetworkStack>> = SpinLock::new(None);
@@ -23,6 +25,12 @@ pub struct MacAddr(pub [u8; 6]);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Ipv4Addr(pub [u8; 4]);
+
+impl Ipv4Addr {
+    pub const fn is_loopback(self) -> bool {
+        self.0[0] == 127
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EthernetFrame {
@@ -142,14 +150,18 @@ impl NetworkStack {
         else {
             return false;
         };
-        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
-            return false;
-        };
-
         let mut body = Vec::new();
         body.extend_from_slice(&local_port.to_be_bytes());
         body.extend_from_slice(&dst_port.to_be_bytes());
         body.extend_from_slice(payload);
+        if dst_ip.is_loopback() {
+            self.transmit_loopback_ipv4(dst_ip, IP_PROTO_UDP, &body);
+            return true;
+        }
+
+        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
+            return false;
+        };
         self.transmit_ipv4(dst_mac, dst_ip, IP_PROTO_UDP, &body);
         true
     }
@@ -167,14 +179,24 @@ impl NetworkStack {
         if outbound.segment.len() < 20 {
             return false;
         }
-        let Some(dst_mac) = self.resolve_mac(outbound.dst_ip) else {
-            return false;
+        let src_ip = if outbound.dst_ip.is_loopback() {
+            LOOPBACK_IP
+        } else {
+            self.ip
         };
         outbound.segment[16] = 0;
         outbound.segment[17] = 0;
-        let checksum = tcp::checksum(self.ip, outbound.dst_ip, &outbound.segment);
+        let checksum = tcp::checksum(src_ip, outbound.dst_ip, &outbound.segment);
         outbound.segment[16] = (checksum >> 8) as u8;
         outbound.segment[17] = (checksum & 0xff) as u8;
+        if outbound.dst_ip.is_loopback() {
+            self.transmit_loopback_ipv4(outbound.dst_ip, IP_PROTO_TCP, &outbound.segment);
+            return true;
+        }
+
+        let Some(dst_mac) = self.resolve_mac(outbound.dst_ip) else {
+            return false;
+        };
         self.transmit_ipv4(dst_mac, outbound.dst_ip, IP_PROTO_TCP, &outbound.segment);
         true
     }
@@ -225,7 +247,7 @@ impl NetworkStack {
             return;
         };
         self.cache_arp(packet.src, frame.src);
-        if packet.dst != self.ip {
+        if packet.dst != self.ip && !packet.dst.is_loopback() {
             return;
         }
 
@@ -279,6 +301,10 @@ impl NetworkStack {
     }
 
     fn transmit_ipv4(&mut self, dst_mac: MacAddr, dst_ip: Ipv4Addr, protocol: u8, body: &[u8]) {
+        if dst_ip.is_loopback() {
+            self.transmit_loopback_ipv4(dst_ip, protocol, body);
+            return;
+        }
         let payload = build_ipv4(protocol, self.ip, dst_ip, body);
         self.transmit(EthernetFrame {
             dst: dst_mac,
@@ -286,6 +312,23 @@ impl NetworkStack {
             ethertype: ETHERTYPE_IPV4,
             payload,
         });
+    }
+
+    fn transmit_loopback_ipv4(&mut self, dst_ip: Ipv4Addr, protocol: u8, body: &[u8]) {
+        self.tx_frames += 1;
+        self.rx_frames += 1;
+        let packet = Ipv4Packet {
+            protocol,
+            src: LOOPBACK_IP,
+            dst: dst_ip,
+            payload: Vec::from(body),
+        };
+        match protocol {
+            IP_PROTO_ICMP => self.handle_icmp(self.mac, packet),
+            IP_PROTO_TCP => self.handle_tcp(packet),
+            IP_PROTO_UDP => self.handle_udp(packet),
+            _ => {}
+        }
     }
 
     fn cache_arp(&mut self, ip: Ipv4Addr, mac: MacAddr) {
@@ -440,10 +483,9 @@ pub fn drive_tcp(tcp_stack: &mut tcp::TcpStack) -> bool {
 
 fn runtime_stack() -> NetworkStack {
     let device = VirtioNetDriver::probe().unwrap_or_else(VirtioNetDriver::software_fallback);
-    let local_ip = Ipv4Addr([10, 0, 2, 15]);
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
     let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-    let mut stack = NetworkStack::new(device, local_ip);
+    let mut stack = NetworkStack::new(device, LOCAL_IP);
     stack.cache_arp(peer_ip, peer_mac);
     stack
 }
@@ -527,16 +569,15 @@ fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
 
 fn self_test() {
     let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-    let local_ip = Ipv4Addr([10, 0, 2, 15]);
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
-    let mut stack = NetworkStack::new(VirtioNetDriver::software_fallback(), local_ip);
+    let mut stack = NetworkStack::new(VirtioNetDriver::software_fallback(), LOCAL_IP);
     let local_mac = stack.mac;
 
     stack.inject_rx(EthernetFrame {
         dst: MacAddr([0xff; 6]),
         src: peer_mac,
         ethertype: ETHERTYPE_ARP,
-        payload: build_arp(ARP_REQUEST, peer_mac, peer_ip, MacAddr([0; 6]), local_ip),
+        payload: build_arp(ARP_REQUEST, peer_mac, peer_ip, MacAddr([0; 6]), LOCAL_IP),
     });
     stack.poll();
     let arp_reply = stack.pop_tx().expect("ARP did not transmit a reply");
@@ -556,7 +597,7 @@ fn self_test() {
         dst: local_mac,
         src: peer_mac,
         ethertype: ETHERTYPE_IPV4,
-        payload: build_ipv4(IP_PROTO_ICMP, peer_ip, local_ip, &echo_body),
+        payload: build_ipv4(IP_PROTO_ICMP, peer_ip, LOCAL_IP, &echo_body),
     });
     stack.poll();
     let echo_reply = stack.pop_tx().expect("ICMP did not transmit a reply");
@@ -590,6 +631,22 @@ fn self_test() {
         panic!("UDP receive self-test failed");
     }
 
+    let loop_socket = stack.bind_udp(9100);
+    if !stack.send_udp(loop_socket, LOOPBACK_IP, 9100, b"loopback") {
+        panic!("UDP loopback send failed");
+    }
+    let loop_datagram = stack
+        .recv_udp(loop_socket)
+        .expect("UDP loopback inbox stayed empty");
+    if loop_datagram.src != LOOPBACK_IP
+        || loop_datagram.src_port != 9100
+        || loop_datagram.payload != b"loopback"
+    {
+        panic!("UDP loopback self-test failed");
+    }
+
     *NET_STATS.lock() = stack.stats();
-    crate::println!("Networking self-test passed: VirtIO net, ARP, IPv4, ICMP, UDP sockets.");
+    crate::println!(
+        "Networking self-test passed: VirtIO net, loopback, ARP, IPv4, ICMP, UDP sockets."
+    );
 }

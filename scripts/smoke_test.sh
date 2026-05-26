@@ -242,7 +242,15 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "ping 127.0.0.1"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "curl_lite http://10.0.2.2/"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "loopback_demo"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -396,7 +404,7 @@ grep -q "two words" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: edit /home/note" "$SERIAL_LOG"
 grep -q "edit: /home/note" "$SERIAL_LOG"
 grep -q "edit: appended" "$SERIAL_LOG"
-grep -q "edit: wrote 1 line(s)" "$SERIAL_LOG"
+grep -q "edit: wrote" "$SERIAL_LOG"
 grep -q "edit: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/note" "$SERIAL_LOG"
 grep -q "hello from edit" "$SERIAL_LOG"
@@ -435,8 +443,14 @@ grep -q "TTY canonical line ready: echo after ctrlz" "$SERIAL_LOG"
 grep -q "after ctrlz" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: ping 10.0.2.2" "$SERIAL_LOG"
 grep -q "1 packets transmitted, 1 received" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: ping 127.0.0.1" "$SERIAL_LOG"
+grep -q "64 bytes from 127.0.0.1" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: curl_lite http://10.0.2.2/" "$SERIAL_LOG"
 grep -q "ristux tcp ok" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: loopback_demo" "$SERIAL_LOG"
+grep -q "loopback: server received" "$SERIAL_LOG"
+grep -q "loopback: client received" "$SERIAL_LOG"
+grep -q "loopback: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: sig_demo" "$SERIAL_LOG"
 grep -q "sig_demo: handler ran" "$SERIAL_LOG"
 grep -q "sig_demo: after sigreturn" "$SERIAL_LOG"

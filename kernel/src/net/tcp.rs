@@ -243,10 +243,16 @@ impl TcpStack {
             self.acknowledge(packet.src_ip, packet.src_port, packet.dst_port, packet.ack);
         }
 
-        let Some(index) = self.sockets.iter().position(|socket| {
-            socket.matches_packet(&packet)
-                || (socket.state == TcpState::Listen && socket.local_port == packet.dst_port)
-        }) else {
+        let Some(index) = self
+            .sockets
+            .iter()
+            .position(|socket| socket.matches_packet(&packet))
+            .or_else(|| {
+                self.sockets.iter().position(|socket| {
+                    socket.state == TcpState::Listen && socket.local_port == packet.dst_port
+                })
+            })
+        else {
             return false;
         };
 
@@ -277,7 +283,7 @@ impl TcpStack {
                     let mut peer = TcpSocket::new(socket.local_port);
                     peer.remote_ip = packet.src_ip;
                     peer.remote_port = packet.src_port;
-                    peer.state = TcpState::SynReceived;
+                    peer.state = TcpState::Established;
                     peer.seq = 1;
                     peer.ack = packet.seq.wrapping_add(1);
                     outbound = Some(build_outbound(&peer, TCP_FLAG_SYN | TCP_FLAG_ACK, &[]));

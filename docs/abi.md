@@ -167,6 +167,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   propagation.
 - Editor: `/bin/edit` is a tiny line editor with append, insert, delete, print,
   write, and quit commands for basic file editing from the console or a PTY.
+- Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
+  and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
+  client and listener through the normal `socket`/`bind`/`listen`/`connect`/
+  `accept`/`sendto`/`recvfrom` path.
 - Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,

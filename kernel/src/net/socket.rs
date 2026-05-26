@@ -216,6 +216,31 @@ pub fn self_test() {
         if !response[..read].starts_with(b"HTTP/1.0 200 OK") {
             panic!("tcp socket response missing");
         }
+
+        let listener = table
+            .socket(SocketDomain::Inet, SocketType::Stream)
+            .expect("loopback listener socket");
+        table.bind(listener, 18080).expect("loopback bind");
+        table.listen(listener).expect("loopback listen");
+        let client = table
+            .socket(SocketDomain::Inet, SocketType::Stream)
+            .expect("loopback client socket");
+        table
+            .connect(client, Ipv4Addr([127, 0, 0, 1]), 18080)
+            .expect("loopback connect");
+        let server = table.accept(listener).expect("loopback accept");
+        table.send(client, b"ping").expect("loopback client send");
+        let mut request = [0u8; 8];
+        let read = table.recv(server, &mut request).expect("loopback server recv");
+        if &request[..read] != b"ping" {
+            panic!("loopback server payload mismatch");
+        }
+        table.send(server, b"pong").expect("loopback server send");
+        let mut response = [0u8; 8];
+        let read = table.recv(client, &mut response).expect("loopback client recv");
+        if &response[..read] != b"pong" {
+            panic!("loopback client payload mismatch");
+        }
     });
     crate::println!("Socket layer self-test passed.");
 }
