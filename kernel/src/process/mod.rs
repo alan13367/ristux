@@ -20,7 +20,7 @@ static CURRENT_PID: SpinLock<Option<Pid>> = SpinLock::new(None);
 pub type Pid = u64;
 
 const MAX_FDS: usize = 16;
-const MAX_USER_ARGS: usize = 8;
+const MAX_USER_ARGS: usize = 32;
 const MAX_USER_ENVS: usize = 16;
 pub const FD_CLOEXEC: u32 = 1;
 

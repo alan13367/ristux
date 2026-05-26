@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <arpa/inet.h>
+#include <crypt.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -2337,6 +2338,15 @@ int toupper(int ch) {
     return islower(ch) ? ch - 'a' + 'A' : ch;
 }
 
+char *crypt(const char *key, const char *salt) {
+    static char blank_hash[] = "";
+    if (key != NULL && salt != NULL && key[0] == '\0' && salt[0] == '\0') {
+        return blank_hash;
+    }
+    errno = ENOSYS;
+    return NULL;
+}
+
 int putchar(int ch) {
     unsigned char c = (unsigned char)ch;
     return write(1, &c, 1) == 1 ? ch : -1;
@@ -2774,6 +2784,10 @@ int fgetc(FILE *stream) {
         return EOF;
     }
     return byte;
+}
+
+int getchar(void) {
+    return fgetc(stdin);
 }
 
 char *fgets(char *s, int size, FILE *stream) {

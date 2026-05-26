@@ -120,6 +120,7 @@ case "$SCENARIO" in
       "cc_libc_compat: time format ok"
       "cc_libc_compat: setjmp ok"
       "cc_libc_compat: dropbear types ok"
+      "cc_libc_compat: crypt ok"
       "cc_libc_compat: stdio file ok"
       "cc_libc_compat: process env open ok"
       "cc_libc_compat: done"
@@ -185,6 +186,18 @@ case "$SCENARIO" in
       "ssh_banner: banner ok"
     )
     ;;
+  dropbear-session)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
+    COMMANDS=(
+      "dropbear -F -E -R -B -p 127.0.0.1:2222 &"
+      "dbclient -y -y -t -p 2222 -l root 127.0.0.1 echo ssh_session_check"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: dropbear -F -E -R -B -p 127.0.0.1:2222 &"
+      "TTY canonical line ready: dbclient -y -y -t -p 2222 -l root 127.0.0.1 echo ssh_session_check"
+      "ssh_session_check"
+    )
+    ;;
   command)
     shift
     if [[ $# -eq 0 ]]; then
@@ -200,7 +213,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, pty, pty-shell, dropbear, dropbear-banner, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

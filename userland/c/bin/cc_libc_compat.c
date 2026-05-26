@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <crypt.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -191,6 +192,21 @@ static int check_dropbear_types(void) {
     return 0;
 }
 
+static int check_crypt(void) {
+    char *blank = crypt("", "");
+    if (blank == NULL || strcmp(blank, "") != 0) {
+        puts("cc_libc_compat: crypt failed");
+        return 1;
+    }
+    errno = 0;
+    if (crypt("password", "salt") != NULL || errno != ENOSYS) {
+        puts("cc_libc_compat: crypt unsupported failed");
+        return 1;
+    }
+    puts("cc_libc_compat: crypt ok");
+    return 0;
+}
+
 static int check_stdio_file(void) {
     FILE *fp = fopen("/tmp/cc_libc_stdio.txt", "w");
     if (fp == NULL) {
@@ -296,6 +312,7 @@ int main(void) {
         check_time_format() != 0 ||
         check_setjmp() != 0 ||
         check_dropbear_types() != 0 ||
+        check_crypt() != 0 ||
         check_stdio_file() != 0 ||
         check_process_env_open() != 0) {
         return 1;

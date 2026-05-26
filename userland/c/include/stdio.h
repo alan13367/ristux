@@ -17,6 +17,7 @@ extern FILE *stdout;
 extern FILE *stderr;
 
 int putchar(int ch);
+int getchar(void);
 int puts(const char *s);
 int printf(const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);

@@ -10,7 +10,8 @@ RUST_BIN="$RUST_SYSROOT/lib/rustlib/$RUST_HOST/bin"
 RUST_LLD="${RUST_LLD:-$RUST_BIN/rust-lld}"
 LLVM_AR="${LLVM_AR:-$RUST_BIN/llvm-ar}"
 
-OUT="${1:-$ROOT/build/userland/dropbear.elf}"
+DROPBEAR_OUT="${1:-$ROOT/build/userland/dropbear.elf}"
+DBCLIENT_OUT="${2:-}"
 BUILD="$ROOT/build/ports/dropbear"
 
 if [[ -z "${DROPBEAR_SRC:-}" ]]; then
@@ -32,11 +33,15 @@ if [[ ! -d "$DROPBEAR_SRC/src" || ! -d "$DROPBEAR_SRC/libtomcrypt" || ! -d "$DRO
 fi
 
 INCLUDE="$BUILD/include"
-OBJ="$BUILD/obj"
+SERVER_OBJ="$BUILD/server-obj"
+CLIENT_OBJ="$BUILD/client-obj"
 LTM_OBJ="$BUILD/libtommath-obj"
 LTC_BUILD="$BUILD/libtomcrypt"
 
-mkdir -p "$INCLUDE" "$OBJ" "$LTM_OBJ" "$(dirname "$OUT")"
+mkdir -p "$INCLUDE" "$SERVER_OBJ" "$CLIENT_OBJ" "$LTM_OBJ" "$(dirname "$DROPBEAR_OUT")"
+if [[ -n "$DBCLIENT_OUT" ]]; then
+  mkdir -p "$(dirname "$DBCLIENT_OUT")"
+fi
 cp "$ROOT/ports/dropbear/config.h" "$INCLUDE/config.h"
 cp "$ROOT/ports/dropbear/localoptions.h" "$INCLUDE/localoptions.h"
 sh "$DROPBEAR_SRC/src/ifndef_wrapper.sh" < "$DROPBEAR_SRC/src/default_options.h" > "$INCLUDE/default_options_guard.h"
@@ -70,13 +75,6 @@ COMMON_CFLAGS=(
   -Wno-unused-variable
 )
 
-DROPBEAR_CFLAGS=(
-  "${COMMON_CFLAGS[@]}"
-  -DDROPBEAR_CLIENT=0
-  -DDROPBEAR_SERVER=1
-  -DDROPBEAR_MULTI=0
-)
-
 LTM_OBJECTS=()
 for source in "$DROPBEAR_SRC"/libtommath/*.c; do
   name="$(basename "$source" .c)"
@@ -98,18 +96,10 @@ make -C "$LTC_BUILD" -f makefile.unix \
   CFLAGS="${COMMON_CFLAGS[*]} -DLTC_NO_FILE -DUSE_LTM -DLTM_DESC -I$DROPBEAR_SRC/libtommath" \
   libtomcrypt.a
 
-DROPBEAR_SOURCES=(
+COMMON_SOURCES=(
   atomicio
   bignum
   buffer
-  chachapoly
-  circbuffer
-  common-algo
-  common-channel
-  common-chansession
-  common-kex
-  common-runopts
-  common-session
   compat
   crypto_desc
   curve25519
@@ -117,7 +107,6 @@ DROPBEAR_SOURCES=(
   dbmalloc
   dbrandom
   dbutil
-  dh_groups
   dss
   ecc
   ecdsa
@@ -128,6 +117,25 @@ DROPBEAR_SOURCES=(
   gened25519
   genrsa
   gensignkey
+  ltc_prng
+  queue
+  rsa
+  signkey
+  sk-ecdsa
+  sk-ed25519
+)
+
+CLISVR_SOURCES=(
+  chachapoly
+  circbuffer
+  common-algo
+  common-channel
+  common-chansession
+  common-kex
+  common-runopts
+  common-session
+  dh_groups
+  gcm
   kex-dh
   kex-ecdh
   kex-pqhybrid
@@ -135,18 +143,16 @@ DROPBEAR_SOURCES=(
   list
   listener
   loginrec
-  ltc_prng
   mlkem768
   netio
   packet
   process-packet
-  queue
-  rsa
-  signkey
-  sk-ecdsa
-  sk-ed25519
   sntrup761
-  sshpty
+  tcp-accept
+  termcodes
+)
+
+SERVER_SOURCES=(
   svr-agentfwd
   svr-auth
   svr-authpam
@@ -163,25 +169,74 @@ DROPBEAR_SOURCES=(
   svr-streamfwd
   svr-tcpfwd
   svr-x11fwd
-  tcp-accept
-  termcodes
+  sshpty
 )
 
-DROPBEAR_OBJECTS=()
-for name in "${DROPBEAR_SOURCES[@]}"; do
-  source="$DROPBEAR_SRC/src/$name.c"
-  object="$OBJ/$name.o"
-  "$CLANG" "${DROPBEAR_CFLAGS[@]}" -c "$source" -o "$object"
-  DROPBEAR_OBJECTS+=("$object")
-done
+CLIENT_SOURCES=(
+  cli-agentfwd
+  cli-auth
+  cli-authinteract
+  cli-authpasswd
+  cli-authpubkey
+  cli-channel
+  cli-chansession
+  cli-kex
+  cli-main
+  cli-readconf
+  cli-runopts
+  cli-session
+  cli-tcpfwd
+)
 
-"$RUST_LLD" -flavor gnu -T "$ROOT/userland/c/linker.ld" -o "$OUT" \
-  "$ROOT/build/userland/c/crt0.o" \
-  "$ROOT/build/userland/c/crti.o" \
-  "${DROPBEAR_OBJECTS[@]}" \
-  "$LTC_BUILD/libtomcrypt.a" \
-  "$BUILD/libtommath.a" \
-  "$ROOT/build/userland/c/libc.o" \
-  "$ROOT/build/userland/c/crtn.o"
+compile_program() {
+  local out="$1"
+  local obj_dir="$2"
+  local client_define="$3"
+  local server_define="$4"
+  shift 4
+  local sources=("$@")
+  local cflags=(
+    "${COMMON_CFLAGS[@]}"
+    "-DDROPBEAR_CLIENT=$client_define"
+    "-DDROPBEAR_SERVER=$server_define"
+    -DDROPBEAR_MULTI=0
+  )
+  local objects=()
+  for name in "${sources[@]}"; do
+    local source="$DROPBEAR_SRC/src/$name.c"
+    local object="$obj_dir/$name.o"
+    "$CLANG" "${cflags[@]}" -c "$source" -o "$object"
+    objects+=("$object")
+  done
 
-echo "built $OUT"
+  "$RUST_LLD" -flavor gnu -T "$ROOT/userland/c/linker.ld" -o "$out" \
+    "$ROOT/build/userland/c/crt0.o" \
+    "$ROOT/build/userland/c/crti.o" \
+    "${objects[@]}" \
+    "$LTC_BUILD/libtomcrypt.a" \
+    "$BUILD/libtommath.a" \
+    "$ROOT/build/userland/c/libc.o" \
+    "$ROOT/build/userland/c/crtn.o"
+
+  echo "built $out"
+}
+
+compile_program \
+  "$DROPBEAR_OUT" \
+  "$SERVER_OBJ" \
+  0 \
+  1 \
+  "${COMMON_SOURCES[@]}" \
+  "${CLISVR_SOURCES[@]}" \
+  "${SERVER_SOURCES[@]}"
+
+if [[ -n "$DBCLIENT_OUT" ]]; then
+  compile_program \
+    "$DBCLIENT_OUT" \
+    "$CLIENT_OBJ" \
+    1 \
+    0 \
+    "${COMMON_SOURCES[@]}" \
+    "${CLISVR_SOURCES[@]}" \
+    "${CLIENT_SOURCES[@]}"
+fi

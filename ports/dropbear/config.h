@@ -55,6 +55,8 @@
 #define HAVE_BASENAME 1
 #define HAVE_CLEARENV 1
 #define HAVE_CLOCK_GETTIME 1
+#define HAVE_CRYPT 1
+#define HAVE_CRYPT_H 1
 #define HAVE_DAEMON 1
 #define HAVE_DIRNAME 1
 #define HAVE_FREEADDRINFO 1
