@@ -123,6 +123,7 @@ USER_CC_PROC_OBJ := build/userland/c/cc_proc.o
 USER_CC_PROC_ELF := build/userland/cc_proc.elf
 USER_CC_PROCFS_OBJ := build/userland/c/cc_procfs.o
 USER_CC_PROCFS_ELF := build/userland/cc_procfs.elf
+USER_DROPBEAR_ELF := build/userland/dropbear.elf
 ROOTFS_BUILDER := build/build_rootfs
 EXT2_DISK_BUILDER := build/build_ext2_disk
 PACKAGE_TAR_BUILDER := build/build_package_tar
@@ -133,7 +134,7 @@ ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
 ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
 ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
-.PHONY: all build rootfs disk check-multiboot iso run run-headless smoke quick quick-% debug test clean
+.PHONY: all build rootfs disk dropbear-port check-multiboot iso run run-headless smoke quick quick-% debug test clean
 
 all: build
 
@@ -437,6 +438,11 @@ $(USER_CC_PROCFS_OBJ): userland/c/bin/cc_procfs.c $(USER_C_HEADERS)
 
 $(USER_CC_PROCFS_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_PROCFS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_PROCFS_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
+
+$(USER_DROPBEAR_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld scripts/build_dropbear_port.sh ports/dropbear/config.h ports/dropbear/localoptions.h
+	scripts/build_dropbear_port.sh $@
+
+dropbear-port: $(USER_DROPBEAR_ELF)
 
 $(ROOTFS_BUILDER): tools/build_rootfs.rs tools/package_archive.rs
 	mkdir -p build
