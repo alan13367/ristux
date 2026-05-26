@@ -1777,7 +1777,7 @@ impl Vfs {
 
     fn pty_number(&self, fd: usize) -> Option<usize> {
         match self.open_files.get(fd).and_then(|slot| slot.as_ref())? {
-            OpenHandle::PtyMaster { pty, .. } => Some(*pty),
+            OpenHandle::PtyMaster { pty, .. } | OpenHandle::PtySlave { pty, .. } => Some(*pty),
             _ => None,
         }
     }

@@ -1799,6 +1799,7 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const TIOCGPGRP: u64 = 0x540f;
     const TIOCSPGRP: u64 = 0x5410;
     const TIOCGWINSZ: u64 = 0x5413;
+    const TIOCSWINSZ: u64 = 0x5414;
     const TIOCGPTN: u64 = 0x8004_5430;
     const TIOCSPTLCK: u64 = 0x4004_5431;
 
@@ -1862,6 +1863,13 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             out[0..2].copy_from_slice(&24u16.to_le_bytes());
             out[2..4].copy_from_slice(&80u16.to_le_bytes());
             out[4..8].fill(0);
+            Ok(0)
+        }
+        TIOCSWINSZ => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
+            process::read_user(argp, 8).ok_or(EFAULT)?;
             Ok(0)
         }
         _ => Ok(0),

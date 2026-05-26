@@ -61,6 +61,16 @@ case "$SCENARIO" in
       "cc_passwd: done"
     )
     ;;
+  pty)
+    COMMANDS=("cc_pty")
+    EXPECTS=(
+      "cc_pty: open ok"
+      "cc_pty: master-to-slave ok"
+      "cc_pty: slave-to-master ok"
+      "cc_pty: openpty ok"
+      "cc_pty: done"
+    )
+    ;;
   libc)
     COMMANDS=("cc_libc_compat")
     EXPECTS=(

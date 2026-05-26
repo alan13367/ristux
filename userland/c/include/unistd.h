@@ -46,6 +46,8 @@ int setgroups(size_t size, const gid_t *list);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
 int access(const char *path, int mode);
+int isatty(int fd);
+char *ttyname(int fd);
 int unlink(const char *path);
 int rmdir(const char *path);
 int link(const char *oldpath, const char *newpath);

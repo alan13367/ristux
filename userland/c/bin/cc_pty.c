@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <poll.h>
+#include <pty.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,34 @@ static int expect_bytes(int fd, const char *expected, size_t len) {
     }
     ssize_t got = read(fd, buf, len);
     return got == (ssize_t)len && memcmp(buf, expected, len) == 0;
+}
+
+static int check_openpty(void) {
+    int master = -1;
+    int slave = -1;
+    char name[32];
+    struct winsize ws = { 30, 100, 0, 0 };
+    if (openpty(&master, &slave, name, NULL, &ws) < 0) {
+        puts("cc_pty: openpty failed");
+        return 1;
+    }
+    if (!isatty(master) || !isatty(slave)) {
+        puts("cc_pty: isatty failed");
+        return 1;
+    }
+    char *slave_name = ttyname(slave);
+    if (slave_name == NULL || strcmp(slave_name, name) != 0) {
+        puts("cc_pty: ttyname failed");
+        return 1;
+    }
+    if (write(master, "op", 2) != 2 || !expect_bytes(slave, "op", 2)) {
+        puts("cc_pty: openpty transfer failed");
+        return 1;
+    }
+    close(slave);
+    close(master);
+    puts("cc_pty: openpty ok");
+    return 0;
 }
 
 int main(void) {
@@ -85,6 +114,9 @@ int main(void) {
 
     close(slave);
     close(master);
+    if (check_openpty() != 0) {
+        return 1;
+    }
     puts("cc_pty: done");
     return 0;
 }

@@ -9,6 +9,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pty.h>
 #include <pwd.h>
 #include <signal.h>
 #include <shadow.h>
@@ -1231,6 +1232,69 @@ char *ptsname(int fd) {
     return path;
 }
 
+int isatty(int fd) {
+    struct termios term;
+    if (tcgetattr(fd, &term) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+char *ttyname(int fd) {
+    char *path = ptsname(fd);
+    if (path != NULL) {
+        return path;
+    }
+    if (isatty(fd)) {
+        static char tty_path[] = "/dev/tty";
+        return tty_path;
+    }
+    errno = ENOTTY;
+    return NULL;
+}
+
+int openpty(int *amaster, int *aslave, char *name,
+            const struct termios *termp, const struct winsize *winp) {
+    if (amaster == NULL || aslave == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    int master = posix_openpt(O_RDWR);
+    if (master < 0) {
+        return -1;
+    }
+    if (grantpt(master) < 0 || unlockpt(master) < 0) {
+        close(master);
+        return -1;
+    }
+    char *slave_name = ptsname(master);
+    if (slave_name == NULL) {
+        close(master);
+        return -1;
+    }
+    int slave = open(slave_name, O_RDWR, 0);
+    if (slave < 0) {
+        close(master);
+        return -1;
+    }
+    if (termp != NULL && tcsetattr(slave, TCSANOW, termp) < 0) {
+        close(slave);
+        close(master);
+        return -1;
+    }
+    if (winp != NULL && ioctl(slave, TIOCSWINSZ, winp) < 0) {
+        close(slave);
+        close(master);
+        return -1;
+    }
+    if (name != NULL) {
+        strcpy(name, slave_name);
+    }
+    *amaster = master;
+    *aslave = slave;
+    return 0;
+}
+
 int chdir(const char *path) {
     return (int)syscall_ret(syscall1(SYS_CHDIR, (long)path));
 }
@@ -1684,6 +1748,7 @@ char *strerror(int errnum) {
     case EEXIST: return "File exists";
     case ENOTDIR: return "Not a directory";
     case EINVAL: return "Invalid argument";
+    case ENOTTY: return "Inappropriate ioctl for device";
     case ERANGE: return "Result too large";
     case ENOSYS: return "Function not implemented";
     case ECONNRESET: return "Connection reset by peer";

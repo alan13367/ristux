@@ -16,6 +16,7 @@ extern int errno;
 #define EEXIST 17
 #define ENOTDIR 20
 #define EINVAL 22
+#define ENOTTY 25
 #define ENOSYS 38
 #define ERANGE 34
 #define ECONNRESET 104
