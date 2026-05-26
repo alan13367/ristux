@@ -7,6 +7,7 @@ file /bin/chmod ../build/userland/chmod.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
 file /bin/cc_cow ../build/userland/cc_cow.elf
 file /bin/cc_dev ../build/userland/cc_dev.elf
+file /bin/cc_ext2 ../build/userland/cc_ext2.elf
 file /bin/cc_fcntl ../build/userland/cc_fcntl.elf
 file /bin/cc_fs ../build/userland/cc_fs.elf
 file /bin/cc_hello ../build/userland/cc_hello.elf
@@ -44,6 +45,7 @@ package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow
 package cc_dev 0.1.0 /bin/cc_dev
+package cc_ext2 0.1.0 /bin/cc_ext2
 package cc_fcntl 0.1.0 /bin/cc_fcntl
 package cc_fs 0.1.0 /bin/cc_fs
 package cc_hello 0.1.0 /bin/cc_hello

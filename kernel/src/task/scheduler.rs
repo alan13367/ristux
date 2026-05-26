@@ -6,7 +6,7 @@ use core::{
 
 use crate::sync::spinlock::SpinLock;
 
-const KERNEL_STACK_SIZE: usize = 4096;
+const KERNEL_STACK_SIZE: usize = 16 * 1024;
 
 global_asm!(
     r#"
@@ -77,8 +77,10 @@ pub struct Task {
 impl Task {
     fn new(id: TaskId, name: &'static str, main_fn: fn(TaskId)) -> Self {
         let stack = Box::new([0u8; KERNEL_STACK_SIZE]);
-        let stack_top = stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64;
+        let raw_stack_top = stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64;
+        let stack_top = (raw_stack_top & !0xf) - 8;
         // Layout expected by context_switch restore: six saved registers then return address.
+        // After the ret into task_trampoline, RSP must satisfy the x86_64 SysV entry alignment.
         let frame_base = stack_top - 56;
         unsafe {
             *(frame_base as *mut u64).add(6) = task_trampoline as *const () as u64;

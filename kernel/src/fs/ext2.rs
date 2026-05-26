@@ -68,6 +68,19 @@ impl Inode {
             blocks: [0; EXT2_N_BLOCKS],
         }
     }
+
+    fn empty_dir(uid: u32, gid: u32, mode: u16, block: u32) -> Self {
+        let mut blocks = [0; EXT2_N_BLOCKS];
+        blocks[0] = block;
+        Self {
+            mode: EXT2_S_IFDIR | (mode & 0o7777),
+            uid,
+            gid,
+            size: 1024,
+            links: 2,
+            blocks,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -231,6 +244,50 @@ impl Ext2Fs {
         Ok(())
     }
 
+    pub fn create_dir(
+        &mut self,
+        path: &str,
+        uid: u32,
+        gid: u32,
+        mode: u16,
+    ) -> Result<(), Ext2Error> {
+        if self.lookup_path(path).is_ok() {
+            return Err(Ext2Error::AlreadyExists);
+        }
+        let (parent_path, name) = split_parent_name(path)?;
+        let (parent_ino, mut parent) = self.lookup_path(&parent_path)?;
+        if !parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+
+        let ino = self.allocate_inode()?;
+        let block = match self.allocate_block() {
+            Ok(block) => block,
+            Err(err) => {
+                let _ = self.free_inode(ino);
+                return Err(err);
+            }
+        };
+        if let Err(err) = self.write_dir_block(block, ino, parent_ino) {
+            let _ = self.free_block(block);
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        let inode = Inode::empty_dir(uid, gid, mode, block);
+        if let Err(err) = self.write_inode(ino, &inode) {
+            let _ = self.free_block(block);
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        if let Err(err) = self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_DIR) {
+            let _ = self.free_inode_blocks(&inode);
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        parent.links = parent.links.saturating_add(1);
+        self.write_inode(parent_ino, &parent)
+    }
+
     pub fn truncate_file(&mut self, path: &str) -> Result<(), Ext2Error> {
         self.write_file(path, &[])
     }
@@ -251,6 +308,118 @@ impl Ext2Fs {
         self.insert_dir_entry(parent_ino, &parent, source_ino, &name, EXT2_FT_REG_FILE)?;
         source.links = source.links.saturating_add(1);
         self.write_inode(source_ino, &source)
+    }
+
+    pub fn unlink(&mut self, path: &str) -> Result<(), Ext2Error> {
+        let (parent_path, name) = split_parent_name(path)?;
+        let (_ino, mut inode) = self.lookup_path(path)?;
+        if !inode.is_file() {
+            return Err(Ext2Error::NotFile);
+        }
+        let (_parent_ino, parent) = self.lookup_path(&parent_path)?;
+        if !parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        let removed_ino = self.remove_dir_entry(&parent, &name)?;
+        if inode.links > 1 {
+            inode.links -= 1;
+            self.write_inode(removed_ino, &inode)
+        } else {
+            self.free_inode_blocks(&inode)?;
+            self.free_inode(removed_ino)
+        }
+    }
+
+    pub fn rmdir(&mut self, path: &str) -> Result<(), Ext2Error> {
+        if path == "/" {
+            return Err(Ext2Error::Unsupported);
+        }
+        let (parent_path, name) = split_parent_name(path)?;
+        let (ino, inode) = self.lookup_path(path)?;
+        if !inode.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        if !self.is_empty_dir(&inode)? {
+            return Err(Ext2Error::Unsupported);
+        }
+        let (parent_ino, mut parent) = self.lookup_path(&parent_path)?;
+        if !parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        let removed_ino = self.remove_dir_entry(&parent, &name)?;
+        if removed_ino != ino {
+            return Err(Ext2Error::IoError);
+        }
+        self.free_inode_blocks(&inode)?;
+        self.free_inode(ino)?;
+        parent.links = parent.links.saturating_sub(1).max(2);
+        self.write_inode(parent_ino, &parent)
+    }
+
+    pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), Ext2Error> {
+        if old_path == new_path {
+            return Ok(());
+        }
+        if old_path == "/" || new_path == "/" {
+            return Err(Ext2Error::Unsupported);
+        }
+        if self.lookup_path(new_path).is_ok() {
+            let (old_ino, _old_inode) = self.lookup_path(old_path)?;
+            let (new_ino, new_inode) = self.lookup_path(new_path)?;
+            if new_ino == old_ino {
+                let (old_parent_path, old_name) = split_parent_name(old_path)?;
+                let (_old_parent_ino, old_parent) = self.lookup_path(&old_parent_path)?;
+                let _ = self.remove_dir_entry(&old_parent, &old_name)?;
+                return Ok(());
+            }
+            if !new_inode.is_file() {
+                return Err(Ext2Error::NotFile);
+            }
+            self.unlink(new_path)?;
+        }
+
+        let (old_parent_path, old_name) = split_parent_name(old_path)?;
+        let (new_parent_path, new_name) = split_parent_name(new_path)?;
+        let (old_ino, old_inode) = self.lookup_path(old_path)?;
+        if old_inode.is_dir() && old_parent_path != new_parent_path {
+            return Err(Ext2Error::Unsupported);
+        }
+        let (_old_parent_ino, old_parent) = self.lookup_path(&old_parent_path)?;
+        let (new_parent_ino, new_parent) = self.lookup_path(&new_parent_path)?;
+        if !old_parent.is_dir() || !new_parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        let file_type = if old_inode.is_dir() {
+            EXT2_FT_DIR
+        } else if old_inode.is_file() {
+            EXT2_FT_REG_FILE
+        } else {
+            return Err(Ext2Error::Unsupported);
+        };
+        self.insert_dir_entry(new_parent_ino, &new_parent, old_ino, &new_name, file_type)?;
+        let removed_ino = self.remove_dir_entry(&old_parent, &old_name)?;
+        if removed_ino == old_ino {
+            Ok(())
+        } else {
+            Err(Ext2Error::IoError)
+        }
+    }
+
+    pub fn chmod(&mut self, path: &str, mode: u16) -> Result<(), Ext2Error> {
+        let (ino, mut inode) = self.lookup_path(path)?;
+        inode.mode = (inode.mode & EXT2_S_IFMT) | (mode & 0o7777);
+        self.write_inode(ino, &inode)
+    }
+
+    pub fn chown(&mut self, path: &str, uid: u32, gid: u32) -> Result<(), Ext2Error> {
+        let (ino, mut inode) = self.lookup_path(path)?;
+        if uid != u32::MAX {
+            inode.uid = uid;
+        }
+        if gid != u32::MAX {
+            inode.gid = gid;
+        }
+        self.write_inode(ino, &inode)
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
@@ -452,6 +621,16 @@ impl Ext2Fs {
         Ok(entries)
     }
 
+    fn is_empty_dir(&self, inode: &Inode) -> Result<bool, Ext2Error> {
+        if !inode.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+        Ok(self
+            .read_dir_entries(inode)?
+            .into_iter()
+            .all(|entry| entry.name == "." || entry.name == ".."))
+    }
+
     fn write_inode(&self, ino: u32, inode: &Inode) -> Result<(), Ext2Error> {
         if ino == 0 || ino > self.inodes_count {
             return Err(Ext2Error::NotFound);
@@ -569,6 +748,67 @@ impl Ext2Fs {
             offset += rec_len;
         }
         Err(Ext2Error::DirectoryFull)
+    }
+
+    fn remove_dir_entry(&mut self, parent: &Inode, name: &str) -> Result<u32, Ext2Error> {
+        if name.is_empty() || name == "." || name == ".." {
+            return Err(Ext2Error::Unsupported);
+        }
+        let block = parent.blocks[0];
+        if block == 0 {
+            return Err(Ext2Error::Unsupported);
+        }
+        let mut data = [0u8; 1024];
+        read_block_sized(block as u64, self.block_size, &mut data)?;
+        let mut offset = 0usize;
+        let mut previous_offset = None;
+        while offset + 8 <= self.block_size {
+            let ino = le_u32(&data, offset);
+            let rec_len = le_u16(&data, offset + 4) as usize;
+            let name_len = data[offset + 6] as usize;
+            if rec_len < 8 || offset + rec_len > self.block_size {
+                break;
+            }
+            if ino != 0 && name_len > 0 && name_len <= rec_len.saturating_sub(8) {
+                let name_bytes = &data[offset + 8..offset + 8 + name_len];
+                if name_bytes == name.as_bytes() {
+                    if let Some(previous_offset) = previous_offset {
+                        let previous_len = le_u16(&data, previous_offset + 4) as usize;
+                        put_u16(
+                            &mut data,
+                            previous_offset + 4,
+                            (previous_len + rec_len) as u16,
+                        );
+                    } else {
+                        put_u32(&mut data, offset, 0);
+                    }
+                    write_block_sized(block as u64, self.block_size, &data)?;
+                    return Ok(ino);
+                }
+            }
+            previous_offset = Some(offset);
+            offset += rec_len;
+        }
+        Err(Ext2Error::NotFound)
+    }
+
+    fn write_dir_block(
+        &self,
+        block: u32,
+        self_ino: u32,
+        parent_ino: u32,
+    ) -> Result<(), Ext2Error> {
+        let mut data = [0u8; 1024];
+        write_dir_record(&mut data, 0, self_ino, 12, ".", EXT2_FT_DIR);
+        write_dir_record(
+            &mut data,
+            12,
+            parent_ino,
+            (self.block_size - 12) as u16,
+            "..",
+            EXT2_FT_DIR,
+        );
+        write_block_sized(block as u64, self.block_size, &data)
     }
 
     fn allocate_inode(&mut self) -> Result<u32, Ext2Error> {
@@ -710,6 +950,21 @@ fn put_u16(buf: &mut [u8], offset: usize, value: u16) {
 
 fn put_u32(buf: &mut [u8], offset: usize, value: u32) {
     buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_dir_record(
+    buf: &mut [u8],
+    offset: usize,
+    ino: u32,
+    rec_len: u16,
+    name: &str,
+    file_type: u8,
+) {
+    put_u32(buf, offset, ino);
+    put_u16(buf, offset + 4, rec_len);
+    buf[offset + 6] = name.len() as u8;
+    buf[offset + 7] = file_type;
+    buf[offset + 8..offset + 8 + name.len()].copy_from_slice(name.as_bytes());
 }
 
 fn bitmap_bit(buf: &[u8], bit: usize) -> bool {

@@ -626,6 +626,26 @@ impl Vfs {
     ) -> Result<(), VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
+        if Self::use_root_ext2(path) {
+            let parent_path = parent_path(path);
+            if let Some(fs) = self.root_ext2_mut() {
+                if fs.metadata(path).is_ok() {
+                    return Err(VfsError::AlreadyExists);
+                }
+                let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+                if parent.kind != ext2::Ext2NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                if !parent.metadata.can_access(creds, Access::Write)
+                    || !parent.metadata.can_access(creds, Access::Execute)
+                {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs
+                    .create_dir(path, creds.euid, creds.egid, mode)
+                    .map_err(map_ext2_error);
+            }
+        }
         if self.nodes.iter().any(|node| node.path == path) {
             return Err(VfsError::AlreadyExists);
         }
@@ -650,6 +670,21 @@ impl Vfs {
         let path = normalized.as_str();
         if path == "/" {
             return Err(VfsError::PermissionDenied);
+        }
+        if Self::use_root_ext2(path) {
+            let parent_path = parent_path(path);
+            if let Some(fs) = self.root_ext2_mut() {
+                let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+                if parent.kind != ext2::Ext2NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                if !parent.metadata.can_access(creds, Access::Write)
+                    || !parent.metadata.can_access(creds, Access::Execute)
+                {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs.rmdir(path).map_err(map_ext2_error);
+            }
         }
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         if self.nodes.iter().any(|node| {
@@ -678,6 +713,21 @@ impl Vfs {
     fn unlink_as(&mut self, path: &str, creds: Credentials) -> Result<(), VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
+        if Self::use_root_ext2(path) {
+            let parent_path = parent_path(path);
+            if let Some(fs) = self.root_ext2_mut() {
+                let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+                if parent.kind != ext2::Ext2NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                if !parent.metadata.can_access(creds, Access::Write)
+                    || !parent.metadata.can_access(creds, Access::Execute)
+                {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs.unlink(path).map_err(map_ext2_error);
+            }
+        }
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         let node = self
             .nodes
@@ -698,6 +748,30 @@ impl Vfs {
         let new_path = normalized_new.as_str();
         if old_path == "/" || new_path == "/" {
             return Err(VfsError::PermissionDenied);
+        }
+        if Self::use_root_ext2(old_path) || Self::use_root_ext2(new_path) {
+            if !Self::use_root_ext2(old_path) || !Self::use_root_ext2(new_path) {
+                return Err(VfsError::NotFound);
+            }
+            let old_parent_path = parent_path(old_path);
+            let new_parent_path = parent_path(new_path);
+            if let Some(fs) = self.root_ext2_mut() {
+                let old_parent = fs.metadata(&old_parent_path).map_err(map_ext2_error)?;
+                let new_parent = fs.metadata(&new_parent_path).map_err(map_ext2_error)?;
+                if old_parent.kind != ext2::Ext2NodeKind::Directory
+                    || new_parent.kind != ext2::Ext2NodeKind::Directory
+                {
+                    return Err(VfsError::NotFile);
+                }
+                if !old_parent.metadata.can_access(creds, Access::Write)
+                    || !old_parent.metadata.can_access(creds, Access::Execute)
+                    || !new_parent.metadata.can_access(creds, Access::Write)
+                    || !new_parent.metadata.can_access(creds, Access::Execute)
+                {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs.rename(old_path, new_path).map_err(map_ext2_error);
+            }
         }
         self.ensure_parent_directory(old_path, Some((creds, Access::Write)))?;
         self.ensure_parent_directory(new_path, Some((creds, Access::Write)))?;
@@ -811,6 +885,14 @@ impl Vfs {
     fn chown_as(&mut self, path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
+        if Self::use_root_ext2(path) {
+            if let Some(fs) = self.root_ext2_mut() {
+                if !creds.is_superuser() {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs.chown(path, uid, gid).map_err(map_ext2_error);
+            }
+        }
         let node = self
             .nodes
             .iter_mut()
@@ -830,6 +912,15 @@ impl Vfs {
 
     fn chmod_as(&mut self, path: &str, mode: u16, creds: Credentials) -> Result<(), VfsError> {
         let resolved = self.resolve_symlink_path(path)?;
+        if Self::use_root_ext2(resolved.as_str()) {
+            if let Some(fs) = self.root_ext2_mut() {
+                let meta = fs.metadata(resolved.as_str()).map_err(map_ext2_error)?;
+                if !creds.is_superuser() && creds.euid != meta.metadata.owner {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs.chmod(resolved.as_str(), mode).map_err(map_ext2_error);
+            }
+        }
         let node = self
             .nodes
             .iter()

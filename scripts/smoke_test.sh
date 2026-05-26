@@ -197,6 +197,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_ext2"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_proc"
   sleep 1
   printf 'sendkey ret\n'
@@ -216,6 +220,10 @@ normalize_serial_noise() {
   printf 'sendkey ret\n'
   sleep 3
   send_text "cat /home/marker"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cat /home/ext2_reboot_marker"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -338,6 +346,10 @@ grep -q "cc_links: rename ok" "$SERIAL_LOG"
 grep -q "cc_links: chown ok" "$SERIAL_LOG"
 grep -q "cc_links: rmdir ok" "$SERIAL_LOG"
 grep -q "cc_links: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_ext2" "$SERIAL_LOG"
+grep -q "cc_ext2: ops ok" "$SERIAL_LOG"
+grep -q "cc_ext2: marker ok" "$SERIAL_LOG"
+grep -q "cc_ext2: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_proc" "$SERIAL_LOG"
 grep -q "cc_proc: pipe exec ok" "$SERIAL_LOG"
 grep -q "cc_proc: wait ok" "$SERIAL_LOG"
@@ -354,8 +366,10 @@ grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
 grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$REBOOT_SERIAL_LOG"
+grep -q "TTY canonical line ready: cat /home/ext2_reboot_marker" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: mount" "$REBOOT_SERIAL_LOG"
 grep -q "persisted" "$REBOOT_SERIAL_LOG"
+grep -q "ext2 persisted" "$REBOOT_SERIAL_LOG"
 grep -q "ext2 on /" "$REBOOT_SERIAL_LOG"
 grep -q "tmpfs on /tmp" "$REBOOT_SERIAL_LOG"
 if [[ "$(grep -o "hello" "$SERIAL_LOG" | wc -l | tr -d ' ')" -lt 4 ]]; then
