@@ -3,6 +3,7 @@
 file /bin/init ../build/userland/init.elf
 file /bin/sh ../build/userland/sh.elf
 file /bin/ansi_demo ../build/userland/ansi_demo.elf
+file /bin/ar ../build/userland/ar.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
@@ -64,6 +65,7 @@ file /etc/resolv.conf etc/resolv.conf
 file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package ansi_demo 0.1.0 /bin/ansi_demo
+package ar 0.1.0 /bin/ar
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow

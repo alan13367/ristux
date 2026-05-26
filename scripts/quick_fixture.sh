@@ -188,6 +188,7 @@ case "$SCENARIO" in
     )
     EXPECTS=(
       "TTY canonical line ready: pkg list"
+      "^ar 0.1.0$"
       "^tar 0.1.0$"
       "^name: tar$"
       "^version: 0.1.0$"
@@ -196,6 +197,29 @@ case "$SCENARIO" in
       "^dependencies:$"
       "^post-install:$"
       "^/bin/tar$"
+    )
+    ;;
+  ar)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "mkdir /tmp/archeck"
+      "cd /tmp/archeck"
+      "echo objone > foo.o"
+      "echo objtwo > bar.o"
+      "ar rcs libtiny.a foo.o bar.o"
+      "ar t libtiny.a"
+      "rm foo.o"
+      "rm bar.o"
+      "ar x libtiny.a"
+      "cat foo.o"
+      "cat bar.o"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: ar rcs libtiny.a foo.o bar.o"
+      "^foo.o$"
+      "^bar.o$"
+      "^objone$"
+      "^objtwo$"
     )
     ;;
   loopback)
@@ -250,7 +274,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
