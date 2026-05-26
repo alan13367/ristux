@@ -44,6 +44,7 @@ file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
 file /bin/loopback_check ../build/userland/loopback_check.elf
 file /bin/ls ../build/userland/ls.elf
+file /bin/make ../build/userland/make.elf
 file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/ping ../build/userland/ping.elf
@@ -111,6 +112,7 @@ package libc 0.1.0 /lib/libc.so
 package login 0.1.0 /bin/login
 package loopback_check 0.1.0 /bin/loopback_check
 package ls 0.1.0 /bin/ls
+package make 0.1.0 /bin/make
 package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir
 package ping 0.1.0 /bin/ping

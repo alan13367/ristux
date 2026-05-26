@@ -245,6 +245,30 @@ case "$SCENARIO" in
       "^  /bin/true$"
     )
     ;;
+  make)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/makecheck"
+      "cd /tmp/makecheck"
+      "echo '.PHONY: all' > Makefile"
+      "echo 'NAME = ristux' >> Makefile"
+      "echo 'all: stamp' >> Makefile"
+      "echo 'stamp:' >> Makefile"
+      "echo '  echo built-\$(NAME) > stamp' >> Makefile"
+      "echo '  echo target-\$@ >> stamp' >> Makefile"
+      "make -s"
+      "cat stamp"
+      "pkg info make"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: make -s"
+      "^built-ristux$"
+      "^target-stamp$"
+      "^name: make$"
+      "^version: 0.1.0$"
+      "^  /bin/make$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -297,7 +321,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -314,14 +338,20 @@ send_text() {
       '&') printf 'sendkey shift-7\n' ;;
       '$') printf 'sendkey shift-4\n' ;;
       '*') printf 'sendkey shift-8\n' ;;
+      '(') printf 'sendkey shift-9\n' ;;
+      ')') printf 'sendkey shift-0\n' ;;
       '/') printf 'sendkey slash\n' ;;
+      '?') printf 'sendkey shift-slash\n' ;;
       ':') printf 'sendkey shift-semicolon\n' ;;
       "'") printf 'sendkey apostrophe\n' ;;
       '"') printf 'sendkey shift-apostrophe\n' ;;
       '.') printf 'sendkey dot\n' ;;
+      ',') printf 'sendkey comma\n' ;;
       '-') printf 'sendkey minus\n' ;;
       '_') printf 'sendkey shift-minus\n' ;;
       '=') printf 'sendkey equal\n' ;;
+      '+') printf 'sendkey shift-equal\n' ;;
+      '@') printf 'sendkey shift-2\n' ;;
       '>') printf 'sendkey shift-dot\n' ;;
       '<') printf 'sendkey shift-comma\n' ;;
       '~') printf 'sendkey shift-grave_accent\n' ;;
