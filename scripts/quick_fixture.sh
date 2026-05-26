@@ -342,6 +342,38 @@ case "$SCENARIO" in
       "^  /bin/grep$"
     )
     ;;
+  script-prims)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/scriptprims"
+      "cd /tmp/scriptprims"
+      "printf value-%s alpha > out.txt"
+      "grep value-alpha out.txt"
+      "test -f out.txt"
+      "echo \$?"
+      "test -d /tmp"
+      "echo \$?"
+      "test 5 -gt 2"
+      "echo \$?"
+      "test -z nonempty"
+      "echo \$?"
+      "pkg info printf"
+      "pkg info test"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: printf value-%s alpha > out.txt"
+      "^value-alpha$"
+      "TTY canonical line ready: test -f out.txt"
+      "^0$"
+      "TTY canonical line ready: test -z nonempty"
+      "^1$"
+      "^name: printf$"
+      "^  /bin/printf$"
+      "^name: test$"
+      "^  /bin/test$"
+      "^  /bin/\\[$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -394,7 +426,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -410,6 +442,7 @@ send_text() {
       '|') printf 'sendkey shift-backslash\n' ;;
       '&') printf 'sendkey shift-7\n' ;;
       '$') printf 'sendkey shift-4\n' ;;
+      '%') printf 'sendkey shift-5\n' ;;
       '*') printf 'sendkey shift-8\n' ;;
       '(') printf 'sendkey shift-9\n' ;;
       ')') printf 'sendkey shift-0\n' ;;
