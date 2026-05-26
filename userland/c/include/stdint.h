@@ -1,6 +1,8 @@
 #ifndef _RISTUX_STDINT_H
 #define _RISTUX_STDINT_H
 
+#include <stddef.h>
+
 typedef signed char int8_t;
 typedef short int16_t;
 typedef int int32_t;
@@ -30,5 +32,6 @@ typedef unsigned long uintptr_t;
 #define INTPTR_MIN INT64_MIN
 #define INTPTR_MAX INT64_MAX
 #define UINTPTR_MAX UINT64_MAX
+#define SIZE_MAX ((size_t)-1)
 
 #endif

@@ -5,6 +5,7 @@
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#define CLOCKS_PER_SEC 1000000L
 
 typedef long clock_t;
 
@@ -26,6 +27,7 @@ struct tm {
 };
 
 time_t time(time_t *tloc);
+clock_t clock(void);
 int clock_gettime(int clockid, struct timespec *tp);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 struct tm *localtime(const time_t *timep);

@@ -126,7 +126,9 @@ static int check_time_format(void) {
     char buf[32];
     if (tm == NULL ||
         strftime(buf, sizeof(buf), "%b %d %H:%M:%S %Y", tm) == 0 ||
-        strcmp(buf, "Jan 01 00:00:00 1970") != 0) {
+        strcmp(buf, "Jan 01 00:00:00 1970") != 0 ||
+        CLOCKS_PER_SEC != 1000000L ||
+        clock() < 0) {
         puts("cc_libc_compat: time format failed");
         return 1;
     }
@@ -180,6 +182,7 @@ static int check_dropbear_types(void) {
     if (byte != 0x12 || word != 0x3456 || dword != 0x789abcdeU ||
         UINT64_MAX != 18446744073709551615UL ||
         INT64_MAX != 9223372036854775807L ||
+        SIZE_MAX != UINT64_MAX ||
         ticks != 0) {
         puts("cc_libc_compat: type alias failed");
         return 1;

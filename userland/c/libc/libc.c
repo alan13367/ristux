@@ -1659,6 +1659,14 @@ int clock_gettime(int clockid, struct timespec *tp) {
     return (int)syscall_ret(syscall2(SYS_CLOCK_GETTIME, clockid, (long)tp));
 }
 
+clock_t clock(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+        return (clock_t)-1;
+    }
+    return (clock_t)(ts.tv_sec * CLOCKS_PER_SEC + ts.tv_nsec / 1000);
+}
+
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
     return (ssize_t)syscall_ret(syscall3(SYS_GETRANDOM, (long)buf, (long)buflen, flags));
 }
@@ -2103,6 +2111,22 @@ void *memcpy(void *dst, const void *src, size_t n) {
         d[i] = s[i];
     }
     return dst;
+}
+
+__uint128_t __udivti3(__uint128_t numerator, __uint128_t denominator) {
+    if (denominator == 0) {
+        return 0;
+    }
+    __uint128_t quotient = 0;
+    __uint128_t remainder = 0;
+    for (int bit = 127; bit >= 0; bit--) {
+        remainder = (remainder << 1) | ((numerator >> bit) & 1);
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            quotient |= ((__uint128_t)1 << bit);
+        }
+    }
+    return quotient;
 }
 
 void *memmove(void *dst, const void *src, size_t n) {
