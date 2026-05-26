@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{
-    Ipv4Addr, SocketId,
+    Ipv4Addr, LOCAL_IP, LOOPBACK_IP, SocketId,
     tcp::{TcpError, TcpStack},
 };
 use crate::sync::spinlock::SpinLock;
@@ -53,6 +53,8 @@ struct SocketEntry {
     backend: SocketBackend,
     peer: Option<SocketAddress>,
     options: SocketOptions,
+    recv_shutdown: bool,
+    send_shutdown: bool,
     fd_flags: u32,
     status_flags: u32,
 }
@@ -108,6 +110,8 @@ impl SocketTable {
                     backend: SocketBackend::Tcp(tcp),
                     peer: None,
                     options: SocketOptions::new(),
+                    recv_shutdown: false,
+                    send_shutdown: false,
                     fd_flags: 0,
                     status_flags: 0,
                 });
@@ -121,6 +125,8 @@ impl SocketTable {
                     backend: SocketBackend::Udp(udp),
                     peer: None,
                     options: SocketOptions::new(),
+                    recv_shutdown: false,
+                    send_shutdown: false,
                     fd_flags: 0,
                     status_flags: 0,
                 });
@@ -228,6 +234,8 @@ impl SocketTable {
                     backend: SocketBackend::Tcp(accepted),
                     peer,
                     options: entry.options,
+                    recv_shutdown: false,
+                    send_shutdown: false,
                     fd_flags: 0,
                     status_flags: 0,
                 });
@@ -248,6 +256,9 @@ impl SocketTable {
         data: &[u8],
     ) -> Result<usize, SocketError> {
         let entry = *self.entry(handle)?;
+        if entry.send_shutdown {
+            return Err(SocketError::Invalid);
+        }
         match entry.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
@@ -281,7 +292,14 @@ impl SocketTable {
         handle: usize,
         output: &mut [u8],
     ) -> Result<SocketRecv, SocketError> {
-        match self.entry(handle)?.backend {
+        let entry = *self.entry(handle)?;
+        if entry.recv_shutdown {
+            return Ok(SocketRecv {
+                len: 0,
+                peer: self.peer_addr(handle).ok().flatten(),
+            });
+        }
+        match entry.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
                 super::drive_tcp(&mut self.tcp);
@@ -323,6 +341,15 @@ impl SocketTable {
         }
     }
 
+    pub fn local_addr(&self, handle: usize) -> Result<SocketAddress, SocketError> {
+        let port = self.local_port(handle)?;
+        let ip = match self.peer_addr(handle)? {
+            Some(peer) if peer.ip.is_loopback() => LOOPBACK_IP,
+            _ => LOCAL_IP,
+        };
+        Ok(SocketAddress { ip, port })
+    }
+
     pub fn peer_addr(&self, handle: usize) -> Result<Option<SocketAddress>, SocketError> {
         let entry = self.entry(handle)?;
         match entry.backend {
@@ -348,19 +375,19 @@ impl SocketTable {
                         ..SocketReady::default()
                     },
                     super::tcp::TcpState::Established => SocketReady {
-                        read: !socket.rx_buffer.is_empty(),
-                        write: true,
+                        read: entry.recv_shutdown || !socket.rx_buffer.is_empty(),
+                        write: !entry.send_shutdown,
                         ..SocketReady::default()
                     },
                     super::tcp::TcpState::TimeWait | super::tcp::TcpState::Closed => SocketReady {
-                        read: !socket.rx_buffer.is_empty(),
+                        read: entry.recv_shutdown || !socket.rx_buffer.is_empty(),
                         error: socket.error.is_some(),
                         hangup: true,
                         ..SocketReady::default()
                     },
                     super::tcp::TcpState::CloseWait => SocketReady {
                         read: true,
-                        write: true,
+                        write: !entry.send_shutdown,
                         hangup: socket.rx_buffer.is_empty(),
                         ..SocketReady::default()
                     },
@@ -369,11 +396,42 @@ impl SocketTable {
                 Ok(ready)
             }
             SocketBackend::Udp(socket) => Ok(SocketReady {
-                read: super::udp_socket_readable(socket),
-                write: true,
+                read: entry.recv_shutdown || super::udp_socket_readable(socket),
+                write: !entry.send_shutdown,
+                hangup: entry.recv_shutdown,
                 ..SocketReady::default()
             }),
         }
+    }
+
+    pub fn shutdown(&mut self, handle: usize, how: i32) -> Result<(), SocketError> {
+        let close_send = match how {
+            0 => false,
+            1 => true,
+            2 => true,
+            _ => return Err(SocketError::Invalid),
+        };
+        let backend = {
+            let entry = self.entry_mut(handle)?;
+            if how == 0 || how == 2 {
+                entry.recv_shutdown = true;
+            }
+            if close_send {
+                entry.send_shutdown = true;
+            }
+            entry.backend
+        };
+        if close_send {
+            match backend {
+                SocketBackend::Closed => return Err(SocketError::BadFd),
+                SocketBackend::Tcp(socket) => {
+                    self.tcp.close(socket).map_err(map_tcp_error)?;
+                    super::drive_tcp(&mut self.tcp);
+                }
+                SocketBackend::Udp(_) => {}
+            }
+        }
+        Ok(())
     }
 
     pub fn fd_flags(&self, handle: usize) -> Result<u32, SocketError> {

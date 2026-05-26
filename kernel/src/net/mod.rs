@@ -14,8 +14,8 @@ const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
-const LOCAL_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
-const LOOPBACK_IP: Ipv4Addr = Ipv4Addr([127, 0, 0, 1]);
+pub(crate) const LOCAL_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
+pub(crate) const LOOPBACK_IP: Ipv4Addr = Ipv4Addr([127, 0, 0, 1]);
 
 static NET_STATS: SpinLock<NetStats> = SpinLock::new(NetStats::empty());
 static NET_STACK: SpinLock<Option<NetworkStack>> = SpinLock::new(None);

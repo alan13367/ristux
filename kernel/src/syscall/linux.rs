@@ -51,9 +51,11 @@ pub const NR_connect: u64 = 42;
 pub const NR_accept: u64 = 43;
 pub const NR_sendto: u64 = 44;
 pub const NR_recvfrom: u64 = 45;
+pub const NR_shutdown: u64 = 48;
 pub const NR_bind: u64 = 49;
 pub const NR_listen: u64 = 50;
 pub const NR_getsockname: u64 = 51;
+pub const NR_getpeername: u64 = 52;
 pub const NR_setsockopt: u64 = 54;
 pub const NR_getsockopt: u64 = 55;
 pub const NR_fork: u64 = 57;
@@ -104,6 +106,7 @@ const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
 const ECONNRESET: i64 = -104;
+const ENOTCONN: i64 = -107;
 const ETIMEDOUT: i64 = -110;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
 const SOCKET_FD_BASE: usize = 1000;
@@ -192,9 +195,11 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             a4 as usize,
             a5 as usize,
         ),
+        NR_shutdown => linux_shutdown(a0 as usize, a1 as i32),
         NR_bind => linux_bind(a0 as usize, a1 as usize, a2 as usize),
         NR_listen => linux_listen(a0 as usize, a1 as i32),
         NR_getsockname => linux_getsockname(a0 as usize, a1 as usize, a2 as usize),
+        NR_getpeername => linux_getpeername(a0 as usize, a1 as usize, a2 as usize),
         NR_setsockopt => {
             linux_setsockopt(a0 as usize, a1 as i32, a2 as i32, a3 as usize, a4 as usize)
         }
@@ -1037,9 +1042,26 @@ fn linux_listen(fd: usize, _backlog: i32) -> Result<u64, i64> {
 
 fn linux_getsockname(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
-    let port = crate::net::socket::with_sockets(|table| table.local_port(handle))
+    let local = crate::net::socket::with_sockets(|table| table.local_addr(handle))
         .map_err(map_socket_error)?;
-    write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 15], port)?;
+    write_sockaddr_in(addr, addrlen_ptr, local.ip.0, local.port)?;
+    Ok(0)
+}
+
+fn linux_getpeername(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    let peer = crate::net::socket::with_sockets(|table| table.peer_addr(handle))
+        .map_err(map_socket_error)?
+        .ok_or(ENOTCONN)?;
+    write_sockaddr_in(addr, addrlen_ptr, peer.ip.0, peer.port)?;
+    Ok(0)
+}
+
+fn linux_shutdown(fd: usize, how: i32) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    crate::net::socket::with_sockets(|table| table.shutdown(handle, how))
+        .map(|_| 0)
+        .map_err(map_socket_error)?;
     Ok(0)
 }
 

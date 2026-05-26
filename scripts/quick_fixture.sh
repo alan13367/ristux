@@ -55,6 +55,7 @@ case "$SCENARIO" in
   tcp)
     COMMANDS=("cc_tcp")
     EXPECTS=(
+      "cc_tcp: peer address ok"
       "cc_tcp: fin close ok"
       "cc_tcp: rst error ok"
       "cc_tcp: done"

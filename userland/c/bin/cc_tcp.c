@@ -13,6 +13,41 @@ static void loopback_addr(struct sockaddr_in *addr, unsigned short port) {
     addr->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 }
 
+static int check_loopback_peer_addresses(int client, int server) {
+    struct sockaddr_in client_local;
+    struct sockaddr_in server_local;
+    struct sockaddr_in server_peer;
+    struct sockaddr_in client_peer;
+    socklen_t client_local_len = sizeof(client_local);
+    socklen_t server_local_len = sizeof(server_local);
+    socklen_t server_peer_len = sizeof(server_peer);
+    socklen_t client_peer_len = sizeof(client_peer);
+
+    if (getsockname(client, (struct sockaddr *)&client_local, &client_local_len) < 0 ||
+        getsockname(server, (struct sockaddr *)&server_local, &server_local_len) < 0 ||
+        getpeername(server, (struct sockaddr *)&server_peer, &server_peer_len) < 0 ||
+        getpeername(client, (struct sockaddr *)&client_peer, &client_peer_len) < 0) {
+        puts("cc_tcp: peer syscalls failed");
+        return 1;
+    }
+    if (client_local.sin_addr.s_addr != htonl(INADDR_LOOPBACK) ||
+        server_local.sin_addr.s_addr != htonl(INADDR_LOOPBACK) ||
+        server_peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK) ||
+        client_peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
+        puts("cc_tcp: peer addr failed");
+        return 1;
+    }
+    if (server_local.sin_port != htons(18182) ||
+        client_peer.sin_port != htons(18182) ||
+        server_peer.sin_port != client_local.sin_port ||
+        client_local.sin_port == 0) {
+        puts("cc_tcp: peer port failed");
+        return 1;
+    }
+    puts("cc_tcp: peer address ok");
+    return 0;
+}
+
 static int close_fin_roundtrip(void) {
     struct sockaddr_in addr;
     loopback_addr(&addr, 18182);
@@ -37,6 +72,9 @@ static int close_fin_roundtrip(void) {
         puts("cc_tcp: accept failed");
         return 1;
     }
+    if (check_loopback_peer_addresses(client, server) != 0) {
+        return 1;
+    }
 
     if (sendto(client, "tcp", 3, 0, NULL, 0) != 3) {
         puts("cc_tcp: send failed");
@@ -49,8 +87,8 @@ static int close_fin_roundtrip(void) {
         return 1;
     }
 
-    if (close(server) < 0) {
-        puts("cc_tcp: server close failed");
+    if (shutdown(server, SHUT_WR) < 0) {
+        puts("cc_tcp: server shutdown failed");
         return 1;
     }
     n = recvfrom(client, buf, sizeof(buf), 0, NULL, NULL);
@@ -72,6 +110,14 @@ static int reset_on_unused_port(void) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         puts("cc_tcp: rst socket failed");
+        return 1;
+    }
+    struct sockaddr_in peer;
+    socklen_t peer_len = sizeof(peer);
+    errno = 0;
+    if (getpeername(fd, (struct sockaddr *)&peer, &peer_len) != -1 ||
+        errno != ENOTCONN) {
+        puts("cc_tcp: unconnected peer failed");
         return 1;
     }
     errno = 0;

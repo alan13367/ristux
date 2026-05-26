@@ -53,9 +53,11 @@
 #define SYS_ACCEPT 43
 #define SYS_SENDTO 44
 #define SYS_RECVFROM 45
+#define SYS_SHUTDOWN 48
 #define SYS_BIND 49
 #define SYS_LISTEN 50
 #define SYS_GETSOCKNAME 51
+#define SYS_GETPEERNAME 52
 #define SYS_SETSOCKOPT 54
 #define SYS_GETSOCKOPT 55
 #define SYS_FORK 57
@@ -230,6 +232,10 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     return (int)syscall_ret(syscall3(SYS_ACCEPT, sockfd, (long)addr, (long)addrlen));
 }
 
+int shutdown(int sockfd, int how) {
+    return (int)syscall_ret(syscall2(SYS_SHUTDOWN, sockfd, how));
+}
+
 ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                const struct sockaddr *dest_addr, socklen_t addrlen) {
     return (ssize_t)syscall_ret(syscall6(SYS_SENDTO, sockfd, (long)buf, len, flags, (long)dest_addr, addrlen));
@@ -242,6 +248,10 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
 
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     return (int)syscall_ret(syscall3(SYS_GETSOCKNAME, sockfd, (long)addr, (long)addrlen));
+}
+
+int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    return (int)syscall_ret(syscall3(SYS_GETPEERNAME, sockfd, (long)addr, (long)addrlen));
 }
 
 int setsockopt(int sockfd, int level, int optname, const void *optval,
