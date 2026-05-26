@@ -174,8 +174,11 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
   and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
   client and listener through the normal `socket`/`bind`/`listen`/`connect`/
-  `accept`/`sendto`/`recvfrom` path. UDP datagram sockets support
-  `bind`/`connect`/`sendto`/`recvfrom`, `poll`, `O_NONBLOCK`, `close`, and the
+  `accept`/`sendto`/`recvfrom` path. TCP handles FIN EOF, local active close,
+  RST on unopened ports, `ECONNRESET`/`ETIMEDOUT` reporting through `errno` and
+  `SO_ERROR`, retransmit backoff/expiry, and safe ACK-dropping for
+  out-of-order payloads. UDP datagram sockets support `bind`/`connect`/
+  `sendto`/`recvfrom`, `poll`, `O_NONBLOCK`, `close`, and the
   SSH-portability options `SO_REUSEADDR`, `SO_ERROR`, `SO_RCVTIMEO`,
   `SO_SNDTIMEO`, and `TCP_NODELAY` (currently a no-op). libc includes
   `netdb.h`, `gethostbyname`, `getaddrinfo`, `freeaddrinfo`, and

@@ -8,6 +8,7 @@ use crate::net::Ipv4Addr;
 
 pub const TCP_FLAG_FIN: u8 = 0x01;
 pub const TCP_FLAG_SYN: u8 = 0x02;
+pub const TCP_FLAG_RST: u8 = 0x04;
 pub const TCP_FLAG_PSH: u8 = 0x08;
 pub const TCP_FLAG_ACK: u8 = 0x10;
 
@@ -21,8 +22,10 @@ pub enum TcpState {
     SynSent,
     SynReceived,
     Established,
+    CloseWait,
     FinWait1,
     FinWait2,
+    LastAck,
     TimeWait,
 }
 
@@ -31,6 +34,8 @@ pub enum TcpError {
     NotConnected,
     WouldBlock,
     InvalidState,
+    ConnectionReset,
+    TimedOut,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +76,7 @@ pub struct TcpSocket {
     pub ack: u32,
     pub window: u16,
     pub rx_buffer: VecDeque<u8>,
+    pub error: Option<TcpError>,
 }
 
 impl TcpSocket {
@@ -84,6 +90,7 @@ impl TcpSocket {
             ack: 0,
             window: 4096,
             rx_buffer: VecDeque::new(),
+            error: None,
         }
     }
 
@@ -157,6 +164,7 @@ impl TcpStack {
             socket.remote_ip = remote_ip;
             socket.remote_port = remote_port;
             socket.state = TcpState::SynSent;
+            socket.error = None;
             let seq = socket.seq;
             let outbound = build_outbound(socket, TCP_FLAG_SYN, &[]);
             let span = tcp_sequence_span(TCP_FLAG_SYN, 0);
@@ -183,6 +191,9 @@ impl TcpStack {
     pub fn send(&mut self, socket: usize, data: &[u8]) -> Result<usize, TcpError> {
         let (outbound, retransmit) = {
             let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
+            if let Some(error) = socket.error {
+                return Err(error);
+            }
             if !socket.established() {
                 return Err(TcpError::NotConnected);
             }
@@ -199,11 +210,15 @@ impl TcpStack {
 
     pub fn recv(&mut self, socket: usize, buf: &mut [u8]) -> Result<usize, TcpError> {
         let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
-        if !socket.established() && socket.rx_buffer.is_empty() {
-            return Err(TcpError::NotConnected);
+        if let Some(error) = socket.error {
+            return Err(error);
         }
         if socket.rx_buffer.is_empty() {
-            return Err(TcpError::WouldBlock);
+            return match socket.state {
+                TcpState::Established => Err(TcpError::WouldBlock),
+                TcpState::CloseWait | TcpState::TimeWait | TcpState::Closed => Ok(0),
+                _ => Err(TcpError::NotConnected),
+            };
         }
         let mut read = 0;
         for slot in buf.iter_mut() {
@@ -219,11 +234,18 @@ impl TcpStack {
     pub fn close(&mut self, socket: usize) -> Result<(), TcpError> {
         let (outbound, retransmit) = {
             let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
-            if !socket.established() {
-                socket.state = TcpState::Closed;
-                return Ok(());
-            }
-            socket.state = TcpState::FinWait1;
+            let next_state = match socket.state {
+                TcpState::Established => TcpState::FinWait1,
+                TcpState::CloseWait => TcpState::LastAck,
+                TcpState::FinWait1 | TcpState::FinWait2 | TcpState::LastAck | TcpState::TimeWait => {
+                    return Ok(());
+                }
+                _ => {
+                    socket.state = TcpState::Closed;
+                    return Ok(());
+                }
+            };
+            socket.state = next_state;
             let seq = socket.seq;
             let outbound = build_outbound(socket, TCP_FLAG_ACK | TCP_FLAG_FIN, &[]);
             let span = tcp_sequence_span(TCP_FLAG_ACK | TCP_FLAG_FIN, 0);
@@ -236,10 +258,6 @@ impl TcpStack {
     }
 
     pub fn handle_packet(&mut self, packet: TcpPacket) -> bool {
-        if packet.flags & TCP_FLAG_ACK != 0 {
-            self.acknowledge(packet.src_ip, packet.src_port, packet.dst_port, packet.ack);
-        }
-
         let Some(index) = self
             .sockets
             .iter()
@@ -250,8 +268,27 @@ impl TcpStack {
                 })
             })
         else {
+            if packet.flags & TCP_FLAG_RST == 0 {
+                self.pending_outbound
+                    .push_back(build_reset_for_unmatched(&packet));
+                return true;
+            }
             return false;
         };
+
+        if packet.flags & TCP_FLAG_RST != 0 {
+            let socket = &mut self.sockets[index];
+            if socket.state != TcpState::Listen {
+                socket.state = TcpState::Closed;
+                socket.error = Some(TcpError::ConnectionReset);
+                self.remove_retransmits(packet.src_ip, packet.src_port, packet.dst_port);
+                return true;
+            }
+        }
+
+        if packet.flags & TCP_FLAG_ACK != 0 {
+            self.acknowledge(packet.src_ip, packet.src_port, packet.dst_port, packet.ack);
+        }
 
         let mut outbound = None;
         let socket = &mut self.sockets[index];
@@ -261,19 +298,12 @@ impl TcpStack {
                     socket.ack = packet.seq.wrapping_add(1);
                     socket.seq = packet.ack;
                     socket.state = TcpState::Established;
+                    socket.error = None;
                     outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
                 }
             }
             TcpState::Established => {
-                if !packet.payload.is_empty() {
-                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32);
-                    socket.rx_buffer.extend(packet.payload.iter().copied());
-                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
-                } else if packet.flags & TCP_FLAG_FIN != 0 {
-                    socket.ack = packet.seq.wrapping_add(1);
-                    socket.state = TcpState::TimeWait;
-                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
-                }
+                outbound = handle_established_like(socket, &packet, TcpState::CloseWait);
             }
             TcpState::Listen => {
                 if packet.flags & TCP_FLAG_SYN != 0 {
@@ -288,6 +318,36 @@ impl TcpStack {
                     self.accept_queue.push(peer);
                 }
             }
+            TcpState::CloseWait => {
+                outbound = handle_established_like(socket, &packet, TcpState::CloseWait);
+            }
+            TcpState::FinWait1 => {
+                if packet.flags & TCP_FLAG_ACK != 0 {
+                    socket.state = TcpState::FinWait2;
+                }
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
+                    socket.state = TcpState::TimeWait;
+                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
+                }
+            }
+            TcpState::FinWait2 => {
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
+                    socket.state = TcpState::TimeWait;
+                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
+                }
+            }
+            TcpState::LastAck => {
+                if packet.flags & TCP_FLAG_ACK != 0 {
+                    socket.state = TcpState::Closed;
+                }
+            }
+            TcpState::TimeWait => {
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
+                }
+            }
             _ => {}
         }
 
@@ -299,16 +359,35 @@ impl TcpStack {
 
     pub fn poll_retransmit(&mut self, now_tick: u64) -> bool {
         let mut retransmitted = false;
+        let mut failed = Vec::new();
         for entry in self.retransmits.iter_mut() {
-            if entry.deadline_tick > now_tick || entry.attempts >= TCP_MAX_RETRANSMITS {
+            if entry.deadline_tick > now_tick {
                 continue;
             }
-            entry.deadline_tick = now_tick.saturating_add(TCP_RETRANSMIT_TICKS);
+            if entry.attempts >= TCP_MAX_RETRANSMITS {
+                failed.push((entry.dst_ip, entry.remote_port, entry.local_port));
+                continue;
+            }
             entry.attempts = entry.attempts.saturating_add(1);
+            let backoff = TCP_RETRANSMIT_TICKS << entry.attempts.min(5);
+            entry.deadline_tick = now_tick.saturating_add(backoff);
             self.pending_outbound.push_back(TcpOutbound {
                 dst_ip: entry.dst_ip,
                 segment: entry.segment.clone(),
             });
+            retransmitted = true;
+        }
+        if !failed.is_empty() {
+            self.retransmits.retain(|entry| {
+                !failed.iter().any(|(ip, remote_port, local_port)| {
+                    entry.dst_ip == *ip
+                        && entry.remote_port == *remote_port
+                        && entry.local_port == *local_port
+                })
+            });
+            for (ip, remote_port, local_port) in failed {
+                self.fail_socket(ip, remote_port, local_port, TcpError::TimedOut);
+            }
             retransmitted = true;
         }
         retransmitted
@@ -342,6 +421,10 @@ impl TcpStack {
         }
     }
 
+    pub fn take_error(&mut self, socket: usize) -> Option<TcpError> {
+        self.sockets.get_mut(socket)?.error.take()
+    }
+
     pub fn stats(&self) -> TcpStats {
         TcpStats {
             sockets: self.sockets.len(),
@@ -373,6 +456,83 @@ impl TcpStack {
             pending.push(entry);
         }
         self.retransmits = pending;
+    }
+
+    fn remove_retransmits(&mut self, remote_ip: Ipv4Addr, remote_port: u16, local_port: u16) {
+        self.retransmits.retain(|entry| {
+            !(entry.dst_ip == remote_ip
+                && entry.remote_port == remote_port
+                && entry.local_port == local_port)
+        });
+    }
+
+    fn fail_socket(
+        &mut self,
+        remote_ip: Ipv4Addr,
+        remote_port: u16,
+        local_port: u16,
+        error: TcpError,
+    ) {
+        if let Some(socket) = self.sockets.iter_mut().find(|socket| {
+            socket.remote_ip == remote_ip
+                && socket.remote_port == remote_port
+                && socket.local_port == local_port
+        }) {
+            socket.state = TcpState::Closed;
+            socket.error = Some(error);
+        }
+    }
+}
+
+fn handle_established_like(
+    socket: &mut TcpSocket,
+    packet: &TcpPacket,
+    fin_state: TcpState,
+) -> Option<TcpOutbound> {
+    let mut ack_needed = false;
+    if !packet.payload.is_empty() {
+        if packet.seq == socket.ack {
+            socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32);
+            socket.rx_buffer.extend(packet.payload.iter().copied());
+        }
+        ack_needed = true;
+    }
+    if packet.flags & TCP_FLAG_FIN != 0 {
+        let fin_seq = packet.seq.wrapping_add(packet.payload.len() as u32);
+        if fin_seq == socket.ack {
+            socket.ack = fin_seq.wrapping_add(1);
+            socket.state = fin_state;
+        }
+        ack_needed = true;
+    }
+    if ack_needed {
+        Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+    } else {
+        None
+    }
+}
+
+fn build_reset_for_unmatched(packet: &TcpPacket) -> TcpOutbound {
+    let (seq, ack, flags) = if packet.flags & TCP_FLAG_ACK != 0 {
+        (packet.ack, 0, TCP_FLAG_RST)
+    } else {
+        (
+            0,
+            packet.seq.wrapping_add(tcp_sequence_span(packet.flags, packet.payload.len())),
+            TCP_FLAG_RST | TCP_FLAG_ACK,
+        )
+    };
+    TcpOutbound {
+        dst_ip: packet.src_ip,
+        segment: build_tcp_segment_fields(
+            packet.dst_port,
+            packet.src_port,
+            seq,
+            ack,
+            0,
+            flags,
+            &[],
+        ),
     }
 }
 

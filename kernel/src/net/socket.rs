@@ -27,6 +27,8 @@ pub enum SocketError {
     BadFd,
     Invalid,
     WouldBlock,
+    ConnectionReset,
+    TimedOut,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -179,10 +181,20 @@ impl SocketTable {
         match self.entry(handle)?.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
-                self.tcp
+                if let Err(err) = self
+                    .tcp
                     .connect(socket, remote_ip, remote_port)
-                    .map_err(map_tcp_error)?;
+                    .map_err(map_tcp_error)
+                {
+                    self.record_error(handle, err);
+                    return Err(err);
+                }
                 super::drive_tcp(&mut self.tcp);
+                if let Some(error) = self.tcp.sockets.get(socket).and_then(|socket| socket.error) {
+                    let err = map_tcp_error(error);
+                    self.record_error(handle, err);
+                    return Err(err);
+                }
                 if self.tcp.established(socket) {
                     Ok(())
                 } else {
@@ -239,7 +251,13 @@ impl SocketTable {
         match entry.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
-                let sent = self.tcp.send(socket, data).map_err(map_tcp_error)?;
+                let sent = match self.tcp.send(socket, data).map_err(map_tcp_error) {
+                    Ok(sent) => sent,
+                    Err(err) => {
+                        self.record_error(handle, err);
+                        return Err(err);
+                    }
+                };
                 super::drive_tcp(&mut self.tcp);
                 Ok(sent)
             }
@@ -267,7 +285,13 @@ impl SocketTable {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
                 super::drive_tcp(&mut self.tcp);
-                let len = self.tcp.recv(socket, output).map_err(map_tcp_error)?;
+                let len = match self.tcp.recv(socket, output).map_err(map_tcp_error) {
+                    Ok(len) => len,
+                    Err(err) => {
+                        self.record_error(handle, err);
+                        return Err(err);
+                    }
+                };
                 let peer = self
                     .tcp
                     .peer_addr(socket)
@@ -330,7 +354,14 @@ impl SocketTable {
                     },
                     super::tcp::TcpState::TimeWait | super::tcp::TcpState::Closed => SocketReady {
                         read: !socket.rx_buffer.is_empty(),
+                        error: socket.error.is_some(),
                         hangup: true,
+                        ..SocketReady::default()
+                    },
+                    super::tcp::TcpState::CloseWait => SocketReady {
+                        read: true,
+                        write: true,
+                        hangup: socket.rx_buffer.is_empty(),
                         ..SocketReady::default()
                     },
                     _ => SocketReady::default(),
@@ -412,10 +443,28 @@ impl SocketTable {
     }
 
     pub fn take_error(&mut self, handle: usize) -> Result<i32, SocketError> {
+        let backend = self.entry(handle)?.backend;
+        let tcp_error = match backend {
+            SocketBackend::Tcp(socket) => self.tcp.take_error(socket).map(tcp_error_code),
+            _ => None,
+        };
         let entry = self.entry_mut(handle)?;
+        if let Some(error) = tcp_error {
+            entry.options.error = error;
+        }
         let error = entry.options.error;
         entry.options.error = 0;
         Ok(error)
+    }
+
+    fn record_error(&mut self, handle: usize, err: SocketError) {
+        let code = socket_error_code(err);
+        if code == 0 {
+            return;
+        }
+        if let Some(entry) = self.sockets.get_mut(handle) {
+            entry.options.error = code;
+        }
     }
 
     fn entry(&self, handle: usize) -> Result<&SocketEntry, SocketError> {
@@ -439,7 +488,21 @@ fn map_tcp_error(err: TcpError) -> SocketError {
     match err {
         TcpError::WouldBlock => SocketError::WouldBlock,
         TcpError::NotConnected | TcpError::InvalidState => SocketError::Invalid,
+        TcpError::ConnectionReset => SocketError::ConnectionReset,
+        TcpError::TimedOut => SocketError::TimedOut,
     }
+}
+
+fn socket_error_code(err: SocketError) -> i32 {
+    match err {
+        SocketError::ConnectionReset => 104,
+        SocketError::TimedOut => 110,
+        _ => 0,
+    }
+}
+
+fn tcp_error_code(err: TcpError) -> i32 {
+    socket_error_code(map_tcp_error(err))
 }
 
 static SOCKETS: SpinLock<Option<SocketTable>> = SpinLock::new(None);

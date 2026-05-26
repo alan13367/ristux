@@ -24,6 +24,7 @@ file /bin/cc_select ../build/userland/cc_select.elf
 file /bin/cc_signal ../build/userland/cc_signal.elf
 file /bin/cc_socket ../build/userland/cc_socket.elf
 file /bin/cc_stack ../build/userland/cc_stack.elf
+file /bin/cc_tcp ../build/userland/cc_tcp.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/edit ../build/userland/edit.elf
@@ -71,6 +72,7 @@ package cc_select 0.1.0 /bin/cc_select
 package cc_signal 0.1.0 /bin/cc_signal
 package cc_socket 0.1.0 /bin/cc_socket
 package cc_stack 0.1.0 /bin/cc_stack
+package cc_tcp 0.1.0 /bin/cc_tcp
 package cc_tty 0.1.0 /bin/cc_tty
 package chmod 0.1.0 /bin/chmod
 package curl_lite 0.1.0 /bin/curl_lite

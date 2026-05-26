@@ -302,6 +302,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_tcp"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_stack"
   sleep 1
   printf 'sendkey ret\n'
@@ -513,6 +517,10 @@ grep -q "TTY canonical line ready: cc_socket" "$SERIAL_LOG"
 grep -q "cc_socket: udp loopback ok" "$SERIAL_LOG"
 grep -q "cc_socket: options ok" "$SERIAL_LOG"
 grep -q "cc_socket: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_tcp" "$SERIAL_LOG"
+grep -q "cc_tcp: fin close ok" "$SERIAL_LOG"
+grep -q "cc_tcp: rst error ok" "$SERIAL_LOG"
+grep -q "cc_tcp: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_stack" "$SERIAL_LOG"
 grep -q "cc_stack: growth ok" "$SERIAL_LOG"
 grep -q "cc_stack: done" "$SERIAL_LOG"

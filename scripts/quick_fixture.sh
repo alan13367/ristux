@@ -52,6 +52,14 @@ case "$SCENARIO" in
       "cc_socket: done"
     )
     ;;
+  tcp)
+    COMMANDS=("cc_tcp")
+    EXPECTS=(
+      "cc_tcp: fin close ok"
+      "cc_tcp: rst error ok"
+      "cc_tcp: done"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -76,7 +84,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, socket, loopback, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, socket, tcp, loopback, command)" >&2
     exit 2
     ;;
 esac

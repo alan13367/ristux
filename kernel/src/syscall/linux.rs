@@ -103,6 +103,8 @@ const EEXIST: i64 = -17;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
+const ECONNRESET: i64 = -104;
+const ETIMEDOUT: i64 = -110;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
@@ -1199,6 +1201,8 @@ fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
         crate::net::socket::SocketError::BadFd => EBADF,
         crate::net::socket::SocketError::Invalid => EINVAL,
         crate::net::socket::SocketError::WouldBlock => EAGAIN,
+        crate::net::socket::SocketError::ConnectionReset => ECONNRESET,
+        crate::net::socket::SocketError::TimedOut => ETIMEDOUT,
     }
 }
 
