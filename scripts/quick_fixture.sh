@@ -630,6 +630,34 @@ case "$SCENARIO" in
       "^  /bin/cut$"
     )
     ;;
+  find)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/findcheck"
+      "cd /tmp/findcheck"
+      "mkdir src"
+      "mkdir src/lib"
+      "echo alpha > src/main.c"
+      "echo beta > src/lib/util.c"
+      "echo doc > README.md"
+      "find . -name *.c -type f | sort"
+      "find . -maxdepth 1 -type d | sort"
+      "find src -type f -name util.c"
+      "pkg info find"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: find \\. -name \\*\\.c -type f | sort"
+      "^./src/lib/util\\.c$"
+      "^./src/main\\.c$"
+      "TTY canonical line ready: find \\. -maxdepth 1 -type d | sort"
+      "^\\.$"
+      "^./src$"
+      "TTY canonical line ready: find src -type f -name util.c"
+      "^src/lib/util\\.c$"
+      "^name: find$"
+      "^  /bin/find$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -682,7 +710,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
