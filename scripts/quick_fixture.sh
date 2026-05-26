@@ -658,6 +658,29 @@ case "$SCENARIO" in
       "^  /bin/find$"
     )
     ;;
+  xargs)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/xargscheck"
+      "cd /tmp/xargscheck"
+      "mkdir src"
+      "mkdir src/lib"
+      "echo alpha > src/main.c"
+      "echo beta > src/lib/util.c"
+      "echo alpha beta | xargs echo prefix"
+      "find . -name *.c | sort | xargs -n 1 basename"
+      "pkg info xargs"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: echo alpha beta | xargs echo prefix"
+      "^prefix alpha beta$"
+      "TTY canonical line ready: find \\. -name \\*\\.c | sort | xargs -n 1 basename"
+      "^util\\.c$"
+      "^main\\.c$"
+      "^name: xargs$"
+      "^  /bin/xargs$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -710,7 +733,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
