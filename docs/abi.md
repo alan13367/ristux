@@ -153,6 +153,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads
   honor `ICANON`, `ISIG`, `VMIN`, and the standard control characters used by
   the in-tree `stty` utility.
+- Console ANSI: the VGA text console handles common `ESC [` CSI sequences for
+  cursor movement, line/screen clear, SGR foreground/background colors, saved
+  cursor state, and private alternate-screen toggles such as `?1049h`/`?1049l`.
 - PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
   and slave descriptors are pollable byte streams with hangup/error readiness
   when their peer closes.

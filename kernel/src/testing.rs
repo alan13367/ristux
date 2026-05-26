@@ -87,6 +87,11 @@ fn run() -> KernelResult<()> {
         crate::drivers::virtio_queue::self_test(),
         "VirtIO virtqueue layer self-test failed",
     )?;
+    ensure(
+        crate::drivers::vga::self_test(),
+        "VGA ANSI terminal self-test failed",
+    )?;
+    crate::println!("VGA ANSI terminal self-test passed");
 
     crate::println!(
         "Memory manager stats: {} free frames, heap {:#x}..{:#x}, {} used / {} free bytes",

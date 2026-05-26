@@ -67,6 +67,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "ansi_demo"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "echo hello"
   sleep 1
   printf 'sendkey ret\n'
@@ -310,6 +314,7 @@ grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$SERIAL_LOG
 grep -q "TCP MVP self-test passed" "$SERIAL_LOG"
 grep -q "Socket layer self-test passed" "$SERIAL_LOG"
 grep -q "Framebuffer graphics self-test passed" "$SERIAL_LOG"
+grep -q "VGA ANSI terminal self-test passed" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$SERIAL_LOG"
 grep -q "init: spawning /bin/login" "$SERIAL_LOG"
 grep -q "login: " "$SERIAL_LOG"
@@ -318,6 +323,13 @@ grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: stty -a" "$SERIAL_LOG"
 grep -q "speed 38400 baud; rows 24; columns 80;" "$SERIAL_LOG"
 grep -q "isig icanon echo" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: ansi_demo" "$SERIAL_LOG"
+grep -q "ansi_demo: start" "$SERIAL_LOG"
+grep -q "ansi_demo: clear-home" "$SERIAL_LOG"
+grep -q "ansi_demo: red" "$SERIAL_LOG"
+grep -q "ansi_demo: moved" "$SERIAL_LOG"
+grep -q "ansi_demo: alt-screen" "$SERIAL_LOG"
+grep -q "ansi_demo: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: export foo=bar" "$SERIAL_LOG"
 grep -q 'TTY canonical line ready: echo "$foo baz"' "$SERIAL_LOG"
