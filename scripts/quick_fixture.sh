@@ -35,6 +35,14 @@ case "$SCENARIO" in
       "cc_dns: done"
     )
     ;;
+  http)
+    COMMANDS=("cc_http")
+    EXPECTS=(
+      "cc_http: resolve ok"
+      "cc_http: get ok"
+      "cc_http: done"
+    )
+    ;;
   entropy)
     COMMANDS=("cc_dev")
     EXPECTS=(
@@ -141,7 +149,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, passwd, session, socket, tcp, loopback, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, command)" >&2
     exit 2
     ;;
 esac

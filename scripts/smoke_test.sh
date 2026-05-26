@@ -282,6 +282,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_http"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_fcntl"
   sleep 1
   printf 'sendkey ret\n'
@@ -515,6 +519,10 @@ grep -q "cc_dns: resolv.conf ok" "$SERIAL_LOG"
 grep -q "cc_dns: gethostbyname ok" "$SERIAL_LOG"
 grep -q "cc_dns: getaddrinfo ok" "$SERIAL_LOG"
 grep -q "cc_dns: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_http" "$SERIAL_LOG"
+grep -q "cc_http: resolve ok" "$SERIAL_LOG"
+grep -q "cc_http: get ok" "$SERIAL_LOG"
+grep -q "cc_http: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_fcntl" "$SERIAL_LOG"
 grep -q "cc_fcntl: nonblock ok" "$SERIAL_LOG"
 grep -q "cc_fcntl: cloexec ok" "$SERIAL_LOG"

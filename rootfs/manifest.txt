@@ -14,6 +14,7 @@ file /bin/cc_fcntl ../build/userland/cc_fcntl.elf
 file /bin/cc_file_sync ../build/userland/cc_file_sync.elf
 file /bin/cc_fs ../build/userland/cc_fs.elf
 file /bin/cc_hello ../build/userland/cc_hello.elf
+file /bin/cc_http ../build/userland/cc_http.elf
 file /bin/cc_links ../build/userland/cc_links.elf
 file /bin/cc_libc_compat ../build/userland/cc_libc_compat.elf
 file /bin/cc_mmap ../build/userland/cc_mmap.elf
@@ -67,6 +68,7 @@ package cc_fcntl 0.1.0 /bin/cc_fcntl
 package cc_file_sync 0.1.0 /bin/cc_file_sync
 package cc_fs 0.1.0 /bin/cc_fs
 package cc_hello 0.1.0 /bin/cc_hello
+package cc_http 0.1.0 /bin/cc_http
 package cc_links 0.1.0 /bin/cc_links
 package cc_libc_compat 0.1.0 /bin/cc_libc_compat
 package cc_mmap 0.1.0 /bin/cc_mmap

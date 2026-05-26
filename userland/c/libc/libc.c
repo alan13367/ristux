@@ -285,6 +285,14 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
     return (ssize_t)syscall_ret(syscall6(SYS_RECVFROM, sockfd, (long)buf, len, flags, (long)src_addr, (long)addrlen));
 }
 
+ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
+    return sendto(sockfd, buf, len, flags, NULL, 0);
+}
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
+    return recvfrom(sockfd, buf, len, flags, NULL, NULL);
+}
+
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     return (int)syscall_ret(syscall3(SYS_GETSOCKNAME, sockfd, (long)addr, (long)addrlen));
 }
