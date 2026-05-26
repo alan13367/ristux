@@ -156,6 +156,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
   and slave descriptors are pollable byte streams with hangup/error readiness
   when their peer closes.
+- Shell: `/bin/sh` supports pipelines, redirects, background jobs, `jobs`, `fg`,
+  `bg`, `cd`, quote-aware tokenization, `$name` and `$?` expansion, `~`
+  expansion through `HOME`, and `export NAME=value` environment propagation.
 - Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,

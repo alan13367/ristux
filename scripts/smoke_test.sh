@@ -32,11 +32,15 @@ send_text() {
       ' ') printf 'sendkey spc\n' ;;
       '|') printf 'sendkey shift-backslash\n' ;;
       '&') printf 'sendkey shift-7\n' ;;
+      '$') printf 'sendkey shift-4\n' ;;
       '/') printf 'sendkey slash\n' ;;
       ':') printf 'sendkey shift-semicolon\n' ;;
+      "'") printf 'sendkey apostrophe\n' ;;
+      '"') printf 'sendkey shift-apostrophe\n' ;;
       '.') printf 'sendkey dot\n' ;;
       '-') printf 'sendkey minus\n' ;;
       '_') printf 'sendkey shift-minus\n' ;;
+      '=') printf 'sendkey equal\n' ;;
       '>') printf 'sendkey shift-dot\n' ;;
       '<') printf 'sendkey shift-comma\n' ;;
       '~') printf 'sendkey shift-grave_accent\n' ;;
@@ -67,6 +71,18 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "export foo=bar"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text 'echo "$foo baz"'
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "echo 'two words'"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "echo hello | cat"
   sleep 1
   printf 'sendkey ret\n'
@@ -84,6 +100,10 @@ normalize_serial_noise() {
   printf 'sendkey ret\n'
   sleep 2
   send_text "echo persisted > /home/marker"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "echo again >> /home/marker"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -271,6 +291,11 @@ grep -q "TTY canonical line ready: stty -a" "$SERIAL_LOG"
 grep -q "speed 38400 baud; rows 24; columns 80;" "$SERIAL_LOG"
 grep -q "isig icanon echo" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: export foo=bar" "$SERIAL_LOG"
+grep -q 'TTY canonical line ready: echo "$foo baz"' "$SERIAL_LOG"
+grep -q "bar baz" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo 'two words'" "$SERIAL_LOG"
+grep -q "two words" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"
@@ -278,8 +303,10 @@ grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: touch /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo persisted > /home/marker" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: echo again >> /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$SERIAL_LOG"
 grep -q "persisted" "$SERIAL_LOG"
+grep -q "again" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$SERIAL_LOG"
 grep -q "uid=1000(alice) gid=1000(alice)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: touch /etc/foo" "$SERIAL_LOG"

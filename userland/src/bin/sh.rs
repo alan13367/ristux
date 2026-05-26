@@ -22,12 +22,81 @@ struct Job {
     command: Vec<u8>,
 }
 
+struct EnvVar {
+    name: Vec<u8>,
+    value: Vec<u8>,
+}
+
+struct ShellEnv {
+    vars: Vec<EnvVar>,
+}
+
 #[derive(Clone)]
 struct Stage {
     argv: Vec<Vec<u8>>,
     stdin_path: Option<Vec<u8>>,
     stdout_path: Option<Vec<u8>>,
     append_stdout: bool,
+}
+
+impl ShellEnv {
+    fn new() -> Self {
+        let mut env = Self { vars: Vec::new() };
+        if sys::getuid() == 0 {
+            env.set(b"USER", b"root");
+            env.set(b"HOME", b"/root");
+        } else {
+            env.set(b"USER", b"alice");
+            env.set(b"HOME", b"/home/alice");
+        }
+        env.set(b"PATH", b"/bin");
+        env.set(b"SHELL", b"/bin/sh");
+        env.set(b"PS1", PS1);
+        env
+    }
+
+    fn get(&self, name: &[u8]) -> Option<&[u8]> {
+        self.vars
+            .iter()
+            .find(|var| var.name.as_slice() == name)
+            .map(|var| var.value.as_slice())
+    }
+
+    fn set(&mut self, name: &[u8], value: &[u8]) {
+        if let Some(var) = self.vars.iter_mut().find(|var| var.name.as_slice() == name) {
+            var.value.clear();
+            var.value.extend_from_slice(value);
+            return;
+        }
+        self.vars.push(EnvVar {
+            name: name.to_vec(),
+            value: value.to_vec(),
+        });
+    }
+
+    fn assignment(&mut self, token: &[u8]) -> bool {
+        let Some(eq) = token.iter().position(|&b| b == b'=') else {
+            return false;
+        };
+        if !valid_name(&token[..eq]) {
+            return false;
+        }
+        self.set(&token[..eq], &token[eq + 1..]);
+        true
+    }
+
+    fn entries(&self) -> Vec<Vec<u8>> {
+        let mut out = Vec::with_capacity(self.vars.len());
+        for var in &self.vars {
+            let mut entry = Vec::with_capacity(var.name.len() + var.value.len() + 2);
+            entry.extend_from_slice(&var.name);
+            entry.push(b'=');
+            entry.extend_from_slice(&var.value);
+            entry.push(0);
+            out.push(entry);
+        }
+        out
+    }
 }
 
 impl Stage {
@@ -39,6 +108,16 @@ impl Stage {
             append_stdout: false,
         }
     }
+}
+
+fn valid_name(name: &[u8]) -> bool {
+    let Some((&first, rest)) = name.split_first() else {
+        return false;
+    };
+    if !(first == b'_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    rest.iter().all(|b| *b == b'_' || b.is_ascii_alphanumeric())
 }
 
 fn cstr(s: &[u8]) -> Vec<u8> {
@@ -75,23 +154,40 @@ fn read_line(fd: i32) -> Option<Vec<u8>> {
 fn split_pipeline(line: &[u8]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut cur: Vec<u8> = Vec::new();
+    let mut quote = 0u8;
+    let mut escaped = false;
     for &b in line {
-        if b == b'|' {
-            out.push(core::mem::take(&mut cur));
-        } else {
+        if escaped {
             cur.push(b);
+            escaped = false;
+            continue;
+        }
+        if b == b'\\' && quote != b'\'' {
+            cur.push(b);
+            escaped = true;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' if quote == 0 => {
+                quote = b;
+                cur.push(b);
+            }
+            b if quote == b => {
+                quote = 0;
+                cur.push(b);
+            }
+            b'|' if quote == 0 => {
+                out.push(core::mem::take(&mut cur));
+            }
+            _ => cur.push(b),
         }
     }
     out.push(cur);
     out
 }
 
-fn expand_tilde(token: Vec<u8>) -> Vec<u8> {
-    let home: &[u8] = if sys::getuid() == 0 {
-        b"/root"
-    } else {
-        b"/home/alice"
-    };
+fn expand_tilde(token: Vec<u8>, env: &ShellEnv) -> Vec<u8> {
+    let home = env.get(b"HOME").unwrap_or(b"/");
     if token.as_slice() == b"~" {
         return home.to_vec();
     }
@@ -104,20 +200,78 @@ fn expand_tilde(token: Vec<u8>) -> Vec<u8> {
     token
 }
 
-fn parse_stage(segment: &[u8]) -> (Stage, bool) {
-    let mut stage = Stage::new();
-    let mut background = false;
+fn push_var_expansion(
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+    index: &mut usize,
+    env: &ShellEnv,
+    last_status: i32,
+) {
+    if *index + 1 >= bytes.len() {
+        out.push(b'$');
+        return;
+    }
+    let next = bytes[*index + 1];
+    if next == b'?' {
+        out.extend_from_slice(last_status.to_string().as_bytes());
+        *index += 1;
+        return;
+    }
+    if !(next == b'_' || next.is_ascii_alphabetic()) {
+        out.push(b'$');
+        return;
+    }
+    let start = *index + 1;
+    let mut end = start + 1;
+    while end < bytes.len() && (bytes[end] == b'_' || bytes[end].is_ascii_alphanumeric()) {
+        end += 1;
+    }
+    if let Some(value) = env.get(&bytes[start..end]) {
+        out.extend_from_slice(value);
+    }
+    *index = end - 1;
+}
 
+fn lex_segment(segment: &[u8], env: &ShellEnv, last_status: i32) -> Vec<Vec<u8>> {
     let mut tokens: Vec<Vec<u8>> = Vec::new();
     let mut cur: Vec<u8> = Vec::new();
-    for &b in segment {
+    let mut quote = 0u8;
+    let mut i = 0;
+    while i < segment.len() {
+        let b = segment[i];
+        if quote != b'\'' && b == b'\\' && i + 1 < segment.len() {
+            i += 1;
+            cur.push(segment[i]);
+            i += 1;
+            continue;
+        }
         match b {
-            b' ' | b'\t' => {
+            b'\'' | b'"' if quote == 0 => {
+                quote = b;
+            }
+            b if quote == b => {
+                quote = 0;
+            }
+            b'$' if quote != b'\'' => {
+                push_var_expansion(&mut cur, segment, &mut i, env, last_status)
+            }
+            b' ' | b'\t' if quote == 0 => {
                 if !cur.is_empty() {
                     tokens.push(core::mem::take(&mut cur));
                 }
             }
-            b'<' | b'>' => {
+            b'<' | b'>' if quote == 0 => {
+                if !cur.is_empty() {
+                    tokens.push(core::mem::take(&mut cur));
+                }
+                if b == b'>' && i + 1 < segment.len() && segment[i + 1] == b'>' {
+                    tokens.push(b">>".to_vec());
+                    i += 1;
+                } else {
+                    tokens.push(vec![b]);
+                }
+            }
+            b'&' if quote == 0 => {
                 if !cur.is_empty() {
                     tokens.push(core::mem::take(&mut cur));
                 }
@@ -125,10 +279,19 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
             }
             _ => cur.push(b),
         }
+        i += 1;
     }
     if !cur.is_empty() {
         tokens.push(cur);
     }
+    tokens
+}
+
+fn parse_stage(segment: &[u8], env: &mut ShellEnv, last_status: i32) -> (Stage, bool) {
+    let mut stage = Stage::new();
+    let mut background = false;
+
+    let mut tokens = lex_segment(segment, env, last_status);
 
     let mut i = 0;
     while i < tokens.len() {
@@ -139,14 +302,14 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
         }
         if tokens[i].as_slice() == b"<" {
             if i + 1 < tokens.len() {
-                stage.stdin_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
+                stage.stdin_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
                 i += 2;
                 continue;
             }
         }
         if tokens[i].as_slice() == b">" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
+                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
                 stage.append_stdout = false;
                 i += 2;
                 continue;
@@ -154,13 +317,17 @@ fn parse_stage(segment: &[u8]) -> (Stage, bool) {
         }
         if tokens[i].as_slice() == b">>" {
             if i + 1 < tokens.len() {
-                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1])));
+                stage.stdout_path = Some(expand_tilde(core::mem::take(&mut tokens[i + 1]), env));
                 stage.append_stdout = true;
                 i += 2;
                 continue;
             }
         }
-        let tok = expand_tilde(core::mem::take(&mut tokens[i]));
+        if stage.argv.is_empty() && env.assignment(tokens[i].as_slice()) {
+            i += 1;
+            continue;
+        }
+        let tok = expand_tilde(core::mem::take(&mut tokens[i]), env);
         if !tok.is_empty() {
             stage.argv.push(tok);
         }
@@ -198,7 +365,7 @@ fn print_job(job: &Job) {
     let _ = sys::write(FD_STDOUT, b"\n");
 }
 
-fn builtin(stage: &Stage, jobs: &mut Vec<Job>) -> Option<i32> {
+fn builtin(stage: &Stage, jobs: &mut Vec<Job>, env: &mut ShellEnv) -> Option<i32> {
     if stage.argv.is_empty() {
         return Some(0);
     }
@@ -211,7 +378,7 @@ fn builtin(stage: &Stage, jobs: &mut Vec<Job>) -> Option<i32> {
             let target: &[u8] = if stage.argv.len() > 1 {
                 stage.argv[1].as_slice()
             } else {
-                b"/"
+                env.get(b"HOME").unwrap_or(b"/")
             };
             let path = cstr(target);
             let rc = sys::chdir(path.as_ptr());
@@ -222,7 +389,26 @@ fn builtin(stage: &Stage, jobs: &mut Vec<Job>) -> Option<i32> {
                 Some(0)
             }
         }
-        b"export" => Some(0),
+        b"export" => {
+            if stage.argv.len() == 1 {
+                for var in &env.vars {
+                    let _ = sys::write(FD_STDOUT, b"export ");
+                    let _ = sys::write(FD_STDOUT, &var.name);
+                    let _ = sys::write(FD_STDOUT, b"=");
+                    let _ = sys::write(FD_STDOUT, &var.value);
+                    let _ = sys::write(FD_STDOUT, b"\n");
+                }
+                return Some(0);
+            }
+            let mut status = 0;
+            for arg in &stage.argv[1..] {
+                if !env.assignment(arg) {
+                    let _ = sys::write(FD_STDERR, b"export: bad assignment\n");
+                    status = 1;
+                }
+            }
+            Some(status)
+        }
         b"jobs" => {
             for job in jobs.iter() {
                 print_job(job);
@@ -268,10 +454,20 @@ fn open_redirect(path: &[u8], write: bool, append: bool) -> i32 {
         O_RDONLY
     };
     let fd = sys::open(path.as_ptr(), flags, 0o644);
-    if fd < 0 { -1 } else { fd as i32 }
+    if fd < 0 {
+        -1
+    } else {
+        fd as i32
+    }
 }
 
-fn spawn_stage(stage: &Stage, stdin_fd: i32, stdout_fd: i32, pipes: &[[i32; 2]]) -> isize {
+fn spawn_stage(
+    stage: &Stage,
+    stdin_fd: i32,
+    stdout_fd: i32,
+    pipes: &[[i32; 2]],
+    env: &ShellEnv,
+) -> isize {
     let pid = sys::fork();
     if pid != 0 {
         if pid > 0 {
@@ -330,20 +526,31 @@ fn spawn_stage(stage: &Stage, stdin_fd: i32, stdout_fd: i32, pipes: &[[i32; 2]])
     }
     let mut argv_ptrs: Vec<*const u8> = owned_args.iter().map(|v| v.as_ptr()).collect();
     argv_ptrs.push(ptr::null());
-    let envp: [*const u8; 1] = [ptr::null()];
+    let owned_env = env.entries();
+    let mut env_ptrs: Vec<*const u8> = owned_env.iter().map(|v| v.as_ptr()).collect();
+    env_ptrs.push(ptr::null());
 
-    let _ = sys::execve(path_c.as_ptr(), argv_ptrs.as_ptr(), envp.as_ptr());
+    let _ = sys::execve(path_c.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
     let _ = sys::write(FD_STDERR, b"sh: exec failed: ");
     let _ = sys::write(FD_STDERR, prog);
     let _ = sys::write(FD_STDERR, b"\n");
     sys::exit(127);
 }
 
-fn run_line(line: &[u8], jobs: &mut Vec<Job>, next_job_id: &mut usize) -> i32 {
+fn run_line(
+    line: &[u8],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: i32,
+) -> i32 {
     let trimmed: Vec<u8> = line.iter().copied().filter(|b| *b != b'\r').collect();
     let segments = split_pipeline(&trimmed);
 
-    let stages: Vec<(Stage, bool)> = segments.iter().map(|s| parse_stage(s)).collect();
+    let stages: Vec<(Stage, bool)> = segments
+        .iter()
+        .map(|s| parse_stage(s, env, last_status))
+        .collect();
     let background = stages.last().map(|(_, bg)| *bg).unwrap_or(false);
 
     if stages.len() == 1 {
@@ -351,7 +558,7 @@ fn run_line(line: &[u8], jobs: &mut Vec<Job>, next_job_id: &mut usize) -> i32 {
         if stage.argv.is_empty() {
             return 0;
         }
-        if let Some(rc) = builtin(stage, jobs) {
+        if let Some(rc) = builtin(stage, jobs, env) {
             return rc;
         }
     }
@@ -375,7 +582,7 @@ fn run_line(line: &[u8], jobs: &mut Vec<Job>, next_job_id: &mut usize) -> i32 {
         }
         let stdin_fd = if i == 0 { FD_STDIN } else { pipes[i - 1][0] };
         let stdout_fd = if i + 1 == n { FD_STDOUT } else { pipes[i][1] };
-        let pid = spawn_stage(stage, stdin_fd, stdout_fd, &pipes);
+        let pid = spawn_stage(stage, stdin_fd, stdout_fd, &pipes, env);
         if pid < 0 {
             let _ = sys::write(FD_STDERR, b"sh: fork failed\n");
             return 1;
@@ -421,14 +628,17 @@ fn main(_args: &[&[u8]]) -> i32 {
     set_tty_foreground(shell_pgrp);
     let mut jobs: Vec<Job> = Vec::new();
     let mut next_job_id = 1usize;
+    let mut env = ShellEnv::new();
+    let mut last_status = 0;
     loop {
-        let _ = sys::write(FD_STDOUT, PS1);
+        let prompt = env.get(b"PS1").unwrap_or(PS1);
+        let _ = sys::write(FD_STDOUT, prompt);
         match read_line(FD_STDIN) {
             Some(line) => {
                 if line.is_empty() {
                     continue;
                 }
-                let _ = run_line(&line, &mut jobs, &mut next_job_id);
+                last_status = run_line(&line, &mut jobs, &mut next_job_id, &mut env, last_status);
             }
             None => {
                 let _ = sys::write(FD_STDOUT, b"\n");
