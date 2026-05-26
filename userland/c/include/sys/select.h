@@ -4,6 +4,9 @@
 #include <stddef.h>
 #include <sys/time.h>
 
+#ifndef _RISTUX_FD_SET_DEFINED
+#define _RISTUX_FD_SET_DEFINED
+
 #define FD_SETSIZE 1024
 #define __FD_BITS (8 * sizeof(unsigned long))
 
@@ -35,6 +38,8 @@ typedef struct {
 
 #define FD_ISSET(fd, set) \
     (((set)->fds_bits[(fd) / __FD_BITS] & (1UL << ((fd) % __FD_BITS))) != 0)
+
+#endif
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 

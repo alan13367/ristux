@@ -3,13 +3,18 @@
 #include <errno.h>
 #include <libgen.h>
 #include <limits.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/resource.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <syslog.h>
+#include <time.h>
+
+static jmp_buf jump_env;
 
 static int check_ctype(void) {
     if (!isalnum('A') || !isalnum('7') || isalnum('@') ||
@@ -109,6 +114,57 @@ static int check_resource_syslog(void) {
     return 0;
 }
 
+static int check_setjmp(void) {
+    volatile int armed = 0;
+    int value = setjmp(jump_env);
+    if (value == 0) {
+        armed = 1;
+        longjmp(jump_env, 7);
+        puts("cc_libc_compat: longjmp returned");
+        return 1;
+    }
+    if (value != 7 || armed != 1) {
+        puts("cc_libc_compat: setjmp value failed");
+        return 1;
+    }
+
+    value = setjmp(jump_env);
+    if (value == 0) {
+        longjmp(jump_env, 0);
+    }
+    if (value != 1) {
+        puts("cc_libc_compat: setjmp zero value failed");
+        return 1;
+    }
+    puts("cc_libc_compat: setjmp ok");
+    return 0;
+}
+
+static int check_dropbear_types(void) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(7, &fds);
+    if (!FD_ISSET(7, &fds)) {
+        puts("cc_libc_compat: fd_set failed");
+        return 1;
+    }
+    FD_CLR(7, &fds);
+    if (FD_ISSET(7, &fds)) {
+        puts("cc_libc_compat: fd_clr failed");
+        return 1;
+    }
+    u_int8_t byte = 0x12;
+    u_int16_t word = 0x3456;
+    u_int32_t dword = 0x789abcdeU;
+    clock_t ticks = 0;
+    if (byte != 0x12 || word != 0x3456 || dword != 0x789abcdeU || ticks != 0) {
+        puts("cc_libc_compat: type alias failed");
+        return 1;
+    }
+    puts("cc_libc_compat: dropbear types ok");
+    return 0;
+}
+
 int main(void) {
     assert(PATH_MAX >= 1024);
     if (check_ctype() != 0 ||
@@ -116,7 +172,9 @@ int main(void) {
         check_string() != 0 ||
         check_format() != 0 ||
         check_path() != 0 ||
-        check_resource_syslog() != 0) {
+        check_resource_syslog() != 0 ||
+        check_setjmp() != 0 ||
+        check_dropbear_types() != 0) {
         return 1;
     }
     puts("cc_libc_compat: done");
