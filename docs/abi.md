@@ -119,6 +119,7 @@ The current Linux-like syscall surface is:
 | 109 | `setpgid` | Process group update. |
 | 110 | `getppid` | Parent pid. |
 | 111 | `getpgrp` | Current process group. |
+| 112 | `setsid` | Create a new session/process group when not already a process-group leader. |
 | 116 | `setgroups` | Root-only group-list update. |
 | 117 | `setresuid` | Real/effective/saved uid update. |
 | 201 | `time` | Seconds since Unix epoch. |
@@ -133,7 +134,7 @@ Unlisted syscall numbers return `-ENOSYS`.
 The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `getppid`.
+  `getppid`, `setsid`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `setgroups`, and libc user/group database helpers
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and

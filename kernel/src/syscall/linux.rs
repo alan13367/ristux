@@ -87,6 +87,7 @@ pub const NR_getegid: u64 = 108;
 pub const NR_setpgid: u64 = 109;
 pub const NR_getppid: u64 = 110;
 pub const NR_getpgrp: u64 = 111;
+pub const NR_setsid: u64 = 112;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
 pub const NR_time: u64 = 201;
@@ -95,6 +96,7 @@ pub const NR_clock_gettime: u64 = 228;
 pub const NR_getrandom: u64 = 318;
 
 const ESRCH: i64 = -3;
+const EPERM: i64 = -1;
 const EBADF: i64 = -9;
 const ENOMEM: i64 = -12;
 const EFAULT: i64 = -14;
@@ -226,6 +228,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getdents | NR_getdents64 => linux_getdents64(a0 as usize, a1 as usize, a2 as usize),
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
+        NR_setsid => linux_setsid(),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
         NR_rename => linux_rename(a0 as usize, a1 as usize),
@@ -1374,6 +1377,10 @@ fn linux_setpgid(pid: u64, pgid: u64) -> Result<u64, i64> {
     } else {
         Err(ESRCH)
     }
+}
+
+fn linux_setsid() -> Result<u64, i64> {
+    process::setsid_current().ok_or(EPERM)
 }
 
 fn linux_setuid(uid: u32) -> Result<u64, i64> {

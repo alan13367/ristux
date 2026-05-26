@@ -89,7 +89,10 @@
 #define SYS_SETGID 106
 #define SYS_GETEUID 107
 #define SYS_GETEGID 108
+#define SYS_SETPGID 109
 #define SYS_GETPPID 110
+#define SYS_GETPGRP 111
+#define SYS_SETSID 112
 #define SYS_SETGROUPS 116
 #define SYS_SETRESUID 117
 #define SYS_TIME 201
@@ -782,6 +785,18 @@ pid_t getpid(void) {
 
 pid_t getppid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_GETPPID));
+}
+
+pid_t getpgrp(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_GETPGRP));
+}
+
+int setpgid(pid_t pid, pid_t pgid) {
+    return (int)syscall_ret(syscall2(SYS_SETPGID, pid, pgid));
+}
+
+pid_t setsid(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_SETSID));
 }
 
 uid_t getuid(void) {

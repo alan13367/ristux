@@ -857,6 +857,19 @@ pub fn current_pgrp() -> Option<Pid> {
     with_current_read(|process| process.pgrp)
 }
 
+pub fn setsid_current() -> Option<Pid> {
+    let pid = current_pid()?;
+    with_table(|table| {
+        let process = table.get_mut(pid)?;
+        if process.pgrp == process.pid {
+            return None;
+        }
+        process.sid = process.pid;
+        process.pgrp = process.pid;
+        Some(process.sid)
+    })
+}
+
 pub fn set_pgid(pid: Pid, pgid: Pid) -> bool {
     let caller = current_pid();
     with_table(|table| {

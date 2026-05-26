@@ -53,6 +53,14 @@ case "$SCENARIO" in
       "cc_passwd: done"
     )
     ;;
+  session)
+    COMMANDS=("cc_session")
+    EXPECTS=(
+      "cc_session: leader rejection ok"
+      "cc_session: child setsid ok"
+      "cc_session: done"
+    )
+    ;;
   socket)
     COMMANDS=("cc_socket")
     EXPECTS=(
@@ -94,7 +102,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, passwd, socket, tcp, loopback, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, passwd, session, socket, tcp, loopback, command)" >&2
     exit 2
     ;;
 esac

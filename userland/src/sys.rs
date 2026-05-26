@@ -45,6 +45,7 @@ pub const NR_SETGID: usize = 106;
 pub const NR_GETEUID: usize = 107;
 pub const NR_SETPGID: usize = 109;
 pub const NR_GETPPID: usize = 110;
+pub const NR_SETSID: usize = 112;
 pub const NR_SETGROUPS: usize = 116;
 pub const NR_SETRESUID: usize = 117;
 pub const NR_RT_SIGACTION: usize = 13;
@@ -410,6 +411,11 @@ pub fn getpid() -> isize {
 #[inline]
 pub fn getpgrp() -> isize {
     unsafe { syscall0(111) }
+}
+
+#[inline]
+pub fn setsid() -> isize {
+    unsafe { syscall0(NR_SETSID) }
 }
 
 #[inline]
