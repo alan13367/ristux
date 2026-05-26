@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -89,6 +90,7 @@
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
+#define SYS_GETRANDOM 318
 
 int errno;
 int h_errno;
@@ -977,6 +979,10 @@ int gettimeofday(struct timeval *tv, struct timezone *tz) {
 
 int clock_gettime(int clockid, struct timespec *tp) {
     return (int)syscall_ret(syscall2(SYS_CLOCK_GETTIME, clockid, (long)tp));
+}
+
+ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
+    return (ssize_t)syscall_ret(syscall3(SYS_GETRANDOM, (long)buf, (long)buflen, flags));
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {

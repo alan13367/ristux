@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/random.h>
 #include <unistd.h>
 
 static int all_zero(const unsigned char *buf, int len) {
@@ -43,11 +44,30 @@ static int check_stream(const char *path, const char *label) {
     return 0;
 }
 
+static int check_getrandom(void) {
+    unsigned char first[32];
+    unsigned char second[32];
+    if (getrandom(first, sizeof(first), 0) != (int)sizeof(first) ||
+        getrandom(second, sizeof(second), GRND_NONBLOCK) != (int)sizeof(second)) {
+        puts("cc_dev: getrandom read failed");
+        return 1;
+    }
+    if (all_zero(first, sizeof(first)) || same_bytes(first, second, sizeof(first))) {
+        puts("cc_dev: getrandom weak stream");
+        return 1;
+    }
+    puts("cc_dev: getrandom ok");
+    return 0;
+}
+
 int main(void) {
     if (check_stream("/dev/random", "random") != 0) {
         return 1;
     }
     if (check_stream("/dev/urandom", "urandom") != 0) {
+        return 1;
+    }
+    if (check_getrandom() != 0) {
         return 1;
     }
     puts("cc_dev: done");

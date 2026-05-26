@@ -90,6 +90,7 @@ pub const NR_setresuid: u64 = 117;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
+pub const NR_getrandom: u64 = 318;
 
 const ESRCH: i64 = -3;
 const EBADF: i64 = -9;
@@ -129,6 +130,8 @@ const POLLOUT: i16 = 0x004;
 const POLLERR: i16 = 0x008;
 const POLLHUP: i16 = 0x010;
 const POLLNVAL: i16 = 0x020;
+const GRND_NONBLOCK: u32 = 0x0001;
+const GRND_RANDOM: u32 = 0x0002;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -252,6 +255,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_time => linux_time(a0 as usize),
         NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
+        NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
@@ -1628,6 +1632,15 @@ fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
     out[0..8].copy_from_slice(&(sec as i64).to_le_bytes());
     out[8..16].copy_from_slice(&(nsec as i64).to_le_bytes());
     Ok(0)
+}
+
+fn linux_getrandom(buf: usize, len: usize, flags: u32) -> Result<u64, i64> {
+    if flags & !(GRND_NONBLOCK | GRND_RANDOM) != 0 {
+        return Err(EINVAL);
+    }
+    let output = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
+    crate::entropy::fill_random(output);
+    Ok(len as u64)
 }
 
 fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {

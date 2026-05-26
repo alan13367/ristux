@@ -122,6 +122,7 @@ The current Linux-like syscall surface is:
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
+| 318 | `getrandom` | Kernel entropy bytes. |
 
 Unlisted syscall numbers return `-ENOSYS`.
 
@@ -147,6 +148,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `/proc/uptime`, `/proc/stat`, `/proc/self/status`, and
   `/proc/<pid>/status`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
+- Entropy: `getrandom`; `/dev/random` and `/dev/urandom` are backed by the
+  same kernel ChaCha DRBG, seeded from CPU/time sources and mixed with keyboard
+  interrupt timing.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
   `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.

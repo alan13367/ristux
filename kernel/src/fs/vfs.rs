@@ -11,7 +11,6 @@ use crate::{
 use super::ext2;
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
-static RANDOM_STATE: SpinLock<u64> = SpinLock::new(0x9e37_79b9_7f4a_7c15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
@@ -2256,20 +2255,7 @@ fn join_path(parent: &str, name: &str) -> String {
 }
 
 fn fill_random(output: &mut [u8]) {
-    let mut state = RANDOM_STATE.lock();
-    let tick_mix = crate::time::monotonic_ticks()
-        .wrapping_mul(0xd134_2543_de82_ef95)
-        ^ crate::time::uptime_millis().rotate_left(17);
-    *state ^= tick_mix;
-    for byte in output {
-        let mut x = *state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        x = x.wrapping_mul(0x2545_f491_4f6c_dd1d);
-        *state = x;
-        *byte = (x >> 56) as u8;
-    }
+    crate::entropy::fill_random(output);
 }
 
 fn normalize_path(path: &str) -> Result<String, VfsError> {

@@ -14,6 +14,7 @@ mod arch;
 mod config;
 mod drivers;
 mod dynamic_linker;
+mod entropy;
 mod error;
 mod fs;
 mod initrd;
@@ -61,6 +62,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     boot_info.print_summary();
     memory::init(&boot_info);
     time::init();
+    entropy::init();
     drivers::framebuffer::init(boot_info.framebuffer());
     let initrd =
         initrd::Initrd::from_boot_info(&boot_info).unwrap_or_else(|message| panic!("{}", message));
