@@ -2,3 +2,4 @@
 /build/
 /iso/boot/ristux.elf
 /userland/target/
+.DS_Store
