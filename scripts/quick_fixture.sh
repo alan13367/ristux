@@ -374,6 +374,31 @@ case "$SCENARIO" in
       "^  /bin/\\[$"
     )
     ;;
+  links)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/linkcheck"
+      "cd /tmp/linkcheck"
+      "echo target > base.txt"
+      "ln base.txt hard.txt"
+      "cat hard.txt"
+      "ln -s base.txt sym.txt"
+      "readlink sym.txt"
+      "cat sym.txt"
+      "pkg info ln"
+      "pkg info readlink"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: ln base.txt hard.txt"
+      "^target$"
+      "TTY canonical line ready: ln -s base.txt sym.txt"
+      "^base.txt$"
+      "^name: ln$"
+      "^  /bin/ln$"
+      "^name: readlink$"
+      "^  /bin/readlink$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -426,7 +451,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

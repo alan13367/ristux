@@ -44,6 +44,7 @@ file /bin/grep ../build/userland/grep.elf
 file /bin/id ../build/userland/id.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
+file /bin/ln ../build/userland/ln.elf
 file /bin/loopback_check ../build/userland/loopback_check.elf
 file /bin/ls ../build/userland/ls.elf
 file /bin/make ../build/userland/make.elf
@@ -56,6 +57,7 @@ file /bin/pkgconf ../build/userland/pkgconf.elf
 file /bin/printf ../build/userland/printf.elf
 file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
+file /bin/readlink ../build/userland/readlink.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
 file /bin/stty ../build/userland/stty.elf
@@ -129,6 +131,7 @@ package libc-dev 0.1.0 /lib/crtn.o deps=libc
 package libc-dev 0.1.0 /lib/libc.a deps=libc
 package libc-dev 0.1.0 /lib/ristux.ld deps=libc
 package login 0.1.0 /bin/login
+package ln 0.1.0 /bin/ln
 package loopback_check 0.1.0 /bin/loopback_check
 package ls 0.1.0 /bin/ls
 package make 0.1.0 /bin/make
@@ -141,6 +144,7 @@ package pkgconf 0.1.0 /bin/pkgconf
 package printf 0.1.0 /bin/printf
 package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
+package readlink 0.1.0 /bin/readlink
 package rm 0.1.0 /bin/rm
 package sh 0.1.0 /bin/sh
 package sig_demo 0.1.0 /bin/sig_demo
