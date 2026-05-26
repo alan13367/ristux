@@ -41,6 +41,7 @@ file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
+file /bin/env ../build/userland/env.elf
 file /bin/false ../build/userland/false.elf
 file /bin/grep ../build/userland/grep.elf
 file /bin/head ../build/userland/head.elf
@@ -130,6 +131,7 @@ package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit
 package echo 0.1.0 /bin/echo
+package env 0.1.0 /bin/env
 package false 0.1.0 /bin/false
 package grep 0.1.0 /bin/grep
 package head 0.1.0 /bin/head
