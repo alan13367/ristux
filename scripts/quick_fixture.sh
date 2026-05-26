@@ -288,6 +288,32 @@ case "$SCENARIO" in
       "^#ifndef _RISTUX_STDIO_H$"
     )
     ;;
+  filetools)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/filetools"
+      "cd /tmp/filetools"
+      "echo alpha > one.txt"
+      "cp one.txt two.txt"
+      "cat two.txt"
+      "mkdir out"
+      "cp one.txt out"
+      "cat out/one.txt"
+      "mv two.txt moved.txt"
+      "cat moved.txt"
+      "pkg info cp"
+      "pkg info mv"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cp one.txt two.txt"
+      "^alpha$"
+      "TTY canonical line ready: mv two.txt moved.txt"
+      "^name: cp$"
+      "^  /bin/cp$"
+      "^name: mv$"
+      "^  /bin/mv$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -340,7 +366,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
