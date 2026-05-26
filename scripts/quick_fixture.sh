@@ -484,6 +484,31 @@ case "$SCENARIO" in
       "^  /bin/tee$"
     )
     ;;
+  sort)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/sortcheck"
+      "cd /tmp/sortcheck"
+      "echo orange > words.txt"
+      "echo apple >> words.txt"
+      "echo apple >> words.txt"
+      "echo banana >> words.txt"
+      "sort words.txt | head -1"
+      "sort -u words.txt | wc -l"
+      "cat words.txt | sort -r"
+      "pkg info sort"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sort words.txt | head -1"
+      "^apple$"
+      "TTY canonical line ready: sort -u words.txt | wc -l"
+      "^3$"
+      "TTY canonical line ready: cat words.txt | sort -r"
+      "^orange$"
+      "^name: sort$"
+      "^  /bin/sort$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -536,7 +561,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

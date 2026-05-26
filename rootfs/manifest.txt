@@ -61,6 +61,7 @@ file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
+file /bin/sort ../build/userland/sort.elf
 file /bin/stty ../build/userland/stty.elf
 file /bin/test ../build/userland/test.elf
 file /bin/[ ../build/userland/test.elf
@@ -158,6 +159,7 @@ package test 0.1.0 /bin/test
 package test 0.1.0 /bin/[
 package su 0.1.0 /bin/su
 package sleep 0.1.0 /bin/sleep
+package sort 0.1.0 /bin/sort
 package ssh_banner 0.1.0 /bin/ssh_banner
 package tail 0.1.0 /bin/tail
 package tar 0.1.0 /bin/tar
