@@ -421,6 +421,27 @@ case "$SCENARIO" in
       "^  /bin/wc$"
     )
     ;;
+  head)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/headcheck"
+      "cd /tmp/headcheck"
+      "echo one > lines.txt"
+      "echo two >> lines.txt"
+      "echo three >> lines.txt"
+      "head -n 2 lines.txt"
+      "cat lines.txt | head -1"
+      "pkg info head"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: head -n 2 lines.txt"
+      "^one$"
+      "^two$"
+      "TTY canonical line ready: cat lines.txt | head -1"
+      "^name: head$"
+      "^  /bin/head$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -473,7 +494,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
