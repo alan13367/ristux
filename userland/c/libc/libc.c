@@ -1,8 +1,11 @@
 #include <errno.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <libgen.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -18,6 +21,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/random.h>
+#include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -25,6 +29,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <syslog.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -107,6 +112,17 @@ int h_errno;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
+
+struct FILE {
+    int fd;
+};
+
+static FILE stdin_file = { 0 };
+static FILE stdout_file = { 1 };
+static FILE stderr_file = { 2 };
+FILE *stdin = &stdin_file;
+FILE *stdout = &stdout_file;
+FILE *stderr = &stderr_file;
 
 int main(int argc, char **argv, char **envp);
 
@@ -1357,6 +1373,16 @@ void exit(int status) {
     _exit(status);
 }
 
+void abort(void) {
+    _exit(134);
+}
+
+void __assert_fail(const char *expr, const char *file, int line, const char *func) {
+    fprintf(stderr, "%s:%d: %s: assertion failed: %s\n",
+            file ? file : "?", line, func ? func : "?", expr ? expr : "?");
+    abort();
+}
+
 struct malloc_header {
     size_t size;
 };
@@ -1408,6 +1434,111 @@ void *realloc(void *ptr, size_t size) {
     size_t copy = old_header->size < size ? old_header->size : size;
     memcpy(next, ptr, copy);
     return next;
+}
+
+static int digit_value(int ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+unsigned long strtoul(const char *nptr, char **endptr, int base) {
+    const char *p = nptr;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+        neg = *p == '-';
+        p++;
+    }
+    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    } else if (base == 0 && *p == '0') {
+        base = 8;
+    } else if (base == 0) {
+        base = 10;
+    }
+    if (base < 2 || base > 36) {
+        if (endptr != NULL) {
+            *endptr = (char *)nptr;
+        }
+        errno = EINVAL;
+        return 0;
+    }
+
+    unsigned long value = 0;
+    int any = 0;
+    for (;;) {
+        int digit = digit_value((unsigned char)*p);
+        if (digit < 0 || digit >= base) {
+            break;
+        }
+        any = 1;
+        if (value > (ULONG_MAX - (unsigned long)digit) / (unsigned long)base) {
+            errno = ERANGE;
+            value = ULONG_MAX;
+            p++;
+            while (digit_value((unsigned char)*p) >= 0 &&
+                   digit_value((unsigned char)*p) < base) {
+                p++;
+            }
+            break;
+        }
+        value = value * (unsigned long)base + (unsigned long)digit;
+        p++;
+    }
+    if (!any) {
+        p = nptr;
+    }
+    if (endptr != NULL) {
+        *endptr = (char *)p;
+    }
+    return neg ? (unsigned long)(-value) : value;
+}
+
+long strtol(const char *nptr, char **endptr, int base) {
+    const char *p = nptr;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+        neg = *p == '-';
+        p++;
+    }
+    char *local_end = NULL;
+    unsigned long value = strtoul(p, &local_end, base);
+    if (endptr != NULL) {
+        *endptr = local_end == p ? (char *)nptr : local_end;
+    }
+    if (neg) {
+        if (value > (unsigned long)LONG_MAX + 1UL) {
+            errno = ERANGE;
+            return LONG_MIN;
+        }
+        if (value == (unsigned long)LONG_MAX + 1UL) {
+            return LONG_MIN;
+        }
+        return -(long)value;
+    }
+    if (value > (unsigned long)LONG_MAX) {
+        errno = ERANGE;
+        return LONG_MAX;
+    }
+    return (long)value;
+}
+
+int atoi(const char *nptr) {
+    return (int)strtol(nptr, NULL, 10);
 }
 
 void *memcpy(void *dst, const void *src, size_t n) {
@@ -1469,6 +1600,17 @@ int strcmp(const char *a, const char *b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 
+int strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb || ca == '\0' || cb == '\0') {
+            return (int)ca - (int)cb;
+        }
+    }
+    return 0;
+}
+
 char *strcpy(char *dst, const char *src) {
     char *out = dst;
     while ((*dst++ = *src++) != '\0') {
@@ -1497,6 +1639,110 @@ char *strchr(const char *s, int ch) {
     return ch == 0 ? (char *)s : NULL;
 }
 
+char *strrchr(const char *s, int ch) {
+    const char *last = NULL;
+    do {
+        if (*s == (char)ch) {
+            last = s;
+        }
+    } while (*s++ != '\0');
+    return (char *)last;
+}
+
+char *strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *out = malloc(len);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, s, len);
+    return out;
+}
+
+char *strerror(int errnum) {
+    switch (errnum) {
+    case EPERM: return "Operation not permitted";
+    case ENOENT: return "No such file or directory";
+    case ESRCH: return "No such process";
+    case EINTR: return "Interrupted system call";
+    case EIO: return "Input/output error";
+    case EBADF: return "Bad file descriptor";
+    case EAGAIN: return "Resource temporarily unavailable";
+    case ENOMEM: return "Out of memory";
+    case EACCES: return "Permission denied";
+    case EFAULT: return "Bad address";
+    case EEXIST: return "File exists";
+    case ENOTDIR: return "Not a directory";
+    case EINVAL: return "Invalid argument";
+    case ERANGE: return "Result too large";
+    case ENOSYS: return "Function not implemented";
+    case ECONNRESET: return "Connection reset by peer";
+    case ENOTCONN: return "Socket is not connected";
+    case ETIMEDOUT: return "Connection timed out";
+    default: return "Unknown error";
+    }
+}
+
+int strcasecmp(const char *a, const char *b) {
+    while (*a != '\0') {
+        int ca = tolower((unsigned char)*a);
+        int cb = tolower((unsigned char)*b);
+        if (ca != cb) {
+            return ca - cb;
+        }
+        a++;
+        b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
+int strncasecmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        int ca = tolower((unsigned char)a[i]);
+        int cb = tolower((unsigned char)b[i]);
+        if (ca != cb || ca == '\0' || cb == '\0') {
+            return ca - cb;
+        }
+    }
+    return 0;
+}
+
+int isdigit(int ch) {
+    unsigned char c = (unsigned char)ch;
+    return c >= '0' && c <= '9';
+}
+
+int islower(int ch) {
+    unsigned char c = (unsigned char)ch;
+    return c >= 'a' && c <= 'z';
+}
+
+int isupper(int ch) {
+    unsigned char c = (unsigned char)ch;
+    return c >= 'A' && c <= 'Z';
+}
+
+int isalpha(int ch) {
+    return islower(ch) || isupper(ch);
+}
+
+int isalnum(int ch) {
+    return isalpha(ch) || isdigit(ch);
+}
+
+int isspace(int ch) {
+    unsigned char c = (unsigned char)ch;
+    return c == ' ' || c == '\f' || c == '\n' || c == '\r' || c == '\t' || c == '\v';
+}
+
+int tolower(int ch) {
+    return isupper(ch) ? ch - 'A' + 'a' : ch;
+}
+
+int toupper(int ch) {
+    return islower(ch) ? ch - 'a' + 'A' : ch;
+}
+
 int putchar(int ch) {
     unsigned char c = (unsigned char)ch;
     return write(1, &c, 1) == 1 ? ch : -1;
@@ -1513,104 +1759,303 @@ int puts(const char *s) {
     return (int)len + 1;
 }
 
-static int print_str(const char *s) {
+struct format_sink {
+    char *buf;
+    size_t size;
+    size_t pos;
+    int fd;
+    int to_fd;
+    int failed;
+};
+
+static void sink_write(struct format_sink *sink, const char *data, size_t len) {
+    if (sink->failed) {
+        return;
+    }
+    if (sink->to_fd) {
+        if (write(sink->fd, data, len) < 0) {
+            sink->failed = 1;
+        }
+    } else if (sink->size > 0) {
+        for (size_t i = 0; i < len; i++) {
+            if (sink->pos + 1 < sink->size) {
+                sink->buf[sink->pos] = data[i];
+            }
+            sink->pos++;
+        }
+        return;
+    }
+    sink->pos += len;
+}
+
+static void sink_repeat(struct format_sink *sink, char ch, int count) {
+    for (int i = 0; i < count; i++) {
+        sink_write(sink, &ch, 1);
+    }
+}
+
+static int unsigned_to_string(unsigned long long value, unsigned int base, int upper,
+                              char *buf, size_t buf_len) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    size_t pos = buf_len;
+    if (value == 0) {
+        buf[--pos] = '0';
+    }
+    while (value != 0 && pos > 0) {
+        buf[--pos] = digits[value % base];
+        value /= base;
+    }
+    size_t len = buf_len - pos;
+    memmove(buf, &buf[pos], len);
+    return (int)len;
+}
+
+static int format_emit_string(struct format_sink *sink, const char *s, int width, int precision,
+                              int left) {
     if (s == NULL) {
         s = "(null)";
     }
     size_t len = strlen(s);
-    return write(1, s, len) < 0 ? -1 : (int)len;
+    if (precision >= 0 && (size_t)precision < len) {
+        len = (size_t)precision;
+    }
+    int padding = width > (int)len ? width - (int)len : 0;
+    if (!left) {
+        sink_repeat(sink, ' ', padding);
+    }
+    sink_write(sink, s, len);
+    if (left) {
+        sink_repeat(sink, ' ', padding);
+    }
+    return (int)len + padding;
 }
 
-static int print_unsigned(unsigned long value, unsigned int base, int prefix) {
-    char buf[32];
-    const char *digits = "0123456789abcdef";
-    size_t index = sizeof(buf);
-    if (value == 0) {
-        buf[--index] = '0';
+static int format_emit_number(struct format_sink *sink, unsigned long long value, int negative,
+                              unsigned int base, int upper, int width, int precision,
+                              int left, int zero, int prefix) {
+    char digits[32];
+    int digits_len = unsigned_to_string(value, base, upper, digits, sizeof(digits));
+    int precision_zeros = precision > digits_len ? precision - digits_len : 0;
+    int prefix_len = prefix ? 2 : 0;
+    int sign_len = negative ? 1 : 0;
+    int total_len = sign_len + prefix_len + precision_zeros + digits_len;
+    int padding = width > total_len ? width - total_len : 0;
+    char pad = zero && precision < 0 && !left ? '0' : ' ';
+
+    if (!left && pad == ' ') {
+        sink_repeat(sink, pad, padding);
     }
-    while (value != 0) {
-        buf[--index] = digits[value % base];
-        value /= base;
+    if (negative) {
+        sink_write(sink, "-", 1);
     }
-    int written = 0;
     if (prefix) {
-        if (write(1, "0x", 2) < 0) {
-            return -1;
-        }
-        written += 2;
+        sink_write(sink, upper ? "0X" : "0x", 2);
     }
-    size_t len = sizeof(buf) - index;
-    if (write(1, &buf[index], len) < 0) {
-        return -1;
+    if (!left && pad == '0') {
+        sink_repeat(sink, pad, padding);
     }
-    return written + (int)len;
+    sink_repeat(sink, '0', precision_zeros);
+    sink_write(sink, digits, (size_t)digits_len);
+    if (left) {
+        sink_repeat(sink, ' ', padding);
+    }
+    return total_len + padding;
 }
 
-static int print_signed(long value) {
-    if (value < 0) {
-        if (write(1, "-", 1) < 0) {
-            return -1;
-        }
-        int rest = print_unsigned((unsigned long)(-value), 10, 0);
-        return rest < 0 ? -1 : rest + 1;
-    }
-    return print_unsigned((unsigned long)value, 10, 0);
-}
-
-int vprintf(const char *fmt, va_list ap) {
+static int format_core(struct format_sink *sink, const char *fmt, va_list ap) {
     int written = 0;
     for (size_t i = 0; fmt[i] != '\0'; i++) {
         if (fmt[i] != '%') {
-            if (write(1, &fmt[i], 1) < 0) {
-                return -1;
-            }
+            sink_write(sink, &fmt[i], 1);
             written++;
             continue;
         }
 
         i++;
-        int long_flag = 0;
+        int left = 0;
+        int zero = 0;
+        while (fmt[i] == '-' || fmt[i] == '0') {
+            if (fmt[i] == '-') {
+                left = 1;
+            } else if (fmt[i] == '0') {
+                zero = 1;
+            }
+            i++;
+        }
+
+        int width = 0;
+        if (fmt[i] == '*') {
+            width = va_arg(ap, int);
+            if (width < 0) {
+                left = 1;
+                width = -width;
+            }
+            i++;
+        } else {
+            while (isdigit((unsigned char)fmt[i])) {
+                width = width * 10 + fmt[i] - '0';
+                i++;
+            }
+        }
+
+        int precision = -1;
+        if (fmt[i] == '.') {
+            i++;
+            precision = 0;
+            if (fmt[i] == '*') {
+                precision = va_arg(ap, int);
+                i++;
+            } else {
+                while (isdigit((unsigned char)fmt[i])) {
+                    precision = precision * 10 + fmt[i] - '0';
+                    i++;
+                }
+            }
+            if (precision < 0) {
+                precision = -1;
+            }
+        }
+
+        int length = 0;
         if (fmt[i] == 'l') {
-            long_flag = 1;
+            length = 1;
+            i++;
+            if (fmt[i] == 'l') {
+                length = 2;
+                i++;
+            }
+        } else if (fmt[i] == 'z') {
+            length = 3;
             i++;
         }
 
         int n = 0;
         switch (fmt[i]) {
         case '%':
-            n = write(1, "%", 1) < 0 ? -1 : 1;
+            sink_write(sink, "%", 1);
+            n = 1;
             break;
         case 'c': {
             char c = (char)va_arg(ap, int);
-            n = write(1, &c, 1) < 0 ? -1 : 1;
+            int padding = width > 1 ? width - 1 : 0;
+            if (!left) {
+                sink_repeat(sink, ' ', padding);
+            }
+            sink_write(sink, &c, 1);
+            if (left) {
+                sink_repeat(sink, ' ', padding);
+            }
+            n = padding + 1;
             break;
         }
         case 's':
-            n = print_str(va_arg(ap, const char *));
+            n = format_emit_string(sink, va_arg(ap, const char *), width, precision, left);
             break;
         case 'd':
-        case 'i':
-            n = print_signed(long_flag ? va_arg(ap, long) : va_arg(ap, int));
-            break;
-        case 'u':
-            n = print_unsigned(long_flag ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int), 10, 0);
-            break;
-        case 'x':
-            n = print_unsigned(long_flag ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int), 16, 0);
-            break;
-        case 'p':
-            n = print_unsigned((unsigned long)va_arg(ap, void *), 16, 1);
-            break;
-        default:
-            n = write(1, "?", 1) < 0 ? -1 : 1;
+        case 'i': {
+            long long value;
+            if (length == 2) {
+                value = va_arg(ap, long long);
+            } else if (length == 1 || length == 3) {
+                value = va_arg(ap, long);
+            } else {
+                value = va_arg(ap, int);
+            }
+            int negative = value < 0;
+            unsigned long long mag = negative
+                ? (unsigned long long)(-(value + 1)) + 1ULL
+                : (unsigned long long)value;
+            n = format_emit_number(sink, mag, negative, 10, 0, width, precision, left, zero, 0);
             break;
         }
-        if (n < 0) {
-            return -1;
+        case 'u':
+        case 'o':
+        case 'x':
+        case 'X': {
+            unsigned long long value;
+            if (length == 2) {
+                value = va_arg(ap, unsigned long long);
+            } else if (length == 1 || length == 3) {
+                value = va_arg(ap, unsigned long);
+            } else {
+                value = va_arg(ap, unsigned int);
+            }
+            unsigned int base = fmt[i] == 'o' ? 8 : (fmt[i] == 'u' ? 10 : 16);
+            n = format_emit_number(sink, value, 0, base, fmt[i] == 'X', width, precision, left, zero, 0);
+            break;
+        }
+        case 'p':
+            n = format_emit_number(sink, (unsigned long long)(uintptr_t)va_arg(ap, void *),
+                                   0, 16, 0, width, precision, left, zero, 1);
+            break;
+        default:
+            sink_write(sink, "?", 1);
+            n = 1;
+            break;
         }
         written += n;
     }
-    return written;
+    if (!sink->to_fd && sink->size > 0) {
+        size_t term = sink->pos < sink->size ? sink->pos : sink->size - 1;
+        sink->buf[term] = '\0';
+    }
+    return sink->failed ? -1 : written;
+}
+
+int vsnprintf(char *str, size_t size, const char *fmt, va_list ap) {
+    struct format_sink sink = {
+        .buf = str,
+        .size = size,
+        .pos = 0,
+        .fd = -1,
+        .to_fd = 0,
+        .failed = 0,
+    };
+    va_list copy;
+    va_copy(copy, ap);
+    int ret = format_core(&sink, fmt, copy);
+    va_end(copy);
+    return ret;
+}
+
+int snprintf(char *str, size_t size, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsnprintf(str, size, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vfprintf(FILE *stream, const char *fmt, va_list ap) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    struct format_sink sink = {
+        .buf = NULL,
+        .size = 0,
+        .pos = 0,
+        .fd = stream->fd,
+        .to_fd = 1,
+        .failed = 0,
+    };
+    va_list copy;
+    va_copy(copy, ap);
+    int ret = format_core(&sink, fmt, copy);
+    va_end(copy);
+    return ret;
+}
+
+int fprintf(FILE *stream, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vfprintf(stream, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vprintf(const char *fmt, va_list ap) {
+    return vfprintf(stdout, fmt, ap);
 }
 
 int printf(const char *fmt, ...) {
@@ -1619,4 +2064,128 @@ int printf(const char *fmt, ...) {
     int ret = vprintf(fmt, ap);
     va_end(ap);
     return ret;
+}
+
+static const char *syslog_ident;
+static int syslog_mask = 0xff;
+
+void openlog(const char *ident, int option, int facility) {
+    (void)option;
+    (void)facility;
+    syslog_ident = ident;
+}
+
+void closelog(void) {
+    syslog_ident = NULL;
+}
+
+int setlogmask(int mask) {
+    int old = syslog_mask;
+    if (mask != 0) {
+        syslog_mask = mask;
+    }
+    return old;
+}
+
+void vsyslog(int priority, const char *format, va_list ap) {
+    int pri = priority & 7;
+    if ((syslog_mask & LOG_MASK(pri)) == 0) {
+        return;
+    }
+    char message[512];
+    vsnprintf(message, sizeof(message), format, ap);
+    if (syslog_ident != NULL && syslog_ident[0] != '\0') {
+        fprintf(stderr, "%s: %s\n", syslog_ident, message);
+    } else {
+        fprintf(stderr, "%s\n", message);
+    }
+}
+
+void syslog(int priority, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    vsyslog(priority, format, ap);
+    va_end(ap);
+}
+
+int getrlimit(int resource, struct rlimit *rlim) {
+    if (rlim == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    switch (resource) {
+    case RLIMIT_CORE:
+        rlim->rlim_cur = 0;
+        rlim->rlim_max = 0;
+        return 0;
+    case RLIMIT_NOFILE:
+        rlim->rlim_cur = OPEN_MAX;
+        rlim->rlim_max = OPEN_MAX;
+        return 0;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+int setrlimit(int resource, const struct rlimit *rlim) {
+    if (rlim == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    switch (resource) {
+    case RLIMIT_CORE:
+        return 0;
+    case RLIMIT_NOFILE:
+        if (rlim->rlim_cur > OPEN_MAX || rlim->rlim_max > OPEN_MAX) {
+            errno = EINVAL;
+            return -1;
+        }
+        return 0;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+char *basename(char *path) {
+    static char dot[] = ".";
+    static char slash[] = "/";
+    if (path == NULL || path[0] == '\0') {
+        return dot;
+    }
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
+    if (len == 1 && path[0] == '/') {
+        return slash;
+    }
+    char *last = strrchr(path, '/');
+    return last == NULL ? path : last + 1;
+}
+
+char *dirname(char *path) {
+    static char dot[] = ".";
+    static char slash[] = "/";
+    if (path == NULL || path[0] == '\0') {
+        return dot;
+    }
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
+    char *last = strrchr(path, '/');
+    if (last == NULL) {
+        return dot;
+    }
+    while (last > path && *last == '/') {
+        last--;
+    }
+    if (last == path && *last == '/') {
+        path[1] = '\0';
+        return slash;
+    }
+    last[1] = '\0';
+    return path;
 }

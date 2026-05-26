@@ -342,6 +342,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_libc_compat"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_ext2"
   sleep 1
   printf 'sendkey ret\n'
@@ -578,6 +582,14 @@ grep -q "cc_links: rename ok" "$SERIAL_LOG"
 grep -q "cc_links: chown ok" "$SERIAL_LOG"
 grep -q "cc_links: rmdir ok" "$SERIAL_LOG"
 grep -q "cc_links: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_libc_compat" "$SERIAL_LOG"
+grep -q "cc_libc_compat: ctype ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: parse ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: string ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: format ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: path ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: resource syslog ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_ext2" "$SERIAL_LOG"
 grep -q "cc_ext2: ops ok" "$SERIAL_LOG"
 grep -q "cc_ext2: marker ok" "$SERIAL_LOG"

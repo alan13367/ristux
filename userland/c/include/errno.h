@@ -17,6 +17,7 @@ extern int errno;
 #define ENOTDIR 20
 #define EINVAL 22
 #define ENOSYS 38
+#define ERANGE 34
 #define ECONNRESET 104
 #define ENOTCONN 107
 #define ETIMEDOUT 110

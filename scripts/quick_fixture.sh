@@ -53,6 +53,18 @@ case "$SCENARIO" in
       "cc_passwd: done"
     )
     ;;
+  libc)
+    COMMANDS=("cc_libc_compat")
+    EXPECTS=(
+      "cc_libc_compat: ctype ok"
+      "cc_libc_compat: parse ok"
+      "cc_libc_compat: string ok"
+      "cc_libc_compat: format ok"
+      "cc_libc_compat: path ok"
+      "cc_libc_compat: resource syslog ok"
+      "cc_libc_compat: done"
+    )
+    ;;
   session)
     COMMANDS=("cc_session")
     EXPECTS=(
