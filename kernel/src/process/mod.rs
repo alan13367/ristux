@@ -37,6 +37,7 @@ pub enum ProcessState {
 pub enum BlockReason {
     WaitChild(Pid),
     WaitIo,
+    WaitIoUntil(u64),
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +46,12 @@ struct FdEntry {
     vfs_fd: usize,
     status_flags: u32,
     fd_flags: u32,
+}
+
+#[derive(Clone, Copy)]
+struct TimedWait {
+    key: u64,
+    deadline_ms: u64,
 }
 
 pub struct Process {
@@ -64,6 +71,8 @@ pub struct Process {
     pub umask: u16,
     fd_count: usize,
     fds: [FdEntry; MAX_FDS],
+    socket_handles: Vec<usize>,
+    timed_wait: Option<TimedWait>,
     next_fd: usize,
     pub entry: u64,
     pub stack_top: usize,
@@ -139,6 +148,8 @@ impl Process {
                 status_flags: 0,
                 fd_flags: 0,
             }; MAX_FDS],
+            socket_handles: Vec::new(),
+            timed_wait: None,
             next_fd: 3,
             entry: 0,
             stack_top: paging::USER_STACK_TOP,
@@ -295,6 +306,73 @@ impl Process {
         closed
     }
 
+    fn close_on_exec_socket_handles(&mut self) -> Vec<usize> {
+        let mut closed = Vec::new();
+        let mut index = 0;
+        while index < self.socket_handles.len() {
+            let handle = self.socket_handles[index];
+            let cloexec = crate::net::socket::with_sockets(|table| {
+                table
+                    .fd_flags(handle)
+                    .map(|flags| flags & FD_CLOEXEC != 0)
+                    .unwrap_or(false)
+            });
+            if cloexec {
+                closed.push(handle);
+                self.socket_handles.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        closed
+    }
+
+    fn add_socket_handle(&mut self, handle: usize) {
+        if !self.socket_handles.contains(&handle) {
+            self.socket_handles.push(handle);
+        }
+    }
+
+    fn remove_socket_handle(&mut self, handle: usize) -> bool {
+        let Some(index) = self
+            .socket_handles
+            .iter()
+            .position(|entry| *entry == handle)
+        else {
+            return false;
+        };
+        self.socket_handles.swap_remove(index);
+        true
+    }
+
+    fn owns_socket_handle(&self, handle: usize) -> bool {
+        self.socket_handles.contains(&handle)
+    }
+
+    fn close_socket_handles(&mut self) {
+        let handles = core::mem::take(&mut self.socket_handles);
+        for handle in handles {
+            let _ = crate::net::socket::with_sockets(|table| table.close(handle));
+        }
+    }
+
+    fn timed_wait_deadline(&mut self, key: u64, timeout_ms: u64, now_ms: u64) -> u64 {
+        if let Some(wait) = self.timed_wait {
+            if wait.key == key {
+                return wait.deadline_ms;
+            }
+        }
+        let deadline_ms = now_ms.saturating_add(timeout_ms);
+        self.timed_wait = Some(TimedWait { key, deadline_ms });
+        deadline_ms
+    }
+
+    fn clear_timed_wait(&mut self, key: u64) {
+        if matches!(self.timed_wait, Some(wait) if wait.key == key) {
+            self.timed_wait = None;
+        }
+    }
+
     fn allows(&self, addr: usize, len: usize) -> bool {
         self.address_space.allows(addr, len)
     }
@@ -314,6 +392,7 @@ impl Process {
         if segments == 0 {
             return Err(elf::ElfError::Unsupported);
         }
+        self.timed_wait = None;
         self.name = String::from(path);
         self.entry = entry;
         Ok(entry)
@@ -417,6 +496,7 @@ impl Process {
             let _ = fs::close(self.fds[index].vfs_fd);
         }
         self.fd_count = 0;
+        self.close_socket_handles();
         let old = core::mem::replace(
             &mut self.address_space,
             AddressSpace::new_kernel_clone().expect("address space"),
@@ -511,6 +591,7 @@ impl ProcessTable {
                 let _ = fs::close(process.fds[index].vfs_fd);
             }
             process.fd_count = 0;
+            process.close_socket_handles();
             let mut old = AddressSpace::new_kernel_clone().expect("address space");
             core::mem::swap(&mut process.address_space, &mut old);
             old.destroy();
@@ -649,6 +730,12 @@ impl Process {
                 fds[i].vfs_fd = dup;
             }
         }
+        let socket_handles = self.socket_handles.clone();
+        for handle in &socket_handles {
+            crate::net::socket::with_sockets(|table| {
+                let _ = table.duplicate(*handle);
+            });
+        }
         Some(Self {
             pid: self.pid,
             parent: self.parent,
@@ -666,6 +753,8 @@ impl Process {
             umask: self.umask,
             fd_count,
             fds,
+            socket_handles,
+            timed_wait: None,
             next_fd: self.next_fd,
             entry: self.entry,
             stack_top: self.stack_top,
@@ -725,6 +814,10 @@ pub fn exec_for_user(pid: Pid, path: &str, args: &[&str], env: &[&str]) -> Optio
         let close_on_exec = table.processes[index].close_on_exec_fds();
         for fd in close_on_exec {
             let _ = fs::close(fd);
+        }
+        let close_on_exec_sockets = table.processes[index].close_on_exec_socket_handles();
+        for handle in close_on_exec_sockets {
+            let _ = crate::net::socket::with_sockets(|socket_table| socket_table.close(handle));
         }
         // Preserve fds across exec except descriptors marked FD_CLOEXEC.
         if table.processes[index].load_elf(path, &data).is_err() {
@@ -949,7 +1042,10 @@ pub fn mark_ready(pid: Pid) -> bool {
         let Some(process) = table.get_mut(pid) else {
             return false;
         };
-        if matches!(process.state, ProcessState::Zombie(_) | ProcessState::Stopped(_)) {
+        if matches!(
+            process.state,
+            ProcessState::Zombie(_) | ProcessState::Stopped(_)
+        ) {
             return false;
         }
         process.state = ProcessState::Ready;
@@ -1070,6 +1166,42 @@ pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
         fs::close(vfs_fd)
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn install_socket_handle(handle: usize) -> Result<(), ()> {
+    with_current(|p| {
+        p.add_socket_handle(handle);
+        Ok(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn owns_socket_handle(handle: usize) -> bool {
+    with_current_read(|p| p.owns_socket_handle(handle)).unwrap_or(false)
+}
+
+pub fn user_close_socket_handle(handle: usize) -> Result<(), ()> {
+    let removed = with_current(|p| {
+        if !p.remove_socket_handle(handle) {
+            return false;
+        }
+        true
+    })
+    .unwrap_or(false);
+    if !removed {
+        return Err(());
+    }
+    crate::net::socket::with_sockets(|table| table.close(handle)).map_err(|_| ())
+}
+
+pub fn timed_wait_deadline(key: u64, timeout_ms: u64, now_ms: u64) -> Option<u64> {
+    with_current(|p| p.timed_wait_deadline(key, timeout_ms, now_ms))
+}
+
+pub fn clear_timed_wait(key: u64) {
+    let _ = with_current(|p| {
+        p.clear_timed_wait(key);
+    });
 }
 
 pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
@@ -1294,7 +1426,34 @@ pub fn wake_io_waiters() {
         };
         let mut woken = Vec::new();
         for process in &mut table.processes {
-            if matches!(process.state, ProcessState::Blocked(BlockReason::WaitIo)) {
+            if matches!(
+                process.state,
+                ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
+            ) {
+                process.state = ProcessState::Ready;
+                woken.push(process.pid);
+            }
+        }
+        woken
+    };
+    for pid in woken {
+        crate::sched::wake_blocked(pid);
+    }
+}
+
+pub fn wake_expired_io_waiters(now_ms: u64) {
+    let woken: Vec<Pid> = {
+        let mut guard = PROCESS_TABLE.lock();
+        let Some(table) = guard.as_mut() else {
+            return;
+        };
+        let mut woken = Vec::new();
+        for process in &mut table.processes {
+            if matches!(
+                process.state,
+                ProcessState::Blocked(BlockReason::WaitIoUntil(deadline_ms))
+                    if now_ms >= deadline_ms
+            ) {
                 process.state = ProcessState::Ready;
                 woken.push(process.pid);
             }
@@ -1313,7 +1472,10 @@ pub fn wake_io_waiters_for(pid: Pid) {
             return;
         };
         if let Some(p) = table.get_mut(pid) {
-            if matches!(p.state, ProcessState::Blocked(BlockReason::WaitIo)) {
+            if matches!(
+                p.state,
+                ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
+            ) {
                 p.state = ProcessState::Ready;
                 true
             } else {
@@ -1551,12 +1713,15 @@ pub fn set_current_gid(gid: u32) -> Result<(), ()> {
     .unwrap_or(Err(()))
 }
 
-pub fn set_current_resuid(ruid: Option<u32>, euid: Option<u32>, suid: Option<u32>) -> Result<(), ()> {
+pub fn set_current_resuid(
+    ruid: Option<u32>,
+    euid: Option<u32>,
+    suid: Option<u32>,
+) -> Result<(), ()> {
     with_current(|p| {
         let old = p.credentials;
-        let allowed = |uid: u32| {
-            old.is_superuser() || uid == old.uid || uid == old.euid || uid == old.suid
-        };
+        let allowed =
+            |uid: u32| old.is_superuser() || uid == old.uid || uid == old.euid || uid == old.suid;
         if let Some(uid) = ruid {
             if !allowed(uid) {
                 return Err(());
@@ -1586,12 +1751,15 @@ pub fn set_current_resuid(ruid: Option<u32>, euid: Option<u32>, suid: Option<u32
     .unwrap_or(Err(()))
 }
 
-pub fn set_current_resgid(rgid: Option<u32>, egid: Option<u32>, sgid: Option<u32>) -> Result<(), ()> {
+pub fn set_current_resgid(
+    rgid: Option<u32>,
+    egid: Option<u32>,
+    sgid: Option<u32>,
+) -> Result<(), ()> {
     with_current(|p| {
         let old = p.credentials;
-        let allowed = |gid: u32| {
-            old.is_superuser() || gid == old.gid || gid == old.egid || gid == old.sgid
-        };
+        let allowed =
+            |gid: u32| old.is_superuser() || gid == old.gid || gid == old.egid || gid == old.sgid;
         if let Some(gid) = rgid {
             if !allowed(gid) {
                 return Err(());

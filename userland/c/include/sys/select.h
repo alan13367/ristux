@@ -26,18 +26,23 @@ typedef struct {
     do { \
         fd_set *__set = (set); \
         int __fd = (fd); \
-        __set->fds_bits[__fd / __FD_BITS] |= 1UL << (__fd % __FD_BITS); \
+        if (__fd >= 0 && __fd < FD_SETSIZE) { \
+            __set->fds_bits[__fd / __FD_BITS] |= 1UL << (__fd % __FD_BITS); \
+        } \
     } while (0)
 
 #define FD_CLR(fd, set) \
     do { \
         fd_set *__set = (set); \
         int __fd = (fd); \
-        __set->fds_bits[__fd / __FD_BITS] &= ~(1UL << (__fd % __FD_BITS)); \
+        if (__fd >= 0 && __fd < FD_SETSIZE) { \
+            __set->fds_bits[__fd / __FD_BITS] &= ~(1UL << (__fd % __FD_BITS)); \
+        } \
     } while (0)
 
 #define FD_ISSET(fd, set) \
-    (((set)->fds_bits[(fd) / __FD_BITS] & (1UL << ((fd) % __FD_BITS))) != 0)
+    ((fd) >= 0 && (fd) < FD_SETSIZE && \
+     (((set)->fds_bits[(fd) / __FD_BITS] & (1UL << ((fd) % __FD_BITS))) != 0))
 
 #endif
 

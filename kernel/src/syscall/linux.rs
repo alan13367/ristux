@@ -103,6 +103,7 @@ const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
 const EBADF: i64 = -9;
 const ENOMEM: i64 = -12;
+const EMFILE: i64 = -24;
 const EFAULT: i64 = -14;
 const ENOENT: i64 = -2;
 const EAGAIN: i64 = -11;
@@ -141,6 +142,7 @@ const POLLOUT: i16 = 0x004;
 const POLLERR: i16 = 0x008;
 const POLLHUP: i16 = 0x010;
 const POLLNVAL: i16 = 0x020;
+const MSG_DONTWAIT: i32 = 0x40;
 const GRND_NONBLOCK: u32 = 0x0001;
 const GRND_RANDOM: u32 = 0x0002;
 const IOV_MAX: usize = 1024;
@@ -699,20 +701,34 @@ fn linux_poll(
         process::write_user_buffer(fds_ptr, nfds * POLLFD_SIZE).ok_or(EFAULT)?;
     }
 
-    let start_ms = crate::time::uptime_millis();
+    let wait_key = if timeout_ms > 0 {
+        Some(timed_wait_key(NR_poll, fds_ptr, nfds, timeout_ms as usize))
+    } else {
+        None
+    };
+    let deadline_ms = if let Some(key) = wait_key {
+        let now_ms = crate::time::uptime_millis();
+        Some(process::timed_wait_deadline(key, timeout_ms as u64, now_ms).ok_or(ESRCH)?)
+    } else {
+        None
+    };
     loop {
         let ready = linux_poll_once(fds_ptr, nfds)?;
-        if ready > 0 || timeout_ms == 0 {
+        if ready > 0 {
+            if let Some(key) = wait_key {
+                process::clear_timed_wait(key);
+            }
             return Ok(ready as u64);
         }
-        if timeout_ms > 0
-            && crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms as u64
+        if timeout_ms == 0
+            || deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline)
         {
+            if let Some(key) = wait_key {
+                process::clear_timed_wait(key);
+            }
             return Ok(0);
         }
-        if !crate::syscall::yield_current_process(frame) {
-            return Err(CONTEXT_SWITCHED);
-        }
+        block_for_io(frame, deadline_ms)?;
     }
 }
 
@@ -740,7 +756,10 @@ fn linux_poll_once(fds_ptr: usize, nfds: usize) -> Result<usize, i64> {
 
 fn poll_revents(fd: usize, events: i16) -> i16 {
     let ready = if fd >= SOCKET_FD_BASE {
-        match crate::net::socket::with_sockets(|table| table.poll(fd - SOCKET_FD_BASE)) {
+        let Ok(handle) = socket_handle(fd) else {
+            return POLLNVAL;
+        };
+        match crate::net::socket::with_sockets(|table| table.poll(handle)) {
             Ok(ready) => PollSnapshot {
                 read: ready.read,
                 write: ready.write,
@@ -791,6 +810,21 @@ struct PollSnapshot {
     hangup: bool,
 }
 
+fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
+    nr.rotate_left(48) ^ (a0 as u64).rotate_left(17) ^ (a1 as u64).rotate_left(7) ^ a2 as u64
+}
+
+fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> Result<(), i64> {
+    match deadline_ms {
+        Some(deadline_ms) => process::block_current(process::BlockReason::WaitIoUntil(deadline_ms)),
+        None => process::block_current(process::BlockReason::WaitIo),
+    }
+    if !crate::syscall::yield_blocked(frame) {
+        return Err(CONTEXT_SWITCHED);
+    }
+    Ok(())
+}
+
 const SELECT_FD_SETSIZE: usize = 1024;
 const SELECT_FDSET_BYTES: usize = SELECT_FD_SETSIZE / 8;
 
@@ -825,22 +859,35 @@ fn linux_select(
     let nfds = nfds as usize;
     let interest = read_select_interest(nfds, readfds, writefds, exceptfds)?;
     let timeout_ms = read_select_timeout(timeout)?;
-    let start_ms = crate::time::uptime_millis();
+    let wait_key = match timeout_ms {
+        Some(timeout_ms) if timeout_ms > 0 => {
+            Some(timed_wait_key(NR_select, nfds, readfds, writefds))
+        }
+        _ => None,
+    };
+    let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
+        let now_ms = crate::time::uptime_millis();
+        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+    } else {
+        None
+    };
     loop {
         let result = linux_select_once(nfds, &interest)?;
         if result.count > 0 || timeout_ms == Some(0) {
+            if let Some(key) = wait_key {
+                process::clear_timed_wait(key);
+            }
             write_select_result(&interest, &result)?;
             return Ok(result.count as u64);
         }
-        if let Some(timeout_ms) = timeout_ms {
-            if crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms {
-                write_select_result(&interest, &result)?;
-                return Ok(0);
+        if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
+            if let Some(key) = wait_key {
+                process::clear_timed_wait(key);
             }
+            write_select_result(&interest, &result)?;
+            return Ok(0);
         }
-        if !crate::syscall::yield_current_process(frame) {
-            return Err(CONTEXT_SWITCHED);
-        }
+        block_for_io(frame, deadline_ms)?;
     }
 }
 
@@ -964,10 +1011,10 @@ fn fdset_set(bits: &mut [u8; SELECT_FDSET_BYTES], fd: usize) {
 
 fn linux_close(fd: usize) -> Result<u64, i64> {
     if fd >= SOCKET_FD_BASE {
-        let handle = socket_handle(fd)?;
-        return crate::net::socket::with_sockets(|table| table.close(handle))
+        let handle = raw_socket_handle(fd)?;
+        return process::user_close_socket_handle(handle)
             .map(|_| 0)
-            .map_err(map_socket_error);
+            .map_err(|_| EBADF);
     }
     process::user_close(fd).map(|_| 0).map_err(|_| EBADF)
 }
@@ -1023,6 +1070,10 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
         table.socket(crate::net::socket::SocketDomain::Inet, socket_type)
     })
     .ok_or(EINVAL)?;
+    if process::install_socket_handle(handle).is_err() {
+        let _ = crate::net::socket::with_sockets(|table| table.close(handle));
+        return Err(EMFILE);
+    }
     Ok((SOCKET_FD_BASE + handle) as u64)
 }
 
@@ -1042,6 +1093,10 @@ fn linux_accept(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> 
         Ok((accepted, peer))
     })
     .map_err(map_socket_error)?;
+    if process::install_socket_handle(accepted).is_err() {
+        let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
+        return Err(EMFILE);
+    }
     if addr != 0 {
         let peer = peer.unwrap_or(crate::net::socket::SocketAddress {
             ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
@@ -1081,7 +1136,7 @@ fn linux_recvfrom(
     fd: usize,
     buf: usize,
     len: usize,
-    _flags: i32,
+    flags: i32,
     addr: usize,
     addrlen_ptr: usize,
 ) -> Result<u64, i64> {
@@ -1093,13 +1148,24 @@ fn linux_recvfrom(
             .map(|flags| flags & O_NONBLOCK != 0)
     })
     .map_err(map_socket_error)?;
+    let nonblocking = nonblocking || flags & MSG_DONTWAIT != 0;
     let timeout_ms = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
         .map_err(map_socket_error)?;
-    let start_ms = crate::time::uptime_millis();
+    let wait_key =
+        timeout_ms.map(|timeout_ms| timed_wait_key(NR_recvfrom, fd, handle, timeout_ms as usize));
+    let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
+        let now_ms = crate::time::uptime_millis();
+        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+    } else {
+        None
+    };
     loop {
         let output = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
         match crate::net::socket::with_sockets(|table| table.recv_from(handle, output)) {
             Ok(recv) => {
+                if let Some(key) = wait_key {
+                    process::clear_timed_wait(key);
+                }
                 if addr != 0 {
                     let peer = recv.peer.unwrap_or(crate::net::socket::SocketAddress {
                         ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
@@ -1113,14 +1179,13 @@ fn linux_recvfrom(
                 if nonblocking {
                     return Err(EAGAIN);
                 }
-                if let Some(timeout_ms) = timeout_ms {
-                    if crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms {
-                        return Err(EAGAIN);
+                if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
+                    if let Some(key) = wait_key {
+                        process::clear_timed_wait(key);
                     }
+                    return Err(EAGAIN);
                 }
-                if !crate::syscall::yield_current_process(frame) {
-                    return Err(CONTEXT_SWITCHED);
-                }
+                block_for_io(frame, deadline_ms)?;
             }
             Err(err) => return Err(map_socket_error(err)),
         }
@@ -1314,6 +1379,14 @@ fn write_socklen(ptr: usize, len: u32) -> Result<(), i64> {
 }
 
 fn socket_handle(fd: usize) -> Result<usize, i64> {
+    let handle = raw_socket_handle(fd)?;
+    if !process::owns_socket_handle(handle) {
+        return Err(EBADF);
+    }
+    Ok(handle)
+}
+
+fn raw_socket_handle(fd: usize) -> Result<usize, i64> {
     if fd < SOCKET_FD_BASE {
         return Err(EBADF);
     }

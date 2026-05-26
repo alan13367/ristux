@@ -237,7 +237,10 @@ impl TcpStack {
             let next_state = match socket.state {
                 TcpState::Established => TcpState::FinWait1,
                 TcpState::CloseWait => TcpState::LastAck,
-                TcpState::FinWait1 | TcpState::FinWait2 | TcpState::LastAck | TcpState::TimeWait => {
+                TcpState::FinWait1
+                | TcpState::FinWait2
+                | TcpState::LastAck
+                | TcpState::TimeWait => {
                     return Ok(());
                 }
                 _ => {
@@ -258,16 +261,25 @@ impl TcpStack {
     }
 
     pub fn handle_packet(&mut self, packet: TcpPacket) -> bool {
-        let Some(index) = self
+        if let Some(index) = self
             .sockets
             .iter()
             .position(|socket| socket.matches_packet(&packet))
-            .or_else(|| {
-                self.sockets.iter().position(|socket| {
-                    socket.state == TcpState::Listen && socket.local_port == packet.dst_port
-                })
-            })
-        else {
+        {
+            return self.handle_socket_packet(index, packet);
+        }
+
+        if let Some(index) = self
+            .accept_queue
+            .iter()
+            .position(|socket| socket.matches_packet(&packet))
+        {
+            return self.handle_queued_accept_packet(index, packet);
+        }
+
+        let Some(index) = self.sockets.iter().position(|socket| {
+            socket.state == TcpState::Listen && socket.local_port == packet.dst_port
+        }) else {
             if packet.flags & TCP_FLAG_RST == 0 {
                 self.pending_outbound
                     .push_back(build_reset_for_unmatched(&packet));
@@ -276,6 +288,10 @@ impl TcpStack {
             return false;
         };
 
+        self.handle_socket_packet(index, packet)
+    }
+
+    fn handle_socket_packet(&mut self, index: usize, packet: TcpPacket) -> bool {
         if packet.flags & TCP_FLAG_RST != 0 {
             let socket = &mut self.sockets[index];
             if socket.state != TcpState::Listen {
@@ -351,6 +367,57 @@ impl TcpStack {
             _ => {}
         }
 
+        if let Some(outbound) = outbound {
+            self.pending_outbound.push_back(outbound);
+        }
+        true
+    }
+
+    fn handle_queued_accept_packet(&mut self, index: usize, packet: TcpPacket) -> bool {
+        if packet.flags & TCP_FLAG_RST != 0 {
+            self.accept_queue.remove(index);
+            self.remove_retransmits(packet.src_ip, packet.src_port, packet.dst_port);
+            return true;
+        }
+
+        if packet.flags & TCP_FLAG_ACK != 0 {
+            self.acknowledge(packet.src_ip, packet.src_port, packet.dst_port, packet.ack);
+        }
+
+        let socket = &mut self.accept_queue[index];
+        let outbound = match socket.state {
+            TcpState::Established => handle_established_like(socket, &packet, TcpState::CloseWait),
+            TcpState::CloseWait => handle_established_like(socket, &packet, TcpState::CloseWait),
+            TcpState::FinWait1 => {
+                if packet.flags & TCP_FLAG_ACK != 0 {
+                    socket.state = TcpState::FinWait2;
+                }
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
+                    socket.state = TcpState::TimeWait;
+                    Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+                } else {
+                    None
+                }
+            }
+            TcpState::FinWait2 => {
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
+                    socket.state = TcpState::TimeWait;
+                    Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+                } else {
+                    None
+                }
+            }
+            TcpState::TimeWait => {
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         if let Some(outbound) = outbound {
             self.pending_outbound.push_back(outbound);
         }
@@ -518,7 +585,9 @@ fn build_reset_for_unmatched(packet: &TcpPacket) -> TcpOutbound {
     } else {
         (
             0,
-            packet.seq.wrapping_add(tcp_sequence_span(packet.flags, packet.payload.len())),
+            packet
+                .seq
+                .wrapping_add(tcp_sequence_span(packet.flags, packet.payload.len())),
             TCP_FLAG_RST | TCP_FLAG_ACK,
         )
     };

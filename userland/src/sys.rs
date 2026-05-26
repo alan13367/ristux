@@ -12,6 +12,7 @@ pub const NR_CLOSE: usize = 3;
 pub const NR_STAT: usize = 4;
 pub const NR_FSTAT: usize = 5;
 pub const NR_LSEEK: usize = 8;
+pub const NR_POLL: usize = 7;
 pub const NR_BRK: usize = 12;
 pub const NR_IOCTL: usize = 16;
 pub const NR_PIPE: usize = 22;
@@ -35,6 +36,7 @@ pub const NR_EXECVE: usize = 59;
 pub const NR_EXIT: usize = 60;
 pub const NR_WAIT4: usize = 61;
 pub const NR_KILL: usize = 62;
+pub const NR_FCNTL: usize = 72;
 pub const NR_GETCWD: usize = 79;
 pub const NR_GETDENTS64: usize = 217;
 pub const NR_CHDIR: usize = 80;
@@ -61,6 +63,19 @@ pub const SO_RCVTIMEO: i32 = 20;
 pub const SO_SNDTIMEO: i32 = 21;
 pub const IPPROTO_TCP: i32 = 6;
 pub const TCP_NODELAY: i32 = 1;
+pub const O_NONBLOCK: i32 = 0o4000;
+pub const F_GETFL: i32 = 3;
+pub const F_SETFL: i32 = 4;
+pub const MSG_DONTWAIT: i32 = 0x40;
+pub const POLLIN: i16 = 0x001;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PollFd {
+    pub fd: i32,
+    pub events: i16,
+    pub revents: i16,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -296,6 +311,11 @@ pub fn recvfrom(fd: i32, buf: &mut [u8], flags: i32) -> isize {
 }
 
 #[inline]
+pub fn poll(fds: *mut PollFd, nfds: usize, timeout_ms: i32) -> isize {
+    unsafe { syscall3(NR_POLL, fds as usize, nfds, timeout_ms as usize) }
+}
+
+#[inline]
 pub fn bind(fd: i32, addr: &SockAddrIn) -> isize {
     unsafe {
         syscall3(
@@ -381,6 +401,11 @@ pub fn wait4(pid: isize, status: *mut i32, options: i32, rusage: usize) -> isize
             rusage,
         )
     }
+}
+
+#[inline]
+pub fn fcntl(fd: i32, cmd: i32, arg: isize) -> isize {
+    unsafe { syscall3(NR_FCNTL, fd as usize, cmd as usize, arg as usize) }
 }
 
 #[inline]

@@ -57,6 +57,7 @@ struct SocketEntry {
     send_shutdown: bool,
     fd_flags: u32,
     status_flags: u32,
+    ref_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +93,23 @@ impl SocketOptions {
     }
 }
 
+impl SocketEntry {
+    fn new(domain: SocketDomain, kind: SocketType, backend: SocketBackend) -> Self {
+        Self {
+            domain,
+            kind,
+            backend,
+            peer: None,
+            options: SocketOptions::new(),
+            recv_shutdown: false,
+            send_shutdown: false,
+            fd_flags: 0,
+            status_flags: 0,
+            ref_count: 1,
+        }
+    }
+}
+
 impl SocketTable {
     pub fn new() -> Self {
         Self {
@@ -104,38 +122,42 @@ impl SocketTable {
         match (domain, kind) {
             (SocketDomain::Inet, SocketType::Stream) => {
                 let tcp = self.tcp.open();
-                self.sockets.push(SocketEntry {
-                    domain,
-                    kind,
-                    backend: SocketBackend::Tcp(tcp),
-                    peer: None,
-                    options: SocketOptions::new(),
-                    recv_shutdown: false,
-                    send_shutdown: false,
-                    fd_flags: 0,
-                    status_flags: 0,
-                });
-                Some(self.sockets.len() - 1)
+                Some(self.insert_entry(SocketEntry::new(domain, kind, SocketBackend::Tcp(tcp))))
             }
             (SocketDomain::Inet, SocketType::Datagram) => {
                 let udp = super::udp_socket_open(0)?;
-                self.sockets.push(SocketEntry {
-                    domain,
-                    kind,
-                    backend: SocketBackend::Udp(udp),
-                    peer: None,
-                    options: SocketOptions::new(),
-                    recv_shutdown: false,
-                    send_shutdown: false,
-                    fd_flags: 0,
-                    status_flags: 0,
-                });
-                Some(self.sockets.len() - 1)
+                Some(self.insert_entry(SocketEntry::new(domain, kind, SocketBackend::Udp(udp))))
             }
         }
     }
 
+    fn insert_entry(&mut self, entry: SocketEntry) -> usize {
+        if let Some(index) = self
+            .sockets
+            .iter()
+            .position(|socket| socket.backend == SocketBackend::Closed && socket.ref_count == 0)
+        {
+            self.sockets[index] = entry;
+            return index;
+        }
+        self.sockets.push(entry);
+        self.sockets.len() - 1
+    }
+
+    pub fn duplicate(&mut self, handle: usize) -> Result<(), SocketError> {
+        let entry = self.entry_mut(handle)?;
+        entry.ref_count = entry.ref_count.saturating_add(1);
+        Ok(())
+    }
+
     pub fn close(&mut self, handle: usize) -> Result<(), SocketError> {
+        {
+            let entry = self.entry_mut(handle)?;
+            if entry.ref_count > 1 {
+                entry.ref_count -= 1;
+                return Ok(());
+            }
+        }
         let backend = self.entry(handle)?.backend;
         match backend {
             SocketBackend::Closed => return Err(SocketError::BadFd),
@@ -150,6 +172,7 @@ impl SocketTable {
             }
         }
         self.sockets[handle].backend = SocketBackend::Closed;
+        self.sockets[handle].ref_count = 0;
         Ok(())
     }
 
@@ -228,18 +251,11 @@ impl SocketTable {
                     .tcp
                     .peer_addr(accepted)
                     .map(|(ip, port)| SocketAddress { ip, port });
-                self.sockets.push(SocketEntry {
-                    domain: entry.domain,
-                    kind: entry.kind,
-                    backend: SocketBackend::Tcp(accepted),
-                    peer,
-                    options: entry.options,
-                    recv_shutdown: false,
-                    send_shutdown: false,
-                    fd_flags: 0,
-                    status_flags: 0,
-                });
-                Ok(self.sockets.len() - 1)
+                let mut socket_entry =
+                    SocketEntry::new(entry.domain, entry.kind, SocketBackend::Tcp(accepted));
+                socket_entry.peer = peer;
+                socket_entry.options = entry.options;
+                Ok(self.insert_entry(socket_entry))
             }
             SocketBackend::Udp(_) => Err(SocketError::Invalid),
         }
@@ -366,9 +382,9 @@ impl SocketTable {
         let entry = *self.entry(handle)?;
         match entry.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
-            SocketBackend::Tcp(socket) => {
+            SocketBackend::Tcp(tcp_index) => {
                 super::drive_tcp(&mut self.tcp);
-                let socket = self.tcp.sockets.get(socket).ok_or(SocketError::BadFd)?;
+                let socket = self.tcp.sockets.get(tcp_index).ok_or(SocketError::BadFd)?;
                 let ready = match socket.state {
                     super::tcp::TcpState::Listen => SocketReady {
                         read: self.tcp.has_pending_accept(),

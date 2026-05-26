@@ -169,6 +169,14 @@ case "$SCENARIO" in
       "Not backgrounding"
     )
     ;;
+  dropbear-banner)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-8}"
+    COMMANDS=("ssh_banner")
+    EXPECTS=(
+      "TTY canonical line ready: ssh_banner"
+      "ssh_banner: banner ok"
+    )
+    ;;
   command)
     shift
     if [[ $# -eq 0 ]]; then
@@ -184,22 +192,18 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, dropbear, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, dropbear, dropbear-banner, command)" >&2
     exit 2
     ;;
 esac
 
 send_text() {
   local text="$1"
-  local i ch
+  local i ch lower
   for ((i = 0; i < ${#text}; i++)); do
     ch="${text:i:1}"
     case "$ch" in
       [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
-      [A-Z])
-        lower="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')"
-        printf 'sendkey shift-%s\n' "$lower"
-        ;;
       ' ') printf 'sendkey spc\n' ;;
       '|') printf 'sendkey shift-backslash\n' ;;
       '&') printf 'sendkey shift-7\n' ;;
@@ -216,6 +220,10 @@ send_text() {
       '>') printf 'sendkey shift-dot\n' ;;
       '<') printf 'sendkey shift-comma\n' ;;
       '~') printf 'sendkey shift-grave_accent\n' ;;
+      A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z)
+        lower="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')"
+        printf 'sendkey shift-%s\n' "$lower"
+        ;;
       *) echo "quick_fixture: unsupported key '$ch'" >&2; exit 1 ;;
     esac
     sleep "$KEY_DELAY"
