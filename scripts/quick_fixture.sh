@@ -314,6 +314,34 @@ case "$SCENARIO" in
       "^  /bin/mv$"
     )
     ;;
+  grep)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/grepcheck"
+      "cd /tmp/grepcheck"
+      "echo Alpha > one.txt"
+      "echo beta >> one.txt"
+      "cp one.txt two.txt"
+      "grep Alpha one.txt"
+      "grep -i alpha one.txt"
+      "grep -n beta one.txt"
+      "grep -v beta one.txt"
+      "grep Alpha one.txt two.txt"
+      "cat one.txt | grep beta"
+      "pkg info grep"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: grep Alpha one.txt"
+      "^Alpha$"
+      "^2:beta$"
+      "^one.txt:Alpha$"
+      "^two.txt:Alpha$"
+      "TTY canonical line ready: cat one.txt | grep beta"
+      "^beta$"
+      "^name: grep$"
+      "^  /bin/grep$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -366,7 +394,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

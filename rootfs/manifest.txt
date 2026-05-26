@@ -40,6 +40,7 @@ file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
+file /bin/grep ../build/userland/grep.elf
 file /bin/id ../build/userland/id.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
@@ -114,6 +115,7 @@ package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
+package grep 0.1.0 /bin/grep
 package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
 package kill 0.1.0 /bin/kill
