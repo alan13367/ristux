@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -44,6 +45,7 @@
 #define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGRETURN 15
 #define SYS_IOCTL 16
+#define SYS_WRITEV 20
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_SELECT 23
@@ -169,6 +171,10 @@ ssize_t read(int fd, void *buf, size_t len) {
 
 ssize_t write(int fd, const void *buf, size_t len) {
     return (ssize_t)syscall_ret(syscall3(SYS_WRITE, fd, (long)buf, (long)len));
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
+    return (ssize_t)syscall_ret(syscall3(SYS_WRITEV, fd, (long)iov, iovcnt));
 }
 
 int open(const char *path, int flags, unsigned int mode) {

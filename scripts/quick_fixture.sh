@@ -78,6 +78,15 @@ case "$SCENARIO" in
       "cc_tcp: done"
     )
     ;;
+  uio)
+    COMMANDS=("cc_uio")
+    EXPECTS=(
+      "cc_uio: file writev ok"
+      "cc_uio: pipe writev ok"
+      "cc_uio: socket readwrite ok"
+      "cc_uio: done"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(

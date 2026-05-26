@@ -38,6 +38,7 @@ pub const NR_brk: u64 = 12;
 pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
+pub const NR_writev: u64 = 20;
 pub const NR_access: u64 = 21;
 pub const NR_pipe: u64 = 22;
 pub const NR_select: u64 = 23;
@@ -139,6 +140,7 @@ const POLLHUP: i16 = 0x010;
 const POLLNVAL: i16 = 0x020;
 const GRND_NONBLOCK: u32 = 0x0001;
 const GRND_RANDOM: u32 = 0x0002;
+const IOV_MAX: usize = 1024;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -159,6 +161,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let result: Result<u64, i64> = match nr {
         NR_write => linux_write(a0 as usize, a1 as usize, a2 as usize),
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
+        NR_writev => linux_writev(a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
         NR_close => linux_close(a0 as usize),
         NR_poll => linux_poll(frame, a0 as usize, a1 as usize, a2 as i32),
@@ -419,18 +422,85 @@ fn apply_linux_saved_frame(frame: &mut SyscallInterruptFrame, saved: &process::S
 
 fn linux_write(fd: usize, buf: usize, len: usize) -> Result<u64, i64> {
     let bytes = process::read_user(buf, len).ok_or(EFAULT)?;
+    linux_write_bytes(fd, bytes).map(|written| written as u64)
+}
+
+fn linux_write_bytes(fd: usize, bytes: &[u8]) -> Result<usize, i64> {
     if let Some(vfs_fd) = process::user_vfs_fd(fd) {
         return match fs::write(vfs_fd, bytes) {
-            Ok(n) => Ok(n as u64),
+            Ok(n) => Ok(n),
             Err(fs::vfs::VfsError::WouldBlock) => Err(EAGAIN),
             Err(_) => Err(EBADF),
         };
     }
+    if fd >= SOCKET_FD_BASE {
+        let handle = socket_handle(fd)?;
+        if bytes.is_empty() {
+            crate::net::socket::with_sockets(|table| table.status_flags(handle))
+                .map_err(map_socket_error)?;
+            return Ok(0);
+        }
+        return crate::net::socket::with_sockets(|table| table.send(handle, bytes))
+            .map_err(map_socket_error);
+    }
     if fd == 1 || fd == 2 {
         write_console(bytes);
-        return Ok(len as u64);
+        return Ok(bytes.len());
     }
     Err(EBADF)
+}
+
+fn linux_writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> Result<u64, i64> {
+    if iovcnt > IOV_MAX {
+        return Err(EINVAL);
+    }
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    let iov_bytes = iovcnt.checked_mul(iovec_size()).ok_or(EINVAL)?;
+    process::read_user(iov_ptr, iov_bytes).ok_or(EFAULT)?;
+
+    let mut total = 0usize;
+    for index in 0..iovcnt {
+        let (base, len) = read_iovec(iov_ptr, index)?;
+        if len == 0 {
+            continue;
+        }
+        let bytes = match process::read_user(base, len) {
+            Some(bytes) => bytes,
+            None if total > 0 => return Ok(total as u64),
+            None => return Err(EFAULT),
+        };
+        match linux_write_bytes(fd, bytes) {
+            Ok(written) => {
+                total = total.checked_add(written).ok_or(EINVAL)?;
+                if written < len {
+                    return Ok(total as u64);
+                }
+            }
+            Err(_) if total > 0 => return Ok(total as u64),
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(total as u64)
+}
+
+fn iovec_size() -> usize {
+    core::mem::size_of::<usize>() * 2
+}
+
+fn read_iovec(iov_ptr: usize, index: usize) -> Result<(usize, usize), i64> {
+    let word = core::mem::size_of::<usize>();
+    let offset = index
+        .checked_mul(iovec_size())
+        .and_then(|offset| iov_ptr.checked_add(offset))
+        .ok_or(EINVAL)?;
+    let bytes = process::read_user(offset, iovec_size()).ok_or(EFAULT)?;
+    let mut base = [0u8; core::mem::size_of::<usize>()];
+    let mut len = [0u8; core::mem::size_of::<usize>()];
+    base.copy_from_slice(&bytes[..word]);
+    len.copy_from_slice(&bytes[word..word * 2]);
+    Ok((usize::from_le_bytes(base), usize::from_le_bytes(len)))
 }
 
 fn write_console(bytes: &[u8]) {
@@ -456,6 +526,9 @@ fn linux_read(
     }
     let vfs_fd = match process::user_vfs_fd(fd) {
         Some(v) => v,
+        None if fd >= SOCKET_FD_BASE => {
+            return linux_recvfrom(frame, fd, buf, len, 0, 0, 0);
+        }
         None => return Err(EBADF),
     };
     let nonblocking = process::user_fd_status_flags(fd)
