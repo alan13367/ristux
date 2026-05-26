@@ -21,6 +21,7 @@ file /bin/cc_procfs ../build/userland/cc_procfs.elf
 file /bin/cc_pty ../build/userland/cc_pty.elf
 file /bin/cc_select ../build/userland/cc_select.elf
 file /bin/cc_signal ../build/userland/cc_signal.elf
+file /bin/cc_socket ../build/userland/cc_socket.elf
 file /bin/cc_stack ../build/userland/cc_stack.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
@@ -65,6 +66,7 @@ package cc_procfs 0.1.0 /bin/cc_procfs
 package cc_pty 0.1.0 /bin/cc_pty
 package cc_select 0.1.0 /bin/cc_select
 package cc_signal 0.1.0 /bin/cc_signal
+package cc_socket 0.1.0 /bin/cc_socket
 package cc_stack 0.1.0 /bin/cc_stack
 package cc_tty 0.1.0 /bin/cc_tty
 package chmod 0.1.0 /bin/chmod

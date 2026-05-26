@@ -74,10 +74,10 @@ struct UdpSocket {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct UdpDatagram {
-    src: Ipv4Addr,
-    src_port: u16,
-    payload: Vec<u8>,
+pub struct UdpDatagram {
+    pub src: Ipv4Addr,
+    pub src_port: u16,
+    pub payload: Vec<u8>,
 }
 
 struct NetworkStack {
@@ -107,11 +107,37 @@ impl NetworkStack {
     }
 
     fn bind_udp(&mut self, local_port: u16) -> SocketId {
+        let local_port = self.udp_port_or_ephemeral(local_port);
         self.udp_sockets.push(UdpSocket {
             local_port,
             inbox: Vec::new(),
         });
         SocketId(self.udp_sockets.len() - 1)
+    }
+
+    fn rebind_udp(&mut self, socket: SocketId, local_port: u16) -> bool {
+        let local_port = self.udp_port_or_ephemeral(local_port);
+        let Some(socket) = self.udp_sockets.get_mut(socket.0) else {
+            return false;
+        };
+        socket.local_port = local_port;
+        true
+    }
+
+    fn close_udp(&mut self, socket: SocketId) -> bool {
+        let Some(socket) = self.udp_sockets.get_mut(socket.0) else {
+            return false;
+        };
+        socket.local_port = 0;
+        socket.inbox.clear();
+        true
+    }
+
+    fn udp_port_or_ephemeral(&self, local_port: u16) -> u16 {
+        if local_port != 0 {
+            return local_port;
+        }
+        49152u16.wrapping_add(self.udp_sockets.len() as u16)
     }
 
     fn inject_rx(&mut self, frame: EthernetFrame) {
@@ -293,7 +319,8 @@ impl NetworkStack {
     }
 
     fn handle_tcp(&mut self, packet: Ipv4Packet) {
-        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload) else {
+        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload)
+        else {
             return;
         };
         self.tcp_inbox.push(tcp_packet);
@@ -383,28 +410,86 @@ pub fn stats() -> NetStats {
 }
 
 pub fn udp_bind(local_port: u16) -> Option<usize> {
-    let mut guard = NET_STACK.lock();
-    let stack = guard.as_mut()?;
-    let socket = stack.bind_udp(local_port);
+    let socket = udp_socket_open(local_port)?;
     crate::println!(
         "UDP socket {} bound to local port {}.",
         socket.0,
-        local_port
+        udp_socket_local_port(socket).unwrap_or(local_port)
     );
     Some(socket.0)
 }
 
-pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> bool {
+pub(crate) fn udp_socket_open(local_port: u16) -> Option<SocketId> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    Some(stack.bind_udp(local_port))
+}
+
+pub(crate) fn udp_socket_bind(socket: SocketId, local_port: u16) -> bool {
     let mut guard = NET_STACK.lock();
     let Some(stack) = guard.as_mut() else {
         return false;
     };
-    let socket = SocketId(socket);
+    stack.rebind_udp(socket, local_port)
+}
+
+pub(crate) fn udp_socket_close(socket: SocketId) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    stack.close_udp(socket)
+}
+
+pub(crate) fn udp_socket_local_port(socket: SocketId) -> Option<u16> {
+    let guard = NET_STACK.lock();
+    guard
+        .as_ref()?
+        .udp_sockets
+        .get(socket.0)
+        .map(|socket| socket.local_port)
+}
+
+pub(crate) fn udp_socket_send(
+    socket: SocketId,
+    dst_ip: Ipv4Addr,
+    dst_port: u16,
+    payload: &[u8],
+) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
     if stack.udp_sockets.get(socket.0).is_none() {
         return false;
     }
+    stack.send_udp(socket, dst_ip, dst_port, payload)
+}
+
+pub(crate) fn udp_socket_recv(socket: SocketId) -> Option<UdpDatagram> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    stack.poll();
+    stack.recv_udp(socket)
+}
+
+pub(crate) fn udp_socket_readable(socket: SocketId) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    stack.poll();
+    stack
+        .udp_sockets
+        .get(socket.0)
+        .map(|socket| !socket.inbox.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> bool {
+    let socket = SocketId(socket);
     let dst_ip = Ipv4Addr(dst_ip);
-    if !stack.send_udp(socket, dst_ip, dst_port, payload) {
+    if !udp_socket_send(socket, dst_ip, dst_port, payload) {
         return false;
     }
 
@@ -422,10 +507,7 @@ pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -
 }
 
 pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
-    let mut guard = NET_STACK.lock();
-    let stack = guard.as_mut()?;
-    stack.poll();
-    let datagram = stack.recv_udp(SocketId(socket))?;
+    let datagram = udp_socket_recv(SocketId(socket))?;
     let count = datagram.payload.len().min(output.len());
     output[..count].copy_from_slice(&datagram.payload[..count]);
     crate::println!(

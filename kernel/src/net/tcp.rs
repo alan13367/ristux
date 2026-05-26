@@ -169,10 +169,7 @@ impl TcpStack {
     }
 
     pub fn accept(&mut self, socket: usize) -> Result<usize, TcpError> {
-        let listener = self
-            .sockets
-            .get_mut(socket)
-            .ok_or(TcpError::InvalidState)?;
+        let listener = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
         if listener.state != TcpState::Listen {
             return Err(TcpError::InvalidState);
         }
@@ -336,6 +333,15 @@ impl TcpStack {
         self.sockets.get(socket).map(|socket| socket.local_port)
     }
 
+    pub fn peer_addr(&self, socket: usize) -> Option<(Ipv4Addr, u16)> {
+        let socket = self.sockets.get(socket)?;
+        if socket.remote_port == 0 {
+            None
+        } else {
+            Some((socket.remote_ip, socket.remote_port))
+        }
+    }
+
     pub fn stats(&self) -> TcpStats {
         TcpStats {
             sockets: self.sockets.len(),
@@ -355,13 +361,7 @@ impl TcpStack {
         self.pending_outbound.push_back(outbound);
     }
 
-    fn acknowledge(
-        &mut self,
-        remote_ip: Ipv4Addr,
-        remote_port: u16,
-        local_port: u16,
-        ack: u32,
-    ) {
+    fn acknowledge(&mut self, remote_ip: Ipv4Addr, remote_port: u16, local_port: u16, ack: u32) {
         let mut pending = Vec::new();
         for entry in self.retransmits.drain(..) {
             let matches = entry.dst_ip == remote_ip

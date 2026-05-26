@@ -26,6 +26,8 @@ pub const NR_RECVFROM: usize = 45;
 pub const NR_BIND: usize = 49;
 pub const NR_LISTEN: usize = 50;
 pub const NR_GETSOCKNAME: usize = 51;
+pub const NR_SETSOCKOPT: usize = 54;
+pub const NR_GETSOCKOPT: usize = 55;
 pub const NR_FORK: usize = 57;
 pub const NR_EXECVE: usize = 59;
 pub const NR_EXIT: usize = 60;
@@ -48,6 +50,14 @@ pub const NR_RT_SIGRETURN: usize = 15;
 
 pub const AF_INET: i32 = 2;
 pub const SOCK_STREAM: i32 = 1;
+pub const SOCK_DGRAM: i32 = 2;
+pub const SOL_SOCKET: i32 = 1;
+pub const SO_REUSEADDR: i32 = 2;
+pub const SO_ERROR: i32 = 4;
+pub const SO_RCVTIMEO: i32 = 20;
+pub const SO_SNDTIMEO: i32 = 21;
+pub const IPPROTO_TCP: i32 = 6;
+pub const TCP_NODELAY: i32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -307,6 +317,34 @@ pub fn accept(fd: i32, addr: *mut SockAddrIn, addrlen: *mut u32) -> isize {
 #[inline]
 pub fn getsockname(fd: i32, addr: *mut SockAddrIn, addrlen: *mut u32) -> isize {
     unsafe { syscall3(NR_GETSOCKNAME, fd as usize, addr as usize, addrlen as usize) }
+}
+
+#[inline]
+pub fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const u8, optlen: u32) -> isize {
+    unsafe {
+        syscall5(
+            NR_SETSOCKOPT,
+            fd as usize,
+            level as usize,
+            optname as usize,
+            optval as usize,
+            optlen as usize,
+        )
+    }
+}
+
+#[inline]
+pub fn getsockopt(fd: i32, level: i32, optname: i32, optval: *mut u8, optlen: *mut u32) -> isize {
+    unsafe {
+        syscall5(
+            NR_GETSOCKOPT,
+            fd as usize,
+            level as usize,
+            optname as usize,
+            optval as usize,
+            optlen as usize,
+        )
+    }
 }
 
 #[inline]

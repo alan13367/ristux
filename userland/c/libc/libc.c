@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -43,6 +44,16 @@
 #define SYS_DUP 32
 #define SYS_DUP2 33
 #define SYS_GETPID 39
+#define SYS_SOCKET 41
+#define SYS_CONNECT 42
+#define SYS_ACCEPT 43
+#define SYS_SENDTO 44
+#define SYS_RECVFROM 45
+#define SYS_BIND 49
+#define SYS_LISTEN 50
+#define SYS_GETSOCKNAME 51
+#define SYS_SETSOCKOPT 54
+#define SYS_GETSOCKOPT 55
 #define SYS_FORK 57
 #define SYS_EXECVE 59
 #define SYS_EXIT 60
@@ -191,6 +202,50 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
     return (int)syscall_ret(syscall6(SYS_SELECT, nfds, (long)readfds, (long)writefds, (long)exceptfds, (long)timeout, 0));
+}
+
+int socket(int domain, int type, int protocol) {
+    return (int)syscall_ret(syscall3(SYS_SOCKET, domain, type, protocol));
+}
+
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    return (int)syscall_ret(syscall3(SYS_BIND, sockfd, (long)addr, addrlen));
+}
+
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    return (int)syscall_ret(syscall3(SYS_CONNECT, sockfd, (long)addr, addrlen));
+}
+
+int listen(int sockfd, int backlog) {
+    return (int)syscall_ret(syscall2(SYS_LISTEN, sockfd, backlog));
+}
+
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    return (int)syscall_ret(syscall3(SYS_ACCEPT, sockfd, (long)addr, (long)addrlen));
+}
+
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+               const struct sockaddr *dest_addr, socklen_t addrlen) {
+    return (ssize_t)syscall_ret(syscall6(SYS_SENDTO, sockfd, (long)buf, len, flags, (long)dest_addr, addrlen));
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                 struct sockaddr *src_addr, socklen_t *addrlen) {
+    return (ssize_t)syscall_ret(syscall6(SYS_RECVFROM, sockfd, (long)buf, len, flags, (long)src_addr, (long)addrlen));
+}
+
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    return (int)syscall_ret(syscall3(SYS_GETSOCKNAME, sockfd, (long)addr, (long)addrlen));
+}
+
+int setsockopt(int sockfd, int level, int optname, const void *optval,
+               socklen_t optlen) {
+    return (int)syscall_ret(syscall6(SYS_SETSOCKOPT, sockfd, level, optname, (long)optval, optlen, 0));
+}
+
+int getsockopt(int sockfd, int level, int optname, void *optval,
+               socklen_t *optlen) {
+    return (int)syscall_ret(syscall6(SYS_GETSOCKOPT, sockfd, level, optname, (long)optval, (long)optlen, 0));
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

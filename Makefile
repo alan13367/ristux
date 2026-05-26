@@ -62,7 +62,7 @@ USER_UDP_OBJ := build/userland/udp.o
 USER_UDP_ELF := build/userland/udp.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
-USER_C_HEADERS := $(wildcard userland/c/include/*.h) $(wildcard userland/c/include/sys/*.h)
+USER_C_HEADERS := $(shell find userland/c/include -type f -name '*.h' 2>/dev/null | sort)
 USER_C_CFLAGS := --target=x86_64-unknown-none-elf -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone -msoft-float -mno-sse -mno-sse2 -nostdinc -Iuserland/c/include -Wall -Wextra
 USER_C_ASFLAGS := --target=x86_64-unknown-none-elf -x assembler -c
 USER_CRT0_OBJ := build/userland/c/crt0.o
@@ -87,6 +87,8 @@ USER_CC_POLL_OBJ := build/userland/c/cc_poll.o
 USER_CC_POLL_ELF := build/userland/cc_poll.elf
 USER_CC_SELECT_OBJ := build/userland/c/cc_select.o
 USER_CC_SELECT_ELF := build/userland/cc_select.elf
+USER_CC_SOCKET_OBJ := build/userland/c/cc_socket.o
+USER_CC_SOCKET_ELF := build/userland/cc_socket.elf
 USER_CC_PATH_OBJ := build/userland/c/cc_path.o
 USER_CC_PATH_ELF := build/userland/cc_path.elf
 USER_CC_FS_OBJ := build/userland/c/cc_fs.o
@@ -294,6 +296,13 @@ $(USER_CC_SELECT_OBJ): userland/c/bin/cc_select.c $(USER_C_HEADERS)
 $(USER_CC_SELECT_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_SELECT_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_SELECT_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
 
+$(USER_CC_SOCKET_OBJ): userland/c/bin/cc_socket.c $(USER_C_HEADERS)
+	mkdir -p build/userland/c
+	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_CC_SOCKET_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_SOCKET_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
+	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CC_SOCKET_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
+
 $(USER_CC_PATH_OBJ): userland/c/bin/cc_path.c $(USER_C_HEADERS)
 	mkdir -p build/userland/c
 	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
@@ -376,7 +385,7 @@ $(ROOTFS_BASE_PACKAGE_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_BASE_PACKAGE_INPUTS)
 $(ROOTFS_BASE_PACKAGE_ARCHIVE): $(ROOTFS_BASE_PACKAGE_TAR)
 	gzip -n -c $< > $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_DEMO_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_DEV_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_DEMO_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_DEV_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_SOCKET_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

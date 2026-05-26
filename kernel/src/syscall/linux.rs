@@ -54,6 +54,8 @@ pub const NR_recvfrom: u64 = 45;
 pub const NR_bind: u64 = 49;
 pub const NR_listen: u64 = 50;
 pub const NR_getsockname: u64 = 51;
+pub const NR_setsockopt: u64 = 54;
+pub const NR_getsockopt: u64 = 55;
 pub const NR_fork: u64 = 57;
 pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
@@ -105,6 +107,13 @@ const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const SOCK_DGRAM: i32 = 2;
+const SOL_SOCKET: i32 = 1;
+const SO_REUSEADDR: i32 = 2;
+const SO_ERROR: i32 = 4;
+const SO_RCVTIMEO: i32 = 20;
+const SO_SNDTIMEO: i32 = 21;
+const IPPROTO_TCP: i32 = 6;
+const TCP_NODELAY: i32 = 1;
 const O_ACCMODE: u32 = 0o3;
 const O_APPEND: u32 = 0o2000;
 const O_NONBLOCK: u32 = 0o4000;
@@ -170,6 +179,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             a5 as usize,
         ),
         NR_recvfrom => linux_recvfrom(
+            frame,
             a0 as usize,
             a1 as usize,
             a2 as usize,
@@ -180,6 +190,12 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_bind => linux_bind(a0 as usize, a1 as usize, a2 as usize),
         NR_listen => linux_listen(a0 as usize, a1 as i32),
         NR_getsockname => linux_getsockname(a0 as usize, a1 as usize, a2 as usize),
+        NR_setsockopt => {
+            linux_setsockopt(a0 as usize, a1 as i32, a2 as i32, a3 as usize, a4 as usize)
+        }
+        NR_getsockopt => {
+            linux_getsockopt(a0 as usize, a1 as i32, a2 as i32, a3 as usize, a4 as usize)
+        }
         NR_getppid => linux_getppid(),
         NR_fork => linux_fork(frame),
         NR_execve => linux_execve(frame, a0 as usize, a1 as usize, a2 as usize),
@@ -197,9 +213,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
-        NR_getdents | NR_getdents64 => {
-            linux_getdents64(a0 as usize, a1 as usize, a2 as usize)
-        }
+        NR_getdents | NR_getdents64 => linux_getdents64(a0 as usize, a1 as usize, a2 as usize),
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_chdir => linux_chdir(a0 as usize),
@@ -289,9 +303,7 @@ fn deliver_signal_handler(
 ) -> Result<(), i64> {
     let saved = saved_from_linux_frame(frame);
     let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
-    let new_rsp = (frame.rsp as usize)
-        .saturating_sub(frame_size)
-        & !0xfusize;
+    let new_rsp = (frame.rsp as usize).saturating_sub(frame_size) & !0xfusize;
     let out = process::write_user_buffer(new_rsp, frame_size).ok_or(EFAULT)?;
     let bytes = unsafe {
         core::slice::from_raw_parts(
@@ -506,6 +518,10 @@ fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
     const F_GETFL: i32 = 3;
     const F_SETFL: i32 = 4;
 
+    if fd >= SOCKET_FD_BASE {
+        return linux_socket_fcntl(fd, cmd, arg);
+    }
+
     match cmd {
         F_GETFD => process::user_fd_flags(fd)
             .map(|flags| flags as u64)
@@ -528,6 +544,29 @@ fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
         }
         _ => Err(EINVAL),
     }
+}
+
+fn linux_socket_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
+    const F_GETFD: i32 = 1;
+    const F_SETFD: i32 = 2;
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+
+    let handle = socket_handle(fd)?;
+    crate::net::socket::with_sockets(|table| match cmd {
+        F_GETFD => table.fd_flags(handle).map(|flags| flags as u64),
+        F_SETFD => table
+            .set_fd_flags(handle, (arg as u32) & process::FD_CLOEXEC)
+            .map(|_| 0),
+        F_GETFL => table.status_flags(handle).map(|flags| flags as u64),
+        F_SETFL => {
+            let current = table.status_flags(handle)?;
+            let flags = (current & !SETTABLE_STATUS_FLAGS) | ((arg as u32) & SETTABLE_STATUS_FLAGS);
+            table.set_status_flags(handle, flags).map(|_| 0)
+        }
+        _ => Err(crate::net::socket::SocketError::Invalid),
+    })
+    .map_err(map_socket_error)
 }
 
 fn linux_poll(
@@ -811,6 +850,12 @@ fn fdset_set(bits: &mut [u8; SELECT_FDSET_BYTES], fd: usize) {
 }
 
 fn linux_close(fd: usize) -> Result<u64, i64> {
+    if fd >= SOCKET_FD_BASE {
+        let handle = socket_handle(fd)?;
+        return crate::net::socket::with_sockets(|table| table.close(handle))
+            .map(|_| 0)
+            .map_err(map_socket_error);
+    }
     process::user_close(fd).map(|_| 0).map_err(|_| EBADF)
 }
 
@@ -849,9 +894,7 @@ fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {
 }
 
 fn linux_dup(fd: usize) -> Result<u64, i64> {
-    process::user_dup(fd)
-        .map(|fd| fd as u64)
-        .map_err(|_| EBADF)
+    process::user_dup(fd).map(|fd| fd as u64).map_err(|_| EBADF)
 }
 
 fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
@@ -873,19 +916,25 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
 fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
     let (ip, port) = read_sockaddr_in(addr, addrlen)?;
-    crate::net::socket::with_sockets(|table| {
-        table.connect(handle, crate::net::Ipv4Addr(ip), port)
-    })
-    .map(|_| 0)
-    .map_err(map_socket_error)
+    crate::net::socket::with_sockets(|table| table.connect(handle, crate::net::Ipv4Addr(ip), port))
+        .map(|_| 0)
+        .map_err(map_socket_error)
 }
 
 fn linux_accept(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
-    let accepted = crate::net::socket::with_sockets(|table| table.accept(handle))
-        .map_err(map_socket_error)?;
+    let (accepted, peer) = crate::net::socket::with_sockets(|table| {
+        let accepted = table.accept(handle)?;
+        let peer = table.peer_addr(accepted)?;
+        Ok((accepted, peer))
+    })
+    .map_err(map_socket_error)?;
     if addr != 0 {
-        write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 2], 8080)?;
+        let peer = peer.unwrap_or(crate::net::socket::SocketAddress {
+            ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
+            port: 8080,
+        });
+        write_sockaddr_in(addr, addrlen_ptr, peer.ip.0, peer.port)?;
     }
     Ok((SOCKET_FD_BASE + accepted) as u64)
 }
@@ -899,16 +948,23 @@ fn linux_sendto(
     addrlen: usize,
 ) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
-    if addr != 0 {
-        let _ = read_sockaddr_in(addr, addrlen)?;
-    }
+    let target = if addr != 0 {
+        let (ip, port) = read_sockaddr_in(addr, addrlen)?;
+        Some(crate::net::socket::SocketAddress {
+            ip: crate::net::Ipv4Addr(ip),
+            port,
+        })
+    } else {
+        None
+    };
     let bytes = process::read_user(buf, len).ok_or(EFAULT)?;
-    crate::net::socket::with_sockets(|table| table.send(handle, bytes))
+    crate::net::socket::with_sockets(|table| table.send_to(handle, target, bytes))
         .map(|sent| sent as u64)
         .map_err(map_socket_error)
 }
 
 fn linux_recvfrom(
+    frame: &mut SyscallInterruptFrame,
     fd: usize,
     buf: usize,
     len: usize,
@@ -917,13 +973,45 @@ fn linux_recvfrom(
     addrlen_ptr: usize,
 ) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
-    let output = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
-    let read = crate::net::socket::with_sockets(|table| table.recv(handle, output))
+    process::write_user_buffer(buf, len).ok_or(EFAULT)?;
+    let nonblocking = crate::net::socket::with_sockets(|table| {
+        table
+            .status_flags(handle)
+            .map(|flags| flags & O_NONBLOCK != 0)
+    })
+    .map_err(map_socket_error)?;
+    let timeout_ms = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
         .map_err(map_socket_error)?;
-    if addr != 0 {
-        write_sockaddr_in(addr, addrlen_ptr, [10, 0, 2, 2], 80)?;
+    let start_ms = crate::time::uptime_millis();
+    loop {
+        let output = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
+        match crate::net::socket::with_sockets(|table| table.recv_from(handle, output)) {
+            Ok(recv) => {
+                if addr != 0 {
+                    let peer = recv.peer.unwrap_or(crate::net::socket::SocketAddress {
+                        ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
+                        port: 80,
+                    });
+                    write_sockaddr_in(addr, addrlen_ptr, peer.ip.0, peer.port)?;
+                }
+                return Ok(recv.len as u64);
+            }
+            Err(crate::net::socket::SocketError::WouldBlock) => {
+                if nonblocking {
+                    return Err(EAGAIN);
+                }
+                if let Some(timeout_ms) = timeout_ms {
+                    if crate::time::uptime_millis().saturating_sub(start_ms) >= timeout_ms {
+                        return Err(EAGAIN);
+                    }
+                }
+                if !crate::syscall::yield_current_process(frame) {
+                    return Err(CONTEXT_SWITCHED);
+                }
+            }
+            Err(err) => return Err(map_socket_error(err)),
+        }
     }
-    Ok(read as u64)
 }
 
 fn linux_bind(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
@@ -949,6 +1037,152 @@ fn linux_getsockname(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, 
     Ok(0)
 }
 
+fn linux_setsockopt(
+    fd: usize,
+    level: i32,
+    optname: i32,
+    optval: usize,
+    optlen: usize,
+) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    match (level, optname) {
+        (SOL_SOCKET, SO_REUSEADDR) => {
+            let enabled = read_sockopt_int(optval, optlen)? != 0;
+            crate::net::socket::with_sockets(|table| table.set_reuse_addr(handle, enabled))
+                .map_err(map_socket_error)?;
+        }
+        (SOL_SOCKET, SO_RCVTIMEO) => {
+            let timeout = read_sockopt_timeval(optval, optlen)?;
+            crate::net::socket::with_sockets(|table| table.set_recv_timeout_ms(handle, timeout))
+                .map_err(map_socket_error)?;
+        }
+        (SOL_SOCKET, SO_SNDTIMEO) => {
+            let timeout = read_sockopt_timeval(optval, optlen)?;
+            crate::net::socket::with_sockets(|table| table.set_send_timeout_ms(handle, timeout))
+                .map_err(map_socket_error)?;
+        }
+        (IPPROTO_TCP, TCP_NODELAY) => {
+            let enabled = read_sockopt_int(optval, optlen)? != 0;
+            crate::net::socket::with_sockets(|table| table.set_tcp_nodelay(handle, enabled))
+                .map_err(map_socket_error)?;
+        }
+        _ => return Err(EINVAL),
+    }
+    Ok(0)
+}
+
+fn linux_getsockopt(
+    fd: usize,
+    level: i32,
+    optname: i32,
+    optval: usize,
+    optlen_ptr: usize,
+) -> Result<u64, i64> {
+    let handle = socket_handle(fd)?;
+    match (level, optname) {
+        (SOL_SOCKET, SO_REUSEADDR) => {
+            let enabled = crate::net::socket::with_sockets(|table| table.reuse_addr(handle))
+                .map_err(map_socket_error)?;
+            write_sockopt_int(optval, optlen_ptr, enabled as i32)?;
+        }
+        (SOL_SOCKET, SO_ERROR) => {
+            let error = crate::net::socket::with_sockets(|table| table.take_error(handle))
+                .map_err(map_socket_error)?;
+            write_sockopt_int(optval, optlen_ptr, error)?;
+        }
+        (SOL_SOCKET, SO_RCVTIMEO) => {
+            let timeout = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
+                .map_err(map_socket_error)?;
+            write_sockopt_timeval(optval, optlen_ptr, timeout)?;
+        }
+        (SOL_SOCKET, SO_SNDTIMEO) => {
+            let timeout = crate::net::socket::with_sockets(|table| table.send_timeout_ms(handle))
+                .map_err(map_socket_error)?;
+            write_sockopt_timeval(optval, optlen_ptr, timeout)?;
+        }
+        (IPPROTO_TCP, TCP_NODELAY) => {
+            let enabled = crate::net::socket::with_sockets(|table| table.tcp_nodelay(handle))
+                .map_err(map_socket_error)?;
+            write_sockopt_int(optval, optlen_ptr, enabled as i32)?;
+        }
+        _ => return Err(EINVAL),
+    }
+    Ok(0)
+}
+
+fn read_sockopt_int(ptr: usize, len: usize) -> Result<i32, i64> {
+    if ptr == 0 || len < 4 {
+        return Err(EINVAL);
+    }
+    let bytes = process::read_user(ptr, 4).ok_or(EFAULT)?;
+    Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_sockopt_timeval(ptr: usize, len: usize) -> Result<Option<u64>, i64> {
+    if ptr == 0 || len < 16 {
+        return Err(EINVAL);
+    }
+    let bytes = process::read_user(ptr, 16).ok_or(EFAULT)?;
+    let sec = i64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]);
+    let usec = i64::from_le_bytes([
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]);
+    if sec < 0 || usec < 0 || usec >= 1_000_000 {
+        return Err(EINVAL);
+    }
+    if sec == 0 && usec == 0 {
+        return Ok(None);
+    }
+    let millis = (sec as u64)
+        .checked_mul(1000)
+        .and_then(|ms| ms.checked_add(((usec as u64) + 999) / 1000))
+        .ok_or(EINVAL)?;
+    Ok(Some(millis))
+}
+
+fn write_sockopt_int(ptr: usize, len_ptr: usize, value: i32) -> Result<(), i64> {
+    let len = read_socklen(len_ptr)?;
+    if ptr == 0 || len < 4 {
+        return Err(EINVAL);
+    }
+    let out = process::write_user_buffer(ptr, 4).ok_or(EFAULT)?;
+    out.copy_from_slice(&value.to_le_bytes());
+    write_socklen(len_ptr, 4)
+}
+
+fn write_sockopt_timeval(ptr: usize, len_ptr: usize, timeout_ms: Option<u64>) -> Result<(), i64> {
+    let len = read_socklen(len_ptr)?;
+    if ptr == 0 || len < 16 {
+        return Err(EINVAL);
+    }
+    let millis = timeout_ms.unwrap_or(0);
+    let sec = (millis / 1000) as i64;
+    let usec = ((millis % 1000) * 1000) as i64;
+    let out = process::write_user_buffer(ptr, 16).ok_or(EFAULT)?;
+    out[0..8].copy_from_slice(&sec.to_le_bytes());
+    out[8..16].copy_from_slice(&usec.to_le_bytes());
+    write_socklen(len_ptr, 16)
+}
+
+fn read_socklen(ptr: usize) -> Result<u32, i64> {
+    if ptr == 0 {
+        return Err(EFAULT);
+    }
+    let bytes = process::read_user(ptr, 4).ok_or(EFAULT)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn write_socklen(ptr: usize, len: u32) -> Result<(), i64> {
+    if ptr == 0 {
+        return Err(EFAULT);
+    }
+    let out = process::write_user_buffer(ptr, 4).ok_or(EFAULT)?;
+    out.copy_from_slice(&len.to_le_bytes());
+    Ok(())
+}
+
 fn socket_handle(fd: usize) -> Result<usize, i64> {
     if fd < SOCKET_FD_BASE {
         return Err(EBADF);
@@ -960,7 +1194,7 @@ fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
     match err {
         crate::net::socket::SocketError::BadFd => EBADF,
         crate::net::socket::SocketError::Invalid => EINVAL,
-        crate::net::socket::SocketError::WouldBlock => 0,
+        crate::net::socket::SocketError::WouldBlock => EAGAIN,
     }
 }
 
@@ -978,12 +1212,7 @@ fn read_sockaddr_in(ptr: usize, len: usize) -> Result<([u8; 4], u16), i64> {
     Ok((ip, port))
 }
 
-fn write_sockaddr_in(
-    ptr: usize,
-    len_ptr: usize,
-    ip: [u8; 4],
-    port: u16,
-) -> Result<(), i64> {
+fn write_sockaddr_in(ptr: usize, len_ptr: usize, ip: [u8; 4], port: u16) -> Result<(), i64> {
     let out = process::write_user_buffer(ptr, 16).ok_or(EFAULT)?;
     for byte in out.iter_mut() {
         *byte = 0;
@@ -1089,9 +1318,7 @@ fn linux_wait4(
                     if let Some(out) = process::write_user_buffer(status_ptr, 4) {
                         let encoded = match status {
                             process::WaitStatus::Exited(status) => (status & 0xff) << 8,
-                            process::WaitStatus::Stopped(signal) => {
-                                ((signal as i32) << 8) | 0x7f
-                            }
+                            process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
                         };
                         out.copy_from_slice(&(encoded as u32).to_le_bytes());
                     }
@@ -1191,9 +1418,7 @@ fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
 
 fn linux_rmdir(path_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    process::user_rmdir(&path)
-        .map(|_| 0)
-        .map_err(map_vfs_error)
+    process::user_rmdir(&path).map(|_| 0).map_err(map_vfs_error)
 }
 
 fn linux_rename(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
@@ -1556,19 +1781,40 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
+    write_linux_stat(
+        buf_ptr,
+        meta.owner,
+        meta.group,
+        meta.size,
+        meta.mode as u32,
+        meta.nlink,
+    )
 }
 
 fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let meta = fs::lstat(&path).map_err(|_| ENOENT)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
+    write_linux_stat(
+        buf_ptr,
+        meta.owner,
+        meta.group,
+        meta.size,
+        meta.mode as u32,
+        meta.nlink,
+    )
 }
 
 fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let meta = fs::fstat(vfs_fd).map_err(|_| EBADF)?;
-    write_linux_stat(buf_ptr, meta.owner, meta.group, meta.size, meta.mode as u32, meta.nlink)
+    write_linux_stat(
+        buf_ptr,
+        meta.owner,
+        meta.group,
+        meta.size,
+        meta.mode as u32,
+        meta.nlink,
+    )
 }
 
 fn write_linux_stat(
@@ -1605,11 +1851,7 @@ fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     } else {
         crate::signal::send(pid as u64, signal)
     };
-    if delivered {
-        Ok(0)
-    } else {
-        Err(ESRCH)
-    }
+    if delivered { Ok(0) } else { Err(ESRCH) }
 }
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
@@ -1631,7 +1873,8 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         process::set_signal_handler(pid, signum, 0).ok_or(EINVAL)?
     };
     if oldact != 0 {
-        let out = process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+        let out =
+            process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
         out.copy_from_slice(&old.to_le_bytes());
     }
     Ok(0)
