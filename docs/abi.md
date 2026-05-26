@@ -106,7 +106,7 @@ The current Linux-like syscall surface is:
 | 89 | `readlink` | Reads symlink target bytes. |
 | 90 | `chmod` | Updates mode bits. |
 | 92 | `chown` | Updates owner and group. |
-| 95 | `umask` | Accepted; currently returns `0`. |
+| 95 | `umask` | Sets the process mask and returns the previous mask. |
 | 96 | `gettimeofday` | Wall-clock seconds and microseconds. |
 | 102 | `getuid` | Real uid. |
 | 104 | `getgid` | Real gid. |
@@ -147,8 +147,11 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `/proc/<pid>/status`.
 - Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
 - Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
-- Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TIOCGPGRP`,
-  `TIOCSPGRP`, and `TIOCGWINSZ`.
+- Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
+  `TIOCGPGRP`, `TIOCSPGRP`, and `TIOCGWINSZ`.
+- Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads
+  honor `ICANON`, `ISIG`, `VMIN`, and the standard control characters used by
+  the in-tree `stty` utility.
 - Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,

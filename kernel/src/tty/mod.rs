@@ -9,14 +9,99 @@ static LEFT_SHIFT: AtomicBool = AtomicBool::new(false);
 static RIGHT_SHIFT: AtomicBool = AtomicBool::new(false);
 static CTRL: AtomicBool = AtomicBool::new(false);
 
+pub const TERMIOS_SIZE: usize = 60;
+const NCCS: usize = 32;
+const VINTR: usize = 0;
+const VERASE: usize = 2;
+const VEOF: usize = 4;
+const VTIME: usize = 5;
+const VMIN: usize = 6;
+const VSUSP: usize = 10;
+
+const IFLAG_ICRNL: u32 = 0x100;
+const OFLAG_OPOST: u32 = 0x1;
+const CFLAG_CREAD: u32 = 0x80;
+const CFLAG_CS8: u32 = 0x30;
+const LFLAG_ISIG: u32 = 0x1;
+const LFLAG_ICANON: u32 = 0x2;
+const LFLAG_ECHO: u32 = 0x8;
+const LFLAG_ECHOE: u32 = 0x10;
+const LFLAG_ECHOK: u32 = 0x20;
+const LFLAG_IEXTEN: u32 = 0x8000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TtyMode {
     Canonical,
     Raw,
 }
 
+#[derive(Clone, Copy)]
+struct Termios {
+    iflag: u32,
+    oflag: u32,
+    cflag: u32,
+    lflag: u32,
+    line: u8,
+    cc: [u8; NCCS],
+    ispeed: u32,
+    ospeed: u32,
+}
+
+impl Termios {
+    const fn default() -> Self {
+        let mut cc = [0u8; NCCS];
+        cc[VINTR] = 0x03;
+        cc[VERASE] = 0x7f;
+        cc[VEOF] = 0x04;
+        cc[VMIN] = 1;
+        cc[VTIME] = 0;
+        cc[VSUSP] = 0x1a;
+        Self {
+            iflag: IFLAG_ICRNL,
+            oflag: OFLAG_OPOST,
+            cflag: CFLAG_CREAD | CFLAG_CS8,
+            lflag: LFLAG_ISIG | LFLAG_ICANON | LFLAG_ECHO | LFLAG_ECHOE | LFLAG_ECHOK | LFLAG_IEXTEN,
+            line: 0,
+            cc,
+            ispeed: 38_400,
+            ospeed: 38_400,
+        }
+    }
+
+    fn to_bytes(self) -> [u8; TERMIOS_SIZE] {
+        let mut out = [0u8; TERMIOS_SIZE];
+        put_u32(&mut out, 0, self.iflag);
+        put_u32(&mut out, 4, self.oflag);
+        put_u32(&mut out, 8, self.cflag);
+        put_u32(&mut out, 12, self.lflag);
+        out[16] = self.line;
+        out[17..17 + NCCS].copy_from_slice(&self.cc);
+        put_u32(&mut out, 52, self.ispeed);
+        put_u32(&mut out, 56, self.ospeed);
+        out
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < TERMIOS_SIZE {
+            return None;
+        }
+        let mut cc = [0u8; NCCS];
+        cc.copy_from_slice(&bytes[17..17 + NCCS]);
+        Some(Self {
+            iflag: read_u32(bytes, 0),
+            oflag: read_u32(bytes, 4),
+            cflag: read_u32(bytes, 8),
+            lflag: read_u32(bytes, 12),
+            line: bytes[16],
+            cc,
+            ispeed: read_u32(bytes, 52),
+            ospeed: read_u32(bytes, 56),
+        })
+    }
+}
+
 pub struct Tty {
-    mode: TtyMode,
+    termios: Termios,
     line: Vec<u8>,
     /// Lines committed by a newline that are ready to be consumed by readers.
     ready: Vec<Vec<u8>>,
@@ -29,7 +114,7 @@ pub struct Tty {
 impl Tty {
     pub fn new() -> Self {
         Self {
-            mode: TtyMode::Canonical,
+            termios: Termios::default(),
             line: Vec::new(),
             ready: Vec::new(),
             eof: false,
@@ -39,22 +124,45 @@ impl Tty {
     }
 
     pub fn set_mode(&mut self, mode: TtyMode) {
-        self.mode = mode;
+        match mode {
+            TtyMode::Canonical => {
+                self.termios.lflag |= LFLAG_ISIG | LFLAG_ICANON | LFLAG_ECHO;
+                self.termios.cc[VMIN] = 1;
+                self.termios.cc[VTIME] = 0;
+            }
+            TtyMode::Raw => {
+                self.termios.lflag &= !(LFLAG_ISIG | LFLAG_ICANON | LFLAG_ECHO | LFLAG_IEXTEN);
+                self.termios.iflag &= !IFLAG_ICRNL;
+                self.termios.oflag &= !OFLAG_OPOST;
+                self.termios.cc[VMIN] = 1;
+                self.termios.cc[VTIME] = 0;
+            }
+        }
     }
 
     pub fn input(&mut self, byte: u8) -> Option<Signal> {
+        if self.signal_chars_enabled() {
+            if self.control_char(VINTR) == Some(byte) {
+                return Some(Signal::Int);
+            }
+            if self.control_char(VSUSP) == Some(byte) {
+                return Some(Signal::Tstp);
+            }
+        }
+        if !self.canonical_enabled() {
+            self.line.push(byte);
+            return None;
+        }
         match byte {
-            0x03 => Some(Signal::Int),
-            0x1a => Some(Signal::Tstp),
-            0x04 => {
+            byte if self.control_char(VEOF) == Some(byte) => {
                 self.eof = true;
                 None
             }
-            0x08 | 0x7f if self.mode == TtyMode::Canonical => {
+            byte if self.control_char(VERASE) == Some(byte) || byte == 0x08 => {
                 self.line.pop();
                 None
             }
-            b'\n' if self.mode == TtyMode::Canonical => {
+            b'\n' => {
                 let mut line = core::mem::take(&mut self.line);
                 line.push(b'\n');
                 self.ready.push(line);
@@ -71,7 +179,17 @@ impl Tty {
         self.ready.last().map(|v| v.as_slice())
     }
 
-    pub fn read_line(&mut self) -> Option<Vec<u8>> {
+    pub fn read_available(&mut self) -> Option<Vec<u8>> {
+        if !self.canonical_enabled() {
+            let min = self.termios.cc[VMIN] as usize;
+            if self.line.is_empty() {
+                return if min == 0 { Some(Vec::new()) } else { None };
+            }
+            if min != 0 && self.line.len() < min {
+                return None;
+            }
+            return Some(self.line.drain(..).collect());
+        }
         if let Some(line) = self.ready.first().cloned() {
             self.ready.remove(0);
             return Some(line);
@@ -91,6 +209,27 @@ impl Tty {
         None
     }
 
+    fn canonical_enabled(&self) -> bool {
+        self.termios.lflag & LFLAG_ICANON != 0
+    }
+
+    fn signal_chars_enabled(&self) -> bool {
+        self.termios.lflag & LFLAG_ISIG != 0
+    }
+
+    fn control_char(&self, index: usize) -> Option<u8> {
+        let byte = self.termios.cc.get(index).copied().unwrap_or(0);
+        if byte == 0 { None } else { Some(byte) }
+    }
+
+    fn termios(&self) -> Termios {
+        self.termios
+    }
+
+    fn set_termios(&mut self, termios: Termios) {
+        self.termios = termios;
+    }
+
     fn park(&mut self, pid: Pid) {
         if !self.waiters.contains(&pid) {
             self.waiters.push(pid);
@@ -102,7 +241,12 @@ impl Tty {
     }
 
     fn has_data(&self) -> bool {
-        !self.ready.is_empty() || self.eof
+        if self.canonical_enabled() {
+            !self.ready.is_empty() || self.eof
+        } else {
+            let min = self.termios.cc[VMIN] as usize;
+            !self.line.is_empty() && (min == 0 || self.line.len() >= min)
+        }
     }
 
     fn foreground_pgrp(&self) -> Pid {
@@ -171,7 +315,7 @@ pub fn read(output: &mut [u8]) -> usize {
     let line = {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
-        tty.read_line()
+        tty.read_available()
     };
     let Some(line) = line else {
         return 0;
@@ -181,17 +325,32 @@ pub fn read(output: &mut [u8]) -> usize {
     count
 }
 
-/// Return the next ready canonical line if available (newline already stripped).
-pub fn try_read_line() -> Option<Vec<u8>> {
+/// Return the next ready terminal read chunk if available.
+pub fn try_read() -> Option<Vec<u8>> {
     let mut guard = TTY.lock();
     let tty = guard.as_mut().expect("TTY used before initialization");
-    let mut line = tty.read_line()?;
-    // Append a trailing newline for legacy callers that supplied canonical
-    // text without one; keyboard-committed lines already include it.
-    if !line.ends_with(b"\n") {
+    let mut line = tty.read_available()?;
+    if tty.canonical_enabled() && !line.ends_with(b"\n") {
         line.push(b'\n');
     }
     Some(line)
+}
+
+pub fn termios_bytes() -> [u8; TERMIOS_SIZE] {
+    let guard = TTY.lock();
+    guard
+        .as_ref()
+        .expect("TTY used before initialization")
+        .termios()
+        .to_bytes()
+}
+
+pub fn set_termios_bytes(bytes: &[u8]) -> Result<(), ()> {
+    let termios = Termios::from_bytes(bytes).ok_or(())?;
+    let mut guard = TTY.lock();
+    let tty = guard.as_mut().expect("TTY used before initialization");
+    tty.set_termios(termios);
+    Ok(())
 }
 
 pub fn has_data() -> bool {
@@ -327,7 +486,7 @@ fn self_test() {
     tty.input(0x08);
     tty.input(b'c');
     tty.input(b'\n');
-    let line = tty.read_line().expect("tty canonical read failed");
+    let line = tty.read_available().expect("tty canonical read failed");
     if line != b"ac\n" && line != b"ac" {
         panic!("tty backspace self-test failed");
     }
@@ -342,11 +501,29 @@ fn self_test() {
         panic!("tty shifted punctuation self-test failed");
     }
     translate_set1(0xaa);
+    tty.input(0x04);
+    if tty.read_available() != Some(Vec::new()) {
+        panic!("tty ctrl-d self-test failed");
+    }
     tty.set_mode(TtyMode::Raw);
     tty.input(0x7f);
     tty.input(0x04);
-    if tty.read_line() != Some(Vec::new()) {
-        panic!("tty ctrl-d self-test failed");
+    if tty.read_available() != Some(alloc::vec![0x7f, 0x04]) {
+        panic!("tty raw read self-test failed");
     }
+    tty.set_mode(TtyMode::Canonical);
     crate::println!("TTY self-test passed.");
+}
+
+fn read_u32(buf: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
+}
+
+fn put_u32(buf: &mut [u8], offset: usize, value: u32) {
+    buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }

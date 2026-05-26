@@ -9,12 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -262,6 +264,29 @@ int ioctl(int fd, unsigned long request, ...) {
     void *argp = va_arg(ap, void *);
     va_end(ap);
     return (int)syscall_ret(syscall3(SYS_IOCTL, fd, (long)request, (long)argp));
+}
+
+int tcgetattr(int fd, struct termios *termios_p) {
+    return ioctl(fd, TCGETS, termios_p);
+}
+
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p) {
+    unsigned long request = TCSETS;
+    if (optional_actions == TCSADRAIN) {
+        request = TCSETSW;
+    } else if (optional_actions == TCSAFLUSH) {
+        request = TCSETSF;
+    }
+    return ioctl(fd, request, termios_p);
+}
+
+void cfmakeraw(struct termios *termios_p) {
+    termios_p->c_iflag &= ~(BRKINT | ICRNL | IXON);
+    termios_p->c_oflag &= ~OPOST;
+    termios_p->c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    termios_p->c_cflag |= CS8;
+    termios_p->c_cc[VMIN] = 1;
+    termios_p->c_cc[VTIME] = 0;
 }
 
 int chdir(const char *path) {

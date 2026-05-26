@@ -13,13 +13,16 @@ use crate::{
 
 const MAX_CPUS: usize = 8;
 const RESCHEDULE_IPI_VECTOR: u32 = 0xf1;
-const SYSCALL_STACK_SIZE: usize = 4096 * 4;
+const SYSCALL_STACK_SIZE: usize = 4096 * 16;
 
 const IA32_GS_BASE: u32 = 0xc000_0101;
 const IA32_KERNEL_GS_BASE: u32 = 0xc000_0102;
 
-static CPU_SYSCALL_STACKS: SpinLock<[[u8; SYSCALL_STACK_SIZE]; MAX_CPUS]> =
-    SpinLock::new([[0; SYSCALL_STACK_SIZE]; MAX_CPUS]);
+#[repr(align(16))]
+struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
+
+static CPU_SYSCALL_STACKS: SpinLock<[SyscallStack; MAX_CPUS]> =
+    SpinLock::new([const { SyscallStack([0; SYSCALL_STACK_SIZE]) }; MAX_CPUS]);
 
 /// Fields at the start are accessed from assembly via GS-relative offsets.
 #[repr(C, align(64))]
@@ -76,7 +79,8 @@ pub fn init(cpu_count: usize, apic_ids: &[u32]) {
     let stacks = CPU_SYSCALL_STACKS.lock();
     let mut guard = PER_CPU.lock();
     for index in 0..count {
-        let kernel_rsp = stacks[index].as_ptr() as u64 + SYSCALL_STACK_SIZE as u64;
+        let raw_stack_top = stacks[index].0.as_ptr() as u64 + SYSCALL_STACK_SIZE as u64;
+        let kernel_rsp = raw_stack_top & !0xf;
         guard[index] = Some(PerCpu {
             self_ptr: core::ptr::null_mut(),
             user_rsp: 0,

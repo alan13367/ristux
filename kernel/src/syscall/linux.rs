@@ -99,6 +99,7 @@ const EACCES: i64 = -13;
 const EEXIST: i64 = -17;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
+const ENOTTY: i64 = -25;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
@@ -430,7 +431,7 @@ fn linux_read(
 
     if fs::is_tty_fd(vfs_fd) {
         loop {
-            if let Some(data) = tty::try_read_line() {
+            if let Some(data) = tty::try_read() {
                 let out = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
                 let n = data.len().min(len);
                 out[..n].copy_from_slice(&data[..n]);
@@ -1414,32 +1415,53 @@ fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {
 fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const TCGETS: u64 = 0x5401;
     const TCSETS: u64 = 0x5402;
+    const TCSETSW: u64 = 0x5403;
+    const TCSETSF: u64 = 0x5404;
     const TIOCGPGRP: u64 = 0x540f;
     const TIOCSPGRP: u64 = 0x5410;
     const TIOCGWINSZ: u64 = 0x5413;
 
-    if process::user_vfs_fd(fd).is_none() {
-        return Err(EBADF);
-    }
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let is_tty = fs::is_tty_fd(vfs_fd);
     match request {
         TIOCGPGRP => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
             let out = process::write_user_buffer(argp, 4).ok_or(EFAULT)?;
             out.copy_from_slice(&(tty::foreground_pgrp() as u32).to_le_bytes());
             Ok(0)
         }
         TIOCSPGRP => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
             let input = process::read_user(argp, 4).ok_or(EFAULT)?;
             let pgrp = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) as u64;
             tty::set_foreground_pgrp(pgrp);
             Ok(0)
         }
         TCGETS => {
-            let out = process::write_user_buffer(argp, 32).ok_or(EFAULT)?;
-            out.fill(0);
+            if !is_tty {
+                return Err(ENOTTY);
+            }
+            let termios = tty::termios_bytes();
+            let out = process::write_user_buffer(argp, tty::TERMIOS_SIZE).ok_or(EFAULT)?;
+            out.copy_from_slice(&termios);
             Ok(0)
         }
-        TCSETS => Ok(0),
+        TCSETS | TCSETSW | TCSETSF => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
+            let input = process::read_user(argp, tty::TERMIOS_SIZE).ok_or(EFAULT)?;
+            tty::set_termios_bytes(input).map_err(|_| EINVAL)?;
+            Ok(0)
+        }
         TIOCGWINSZ => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
             let out = process::write_user_buffer(argp, 8).ok_or(EFAULT)?;
             out[0..2].copy_from_slice(&24u16.to_le_bytes());
             out[2..4].copy_from_slice(&80u16.to_le_bytes());

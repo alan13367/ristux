@@ -59,6 +59,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "stty -a"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "echo hello"
   sleep 1
   printf 'sendkey ret\n'
@@ -185,6 +189,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_tty"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_fs"
   sleep 1
   printf 'sendkey ret\n'
@@ -255,6 +263,9 @@ grep -q "init: spawning /bin/login" "$SERIAL_LOG"
 grep -q "login: " "$SERIAL_LOG"
 grep -q "\\$ " "$SERIAL_LOG"
 grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: stty -a" "$SERIAL_LOG"
+grep -q "speed 38400 baud; rows 24; columns 80;" "$SERIAL_LOG"
+grep -q "isig icanon echo" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
@@ -330,6 +341,12 @@ grep -q "cc_select: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_stack" "$SERIAL_LOG"
 grep -q "cc_stack: growth ok" "$SERIAL_LOG"
 grep -q "cc_stack: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_tty" "$SERIAL_LOG"
+grep -q "cc_tty: tcgetattr ok" "$SERIAL_LOG"
+grep -q "cc_tty: cfmakeraw ok" "$SERIAL_LOG"
+grep -q "cc_tty: tcsetattr ok" "$SERIAL_LOG"
+grep -q "cc_tty: restore ok" "$SERIAL_LOG"
+grep -q "cc_tty: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_fs" "$SERIAL_LOG"
 grep -q "cc_fs: access ok" "$SERIAL_LOG"
 grep -q "cc_fs: getdents ok" "$SERIAL_LOG"
