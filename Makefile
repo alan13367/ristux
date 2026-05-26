@@ -24,7 +24,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -51,6 +51,7 @@ USER_ANSI_DEMO_ELF := build/userland/ansi_demo.elf
 USER_TAR_ELF := build/userland/tar.elf
 USER_PKG_ELF := build/userland/pkg.elf
 USER_AR_ELF := build/userland/ar.elf
+USER_PKGCONF_ELF := build/userland/pkgconf.elf
 USER_LS_OBJ := build/userland/ls.o
 USER_LS_ELF := build/userland/ls.elf
 USER_PWD_OBJ := build/userland/pwd.o
@@ -138,7 +139,7 @@ ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
 ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
 ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
 ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf $(ROOTFS_BASE_PACKAGE_ARCHIVE)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
 .PHONY: all build rootfs disk dropbear-port check-multiboot iso run run-headless smoke quick quick-% debug test clean
 
@@ -181,6 +182,7 @@ $(USER_ANSI_DEMO_ELF): $(USERLAND_RS_STAMP)
 $(USER_TAR_ELF): $(USERLAND_RS_STAMP)
 $(USER_PKG_ELF): $(USERLAND_RS_STAMP)
 $(USER_AR_ELF): $(USERLAND_RS_STAMP)
+$(USER_PKGCONF_ELF): $(USERLAND_RS_STAMP)
 
 $(USER_LS_OBJ): userland/ls.S
 	mkdir -p build/userland
@@ -474,7 +476,7 @@ $(ROOTFS_BASE_PACKAGE_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_BASE_PACKAGE_INPUTS)
 $(ROOTFS_BASE_PACKAGE_ARCHIVE): $(ROOTFS_BASE_PACKAGE_TAR)
 	gzip -n -c $< > $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_CHECK_ELF) $(USER_SSH_BANNER_ELF) $(USER_PTY_SHELL_CHECK_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_TAR_ELF) $(USER_PKG_ELF) $(USER_AR_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_PASSWD_ELF) $(USER_CC_SESSION_ELF) $(USER_CC_DEV_ELF) $(USER_CC_DNS_ELF) $(USER_CC_HTTP_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_FILE_SYNC_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_SOCKET_ELF) $(USER_CC_TCP_ELF) $(USER_CC_UIO_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_LIBC_COMPAT_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(USER_DROPBEAR_ELF) $(USER_DBCLIENT_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_CHECK_ELF) $(USER_SSH_BANNER_ELF) $(USER_PTY_SHELL_CHECK_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_TAR_ELF) $(USER_PKG_ELF) $(USER_AR_ELF) $(USER_PKGCONF_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_CRED_ELF) $(USER_CC_PASSWD_ELF) $(USER_CC_SESSION_ELF) $(USER_CC_DEV_ELF) $(USER_CC_DNS_ELF) $(USER_CC_HTTP_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_FILE_SYNC_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_SOCKET_ELF) $(USER_CC_TCP_ELF) $(USER_CC_UIO_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_LIBC_COMPAT_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(USER_DROPBEAR_ELF) $(USER_DBCLIENT_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)

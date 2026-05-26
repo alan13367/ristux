@@ -222,6 +222,29 @@ case "$SCENARIO" in
       "^objtwo$"
     )
     ;;
+  pkgconf)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "pkgconf --version"
+      "pkgconf --exists ristux"
+      "pkgconf --modversion ristux"
+      "pkgconf --print-requires ristux"
+      "pkgconf --cflags ristux"
+      "pkgconf --libs ristux"
+      "pkg info ristux-pc"
+    )
+    EXPECTS=(
+      "^pkgconf 0.1.0$"
+      "TTY canonical line ready: pkgconf --exists ristux"
+      "^0.1.0$"
+      "^libc$"
+      "^-I/include$"
+      "^-L/lib -lc$"
+      "^name: ristux-pc$"
+      "^  libc$"
+      "^  /bin/true$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -274,7 +297,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

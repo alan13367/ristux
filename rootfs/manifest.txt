@@ -48,6 +48,7 @@ file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/ping ../build/userland/ping.elf
 file /bin/pkg ../build/userland/pkg.elf
+file /bin/pkgconf ../build/userland/pkgconf.elf
 file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/rm ../build/userland/rm.elf
@@ -62,6 +63,8 @@ file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
+file /usr/lib/pkgconfig/libc.pc usr/lib/pkgconfig/libc.pc
+file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
 file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package ansi_demo 0.1.0 /bin/ansi_demo
@@ -112,6 +115,7 @@ package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir
 package ping 0.1.0 /bin/ping
 package pkg 0.1.0 /bin/pkg
+package pkgconf 0.1.0 /bin/pkgconf
 package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
 package rm 0.1.0 /bin/rm
@@ -125,3 +129,5 @@ package tar 0.1.0 /bin/tar
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp
+package libc-pc 0.1.0 /usr/lib/pkgconfig/libc.pc deps=libc
+package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/true

@@ -259,14 +259,24 @@ impl Builder {
         }
 
         let mut data = Vec::new();
-        for (index, (inode, name, kind)) in records.iter().enumerate() {
+        let mut block_start = 0usize;
+        let mut last_rec_len_offset = None;
+        for (inode, name, kind) in records.iter() {
             let min_len = align4(8 + name.len());
-            let rec_len = if index + 1 == records.len() {
-                BLOCK_SIZE - data.len()
-            } else {
-                min_len
-            };
+            if data.len() - block_start + min_len > BLOCK_SIZE {
+                if let Some(offset) = last_rec_len_offset {
+                    let current = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
+                    let extra = BLOCK_SIZE - (data.len() - block_start);
+                    put_u16(&mut data, offset, (current + extra) as u16);
+                }
+                while data.len() % BLOCK_SIZE != 0 {
+                    data.push(0);
+                }
+                block_start = data.len();
+            }
+            let rec_len = min_len;
             data.extend_from_slice(&inode.to_le_bytes());
+            let rec_len_offset = data.len();
             data.extend_from_slice(&(rec_len as u16).to_le_bytes());
             data.push(name.len() as u8);
             data.push(match kind {
@@ -277,11 +287,16 @@ impl Builder {
             while data.len() % 4 != 0 {
                 data.push(0);
             }
-            while data.len() % BLOCK_SIZE != 0 && data.len() % BLOCK_SIZE < rec_len {
-                data.push(0);
-            }
+            last_rec_len_offset = Some(rec_len_offset);
         }
-        data.resize(BLOCK_SIZE, 0);
+        if let Some(offset) = last_rec_len_offset {
+            let current = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
+            let extra = BLOCK_SIZE - (data.len() - block_start);
+            put_u16(&mut data, offset, (current + extra) as u16);
+        }
+        while data.len() % BLOCK_SIZE != 0 {
+            data.push(0);
+        }
         data
     }
 
@@ -426,11 +441,7 @@ impl Builder {
                 EntryKind::File => 0o100000,
                 EntryKind::Directory => 0o040000,
             };
-            let size = if entry.kind == EntryKind::Directory {
-                BLOCK_SIZE as u32
-            } else {
-                entry.data.len() as u32
-            };
+            let size = entry.data.len() as u32;
             let links = match entry.kind {
                 EntryKind::File => 1,
                 EntryKind::Directory => 2 + self.immediate_subdir_count(path) as u16,
