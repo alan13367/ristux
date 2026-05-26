@@ -23,6 +23,7 @@ file /bin/cc_signal ../build/userland/cc_signal.elf
 file /bin/cc_stack ../build/userland/cc_stack.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
+file /bin/edit ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/false ../build/userland/false.elf
 file /bin/id ../build/userland/id.elf
@@ -65,6 +66,7 @@ package cc_stack 0.1.0 /bin/cc_stack
 package cc_tty 0.1.0 /bin/cc_tty
 package chmod 0.1.0 /bin/chmod
 package curl_lite 0.1.0 /bin/curl_lite
+package edit 0.1.0 /bin/edit
 package echo 0.1.0 /bin/echo
 package false 0.1.0 /bin/false
 package id 0.1.0 /bin/id

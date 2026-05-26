@@ -83,6 +83,34 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "edit /home/note"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "a"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  send_text "hello from edit"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  send_text "."
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  send_text "w"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 2
+  send_text "q"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cat /home/note"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "echo hello | cat"
   sleep 1
   printf 'sendkey ret\n'
@@ -296,6 +324,13 @@ grep -q 'TTY canonical line ready: echo "$foo baz"' "$SERIAL_LOG"
 grep -q "bar baz" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo 'two words'" "$SERIAL_LOG"
 grep -q "two words" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: edit /home/note" "$SERIAL_LOG"
+grep -q "edit: /home/note" "$SERIAL_LOG"
+grep -q "edit: appended" "$SERIAL_LOG"
+grep -q "edit: wrote 1 line(s)" "$SERIAL_LOG"
+grep -q "edit: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cat /home/note" "$SERIAL_LOG"
+grep -q "hello from edit" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo hello | cat" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"

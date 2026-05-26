@@ -159,6 +159,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Shell: `/bin/sh` supports pipelines, redirects, background jobs, `jobs`, `fg`,
   `bg`, `cd`, quote-aware tokenization, `$name` and `$?` expansion, `~`
   expansion through `HOME`, and `export NAME=value` environment propagation.
+- Editor: `/bin/edit` is a tiny line editor with append, insert, delete, print,
+  write, and quit commands for basic file editing from the console or a PTY.
 - Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
