@@ -89,6 +89,20 @@ int main(void) {
     freeaddrinfo(info);
 
     puts("cc_dns: getaddrinfo ok");
+
+    struct in_addr gateway_addr;
+    gateway_addr.s_addr = gateway;
+    if (strcmp(inet_ntoa(gateway_addr), "10.0.2.2") != 0) {
+        puts("cc_dns: inet_ntoa failed");
+        return 1;
+    }
+    host = gethostbyaddr(&gateway, sizeof(gateway), AF_INET);
+    if (host == NULL || strcmp(host->h_name, "10.0.2.2") != 0 ||
+        !addr_matches(host->h_addr, gateway)) {
+        puts("cc_dns: gethostbyaddr failed");
+        return 1;
+    }
+    puts("cc_dns: reverse lookup ok");
     puts("cc_dns: done");
     return 0;
 }

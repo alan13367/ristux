@@ -106,6 +106,7 @@
 #define SYS_SETSID 112
 #define SYS_SETGROUPS 116
 #define SYS_SETRESUID 117
+#define SYS_SETRESGID 119
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
@@ -116,6 +117,8 @@ int h_errno;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
+#define LIBC_ENV_MAX 64
+static char *managed_environment[LIBC_ENV_MAX + 1];
 
 struct FILE {
     int fd;
@@ -233,7 +236,14 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
     return (ssize_t)syscall_ret(syscall3(SYS_WRITEV, fd, (long)iov, iovcnt));
 }
 
-int open(const char *path, int flags, unsigned int mode) {
+int open(const char *path, int flags, ...) {
+    unsigned int mode = 0;
+    if (flags & O_CREAT) {
+        va_list ap;
+        va_start(ap, flags);
+        mode = va_arg(ap, unsigned int);
+        va_end(ap);
+    }
     return (int)syscall_ret(syscall3(SYS_OPEN, (long)path, flags, mode));
 }
 
@@ -396,6 +406,17 @@ static int parse_ipv4_literal(const char *text, in_addr_t *out) {
 
     *out = htonl((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]);
     return 1;
+}
+
+char *inet_ntoa(struct in_addr in) {
+    static char text[16];
+    unsigned int host = ntohl(in.s_addr);
+    snprintf(text, sizeof(text), "%u.%u.%u.%u",
+             (host >> 24) & 0xff,
+             (host >> 16) & 0xff,
+             (host >> 8) & 0xff,
+             host & 0xff);
+    return text;
 }
 
 static int resolver_streq_ci(const char *a, const char *b) {
@@ -693,6 +714,19 @@ struct hostent *gethostbyname(const char *name) {
     return NULL;
 }
 
+struct hostent *gethostbyaddr(const void *addr, int len, int type) {
+    if (addr == NULL || len != (int)sizeof(in_addr_t) || type != AF_INET) {
+        h_errno = NO_DATA;
+        errno = EINVAL;
+        return NULL;
+    }
+    in_addr_t ipv4;
+    memcpy(&ipv4, addr, sizeof(ipv4));
+    struct in_addr in;
+    in.s_addr = ipv4;
+    return resolver_make_hostent(inet_ntoa(in), ipv4);
+}
+
 static int parse_service_port(const char *service, unsigned short *port) {
     unsigned int value = 0;
     if (service == NULL || *service == '\0') {
@@ -845,8 +879,16 @@ pid_t fork(void) {
     return (pid_t)syscall_ret(syscall0(SYS_FORK));
 }
 
+pid_t vfork(void) {
+    return fork();
+}
+
 int execve(const char *path, char *const argv[], char *const envp[]) {
     return (int)syscall_ret(syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp));
+}
+
+int execv(const char *path, char *const argv[]) {
+    return execve(path, argv, environ);
 }
 
 pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
@@ -929,12 +971,24 @@ int setuid(uid_t uid) {
     return (int)syscall_ret(syscall1(SYS_SETUID, uid));
 }
 
+int seteuid(uid_t euid) {
+    return setresuid((uid_t)-1, euid, (uid_t)-1);
+}
+
 int setgid(gid_t gid) {
     return (int)syscall_ret(syscall1(SYS_SETGID, gid));
 }
 
 int setresuid(uid_t ruid, uid_t euid, uid_t suid) {
     return (int)syscall_ret(syscall3(SYS_SETRESUID, ruid, euid, suid));
+}
+
+int setresgid(gid_t rgid, gid_t egid, gid_t sgid) {
+    return (int)syscall_ret(syscall3(SYS_SETRESGID, rgid, egid, sgid));
+}
+
+int setegid(gid_t egid) {
+    return setresgid((gid_t)-1, egid, (gid_t)-1);
 }
 
 int setgroups(size_t size, const gid_t *list) {
@@ -1185,6 +1239,57 @@ struct group *getgrgid(gid_t gid) {
         }
     }
     return NULL;
+}
+
+static int userdb_add_group_unique(gid_t *groups, int capacity, int *needed, gid_t group) {
+    for (int i = 0; i < *needed && i < capacity; i++) {
+        if (groups[i] == group) {
+            return 0;
+        }
+    }
+    if (*needed < capacity) {
+        groups[*needed] = group;
+    }
+    (*needed)++;
+    return *needed <= capacity ? 0 : -1;
+}
+
+int getgrouplist(const char *user, gid_t group, gid_t *groups, int *ngroups) {
+    if (groups == NULL || ngroups == NULL || *ngroups < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    int capacity = *ngroups;
+    int needed = 0;
+    int ok = userdb_add_group_unique(groups, capacity, &needed, group);
+    if (user != NULL && userdb_read_file("/etc/group", userdb_file, sizeof(userdb_file)) == 0) {
+        char *line = userdb_file;
+        while (*line != '\0') {
+            if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+                char *fields[4];
+                int field_count = userdb_split_fields(userdb_line, fields, 4);
+                struct group *gr = userdb_group_from_fields(fields, field_count);
+                if (gr != NULL) {
+                    for (char **member = gr->gr_mem; *member != NULL; member++) {
+                        if (strcmp(*member, user) == 0) {
+                            if (userdb_add_group_unique(groups, capacity, &needed, gr->gr_gid) < 0) {
+                                ok = -1;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            while (*line != '\0' && *line != '\n') {
+                line++;
+            }
+            if (*line == '\n') {
+                line++;
+            }
+        }
+    }
+    *ngroups = needed;
+    return ok < 0 ? -1 : needed;
 }
 
 int initgroups(const char *user, gid_t group) {
@@ -1562,6 +1667,165 @@ int nanosleep(const struct timespec *req, struct timespec *rem) {
     return (int)syscall_ret(syscall2(SYS_NANOSLEEP, (long)req, (long)rem));
 }
 
+unsigned int sleep(unsigned int seconds) {
+    struct timespec req;
+    struct timespec rem;
+    req.tv_sec = (time_t)seconds;
+    req.tv_nsec = 0;
+    if (nanosleep(&req, &rem) == 0) {
+        return 0;
+    }
+    return rem.tv_sec > 0 ? (unsigned int)rem.tv_sec : seconds;
+}
+
+static int time_is_leap(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+static int time_days_in_year(int year) {
+    return time_is_leap(year) ? 366 : 365;
+}
+
+static int time_days_in_month(int year, int month) {
+    static const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 1 && time_is_leap(year)) {
+        return 29;
+    }
+    return days[month];
+}
+
+struct tm *localtime(const time_t *timep) {
+    static struct tm result;
+    if (timep == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+    time_t seconds = *timep;
+    if (seconds < 0) {
+        seconds = 0;
+    }
+    long days = seconds / 86400;
+    long rem = seconds % 86400;
+    result.tm_hour = (int)(rem / 3600);
+    rem %= 3600;
+    result.tm_min = (int)(rem / 60);
+    result.tm_sec = (int)(rem % 60);
+    result.tm_wday = (int)((days + 4) % 7);
+
+    int year = 1970;
+    while (days >= time_days_in_year(year)) {
+        days -= time_days_in_year(year);
+        year++;
+    }
+    result.tm_year = year - 1900;
+    result.tm_yday = (int)days;
+    int month = 0;
+    while (days >= time_days_in_month(year, month)) {
+        days -= time_days_in_month(year, month);
+        month++;
+    }
+    result.tm_mon = month;
+    result.tm_mday = (int)days + 1;
+    result.tm_isdst = 0;
+    return &result;
+}
+
+static int strftime_append(char *s, size_t max, size_t *pos, const char *text) {
+    while (*text != '\0') {
+        if (*pos + 1 >= max) {
+            return 0;
+        }
+        s[(*pos)++] = *text++;
+    }
+    return 1;
+}
+
+static int strftime_append_number(char *s, size_t max, size_t *pos, int value, int width) {
+    char tmp[16];
+    int n = snprintf(tmp, sizeof(tmp), "%0*d", width, value);
+    return n >= 0 && strftime_append(s, max, pos, tmp);
+}
+
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
+    static const char *const weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char *const months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    if (s == NULL || max == 0 || format == NULL || tm == NULL) {
+        return 0;
+    }
+    size_t pos = 0;
+    for (const char *p = format; *p != '\0'; p++) {
+        if (*p != '%') {
+            if (pos + 1 >= max) {
+                return 0;
+            }
+            s[pos++] = *p;
+            continue;
+        }
+        p++;
+        if (*p == '\0') {
+            return 0;
+        }
+        switch (*p) {
+        case '%':
+            if (pos + 1 >= max) {
+                return 0;
+            }
+            s[pos++] = '%';
+            break;
+        case 'a':
+            if (tm->tm_wday < 0 || tm->tm_wday > 6 ||
+                !strftime_append(s, max, &pos, weekdays[tm->tm_wday])) {
+                return 0;
+            }
+            break;
+        case 'b':
+            if (tm->tm_mon < 0 || tm->tm_mon > 11 ||
+                !strftime_append(s, max, &pos, months[tm->tm_mon])) {
+                return 0;
+            }
+            break;
+        case 'd':
+            if (!strftime_append_number(s, max, &pos, tm->tm_mday, 2)) {
+                return 0;
+            }
+            break;
+        case 'H':
+            if (!strftime_append_number(s, max, &pos, tm->tm_hour, 2)) {
+                return 0;
+            }
+            break;
+        case 'M':
+            if (!strftime_append_number(s, max, &pos, tm->tm_min, 2)) {
+                return 0;
+            }
+            break;
+        case 'm':
+            if (!strftime_append_number(s, max, &pos, tm->tm_mon + 1, 2)) {
+                return 0;
+            }
+            break;
+        case 'S':
+            if (!strftime_append_number(s, max, &pos, tm->tm_sec, 2)) {
+                return 0;
+            }
+            break;
+        case 'Y':
+            if (!strftime_append_number(s, max, &pos, tm->tm_year + 1900, 4)) {
+                return 0;
+            }
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (pos >= max) {
+        return 0;
+    }
+    s[pos] = '\0';
+    return pos;
+}
+
 int brk(void *addr) {
     long ret = syscall1(SYS_BRK, (long)addr);
     if (ret < (long)addr) {
@@ -1657,6 +1921,74 @@ void *realloc(void *ptr, size_t size) {
     size_t copy = old_header->size < size ? old_header->size : size;
     memcpy(next, ptr, copy);
     return next;
+}
+
+char *getenv(const char *name) {
+    if (name == NULL || *name == '\0' || strchr(name, '=') != NULL) {
+        return NULL;
+    }
+    size_t name_len = strlen(name);
+    for (char **entry = environ; entry != NULL && *entry != NULL; entry++) {
+        if (strncmp(*entry, name, name_len) == 0 && (*entry)[name_len] == '=') {
+            return *entry + name_len + 1;
+        }
+    }
+    return NULL;
+}
+
+int clearenv(void) {
+    for (size_t i = 0; i <= LIBC_ENV_MAX; i++) {
+        managed_environment[i] = NULL;
+    }
+    environ = managed_environment;
+    return 0;
+}
+
+int putenv(char *string) {
+    if (string == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    char *equals = strchr(string, '=');
+    if (equals == NULL || equals == string) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (environ != managed_environment) {
+        for (size_t i = 0; i <= LIBC_ENV_MAX; i++) {
+            managed_environment[i] = NULL;
+        }
+        size_t i = 0;
+        while (environ != NULL && environ[i] != NULL && i < LIBC_ENV_MAX) {
+            managed_environment[i] = environ[i];
+            i++;
+        }
+        managed_environment[i] = NULL;
+        environ = managed_environment;
+    }
+
+    size_t name_len = (size_t)(equals - string);
+    size_t free_slot = LIBC_ENV_MAX;
+    for (size_t i = 0; i < LIBC_ENV_MAX; i++) {
+        if (managed_environment[i] == NULL) {
+            if (free_slot == LIBC_ENV_MAX) {
+                free_slot = i;
+            }
+            continue;
+        }
+        if (strncmp(managed_environment[i], string, name_len) == 0 &&
+            managed_environment[i][name_len] == '=') {
+            managed_environment[i] = string;
+            return 0;
+        }
+    }
+    if (free_slot == LIBC_ENV_MAX) {
+        errno = ENOMEM;
+        return -1;
+    }
+    managed_environment[free_slot] = string;
+    managed_environment[free_slot + 1] = NULL;
+    return 0;
 }
 
 static int digit_value(int ch) {
@@ -1807,6 +2139,17 @@ int memcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
+void *memchr(const void *s, int ch, size_t n) {
+    const unsigned char *p = s;
+    unsigned char needle = (unsigned char)ch;
+    for (size_t i = 0; i < n; i++) {
+        if (p[i] == needle) {
+            return (void *)&p[i];
+        }
+    }
+    return NULL;
+}
+
 size_t strlen(const char *s) {
     size_t len = 0;
     while (s[len] != '\0') {
@@ -1898,11 +2241,14 @@ char *strerror(int errnum) {
     case ENOTDIR: return "Not a directory";
     case EINVAL: return "Invalid argument";
     case ENOTTY: return "Inappropriate ioctl for device";
+    case EROFS: return "Read-only file system";
+    case EPIPE: return "Broken pipe";
     case ERANGE: return "Result too large";
     case ENOSYS: return "Function not implemented";
     case ECONNRESET: return "Connection reset by peer";
     case ENOTCONN: return "Socket is not connected";
     case ETIMEDOUT: return "Connection timed out";
+    case EINPROGRESS: return "Operation now in progress";
     default: return "Unknown error";
     }
 }

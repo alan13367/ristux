@@ -9,4 +9,8 @@ void __assert_fail(const char *expr, const char *file, int line, const char *fun
 #define assert(expr) ((expr) ? (void)0 : __assert_fail(#expr, __FILE__, __LINE__, __func__))
 #endif
 
+#ifndef static_assert
+#define static_assert _Static_assert
+#endif
+
 #endif

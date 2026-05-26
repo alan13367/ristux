@@ -3,6 +3,8 @@
 
 #include <netinet/in.h>
 
+char *inet_ntoa(struct in_addr in);
+
 static inline in_addr_t inet_addr(const char *text) {
     unsigned int parts[4] = {0, 0, 0, 0};
     int part = 0;

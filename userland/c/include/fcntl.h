@@ -5,6 +5,7 @@
 #define O_WRONLY 1
 #define O_RDWR 2
 #define O_CREAT 0100
+#define O_EXCL 0200
 #define O_TRUNC 01000
 #define O_APPEND 02000
 #define O_NONBLOCK 04000
@@ -16,7 +17,7 @@
 
 #define FD_CLOEXEC 1
 
-int open(const char *path, int flags, unsigned int mode);
+int open(const char *path, int flags, ...);
 int fcntl(int fd, int cmd, ...);
 int posix_openpt(int flags);
 

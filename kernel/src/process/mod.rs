@@ -1010,6 +1010,7 @@ pub fn user_open_options(
     read: bool,
     write: bool,
     create: bool,
+    exclusive: bool,
     truncate: bool,
     append: bool,
     status_flags: u32,
@@ -1019,6 +1020,10 @@ pub fn user_open_options(
         let create_mode = create_mode & !p.umask & 0o7777;
         let vfs_fd = if create {
             match fs::open_with_rights_as(path, p.credentials, read, write) {
+                Ok(fd) if exclusive => {
+                    let _ = fs::close(fd);
+                    return Err(fs::vfs::VfsError::AlreadyExists);
+                }
                 Ok(fd) if !truncate => fd,
                 Ok(fd) => {
                     let _ = fs::close(fd);
@@ -1575,6 +1580,41 @@ pub fn set_current_resuid(ruid: Option<u32>, euid: Option<u32>, suid: Option<u32
         }
         if let Some(uid) = suid {
             p.credentials.suid = uid;
+        }
+        Ok(())
+    })
+    .unwrap_or(Err(()))
+}
+
+pub fn set_current_resgid(rgid: Option<u32>, egid: Option<u32>, sgid: Option<u32>) -> Result<(), ()> {
+    with_current(|p| {
+        let old = p.credentials;
+        let allowed = |gid: u32| {
+            old.is_superuser() || gid == old.gid || gid == old.egid || gid == old.sgid
+        };
+        if let Some(gid) = rgid {
+            if !allowed(gid) {
+                return Err(());
+            }
+        }
+        if let Some(gid) = egid {
+            if !allowed(gid) {
+                return Err(());
+            }
+        }
+        if let Some(gid) = sgid {
+            if !allowed(gid) {
+                return Err(());
+            }
+        }
+        if let Some(gid) = rgid {
+            p.credentials.gid = gid;
+        }
+        if let Some(gid) = egid {
+            p.credentials.egid = gid;
+        }
+        if let Some(gid) = sgid {
+            p.credentials.sgid = gid;
         }
         Ok(())
     })

@@ -43,6 +43,7 @@ struct addrinfo {
 };
 
 struct hostent *gethostbyname(const char *name);
+struct hostent *gethostbyaddr(const void *addr, int len, int type);
 int getaddrinfo(const char *node, const char *service,
                 const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *res);

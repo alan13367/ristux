@@ -93,6 +93,7 @@ pub const NR_getpgrp: u64 = 111;
 pub const NR_setsid: u64 = 112;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
+pub const NR_setresgid: u64 = 119;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
@@ -276,6 +277,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
+        NR_setresgid => linux_setresgid(a0, a1, a2),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
@@ -579,6 +581,7 @@ fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
     const O_WRONLY: i32 = 1;
     const O_RDWR: i32 = 2;
     const O_CREAT: i32 = 0o100;
+    const O_EXCL: i32 = 0o200;
     const O_TRUNC: i32 = 0o1000;
 
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
@@ -586,6 +589,7 @@ fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
     let write = access == O_WRONLY || access == O_RDWR;
     let read = access != O_WRONLY;
     let create = flags & O_CREAT != 0;
+    let exclusive = flags & O_EXCL != 0;
     let truncate = flags & O_TRUNC != 0;
     let status_flags = (flags as u32) & (O_ACCMODE | SETTABLE_STATUS_FLAGS);
     let append = status_flags & O_APPEND != 0;
@@ -594,6 +598,7 @@ fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
         read,
         write,
         create,
+        exclusive,
         truncate,
         append,
         status_flags,
@@ -1490,23 +1495,45 @@ fn linux_setgid(gid: u32) -> Result<u64, i64> {
 }
 
 fn linux_setresuid(ruid: u64, euid: u64, suid: u64) -> Result<u64, i64> {
-    let no_change = u64::MAX;
-    let ruid = if ruid == no_change {
+    let is_no_change = |id: u64| id == u64::MAX || id == u32::MAX as u64;
+    let ruid = if is_no_change(ruid) {
         None
     } else {
         Some(ruid as u32)
     };
-    let euid = if euid == no_change {
+    let euid = if is_no_change(euid) {
         None
     } else {
         Some(euid as u32)
     };
-    let suid = if suid == no_change {
+    let suid = if is_no_change(suid) {
         None
     } else {
         Some(suid as u32)
     };
     process::set_current_resuid(ruid, euid, suid)
+        .map(|_| 0)
+        .map_err(|_| EACCES)
+}
+
+fn linux_setresgid(rgid: u64, egid: u64, sgid: u64) -> Result<u64, i64> {
+    let is_no_change = |id: u64| id == u64::MAX || id == u32::MAX as u64;
+    let rgid = if is_no_change(rgid) {
+        None
+    } else {
+        Some(rgid as u32)
+    };
+    let egid = if is_no_change(egid) {
+        None
+    } else {
+        Some(egid as u32)
+    };
+    let sgid = if is_no_change(sgid) {
+        None
+    } else {
+        Some(sgid as u32)
+    };
+    process::set_current_resgid(rgid, egid, sgid)
         .map(|_| 0)
         .map_err(|_| EACCES)
 }

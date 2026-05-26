@@ -28,6 +28,7 @@ int main(void) {
     const char *masked = "/tmp/cc_fs/masked";
     const char *maskdir = "/tmp/cc_fs/maskdir";
     const char *missing = "/tmp/cc_fs/missing_trunc";
+    const char *exclusive = "/tmp/cc_fs/exclusive";
 
     if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
         puts("cc_fs: mkdir failed");
@@ -98,8 +99,32 @@ int main(void) {
     }
     puts("cc_fs: trunc missing ok");
 
+    fd = open(exclusive, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        puts("cc_fs: exclusive create failed");
+        return 1;
+    }
+    close(fd);
+    if (stat(exclusive, &st) != 0 || (st.st_mode & 0777) != 0600) {
+        puts("cc_fs: exclusive mode failed");
+        return 1;
+    }
+    fd = open(exclusive, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR);
+    if (fd >= 0 || errno != EEXIST) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        puts("cc_fs: exclusive existing failed");
+        return 1;
+    }
+    puts("cc_fs: exclusive create ok");
+
     if (unlink(masked) != 0 || rmdir(maskdir) != 0) {
         puts("cc_fs: cleanup failed");
+        return 1;
+    }
+    if (unlink(exclusive) != 0) {
+        puts("cc_fs: exclusive cleanup failed");
         return 1;
     }
     if (unlink(path) != 0) {

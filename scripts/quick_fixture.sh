@@ -32,6 +32,7 @@ case "$SCENARIO" in
       "cc_dns: resolv.conf ok"
       "cc_dns: gethostbyname ok"
       "cc_dns: getaddrinfo ok"
+      "cc_dns: reverse lookup ok"
       "cc_dns: done"
     )
     ;;
@@ -58,6 +59,26 @@ case "$SCENARIO" in
       "cc_file_sync: truncate sync ok"
       "cc_file_sync: readonly rejection ok"
       "cc_file_sync: done"
+    )
+    ;;
+  cred)
+    COMMANDS=("cc_cred")
+    EXPECTS=(
+      "cc_cred: ids ok"
+      "cc_cred: setters ok"
+      "cc_cred: ioctl ok"
+      "cc_cred: done"
+    )
+    ;;
+  fs)
+    COMMANDS=("cc_fs")
+    EXPECTS=(
+      "cc_fs: access ok"
+      "cc_fs: getdents ok"
+      "cc_fs: umask ok"
+      "cc_fs: trunc missing ok"
+      "cc_fs: exclusive create ok"
+      "cc_fs: done"
     )
     ;;
   passwd)
@@ -88,9 +109,11 @@ case "$SCENARIO" in
       "cc_libc_compat: format ok"
       "cc_libc_compat: path ok"
       "cc_libc_compat: resource syslog ok"
+      "cc_libc_compat: time format ok"
       "cc_libc_compat: setjmp ok"
       "cc_libc_compat: dropbear types ok"
       "cc_libc_compat: stdio file ok"
+      "cc_libc_compat: process env open ok"
       "cc_libc_compat: done"
     )
     ;;

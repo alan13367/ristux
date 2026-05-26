@@ -14,13 +14,17 @@ extern int errno;
 #define EACCES 13
 #define EFAULT 14
 #define EEXIST 17
+#define ENODEV 19
 #define ENOTDIR 20
 #define EINVAL 22
 #define ENOTTY 25
+#define EROFS 30
+#define EPIPE 32
 #define ENOSYS 38
 #define ERANGE 34
 #define ECONNRESET 104
 #define ENOTCONN 107
 #define ETIMEDOUT 110
+#define EINPROGRESS 115
 
 #endif

@@ -13,7 +13,11 @@ struct sockaddr {
 };
 
 #define AF_UNSPEC 0
+#define AF_UNIX 1
 #define AF_INET 2
+#define AF_MAX 10
+#define PF_UNSPEC AF_UNSPEC
+#define PF_UNIX AF_UNIX
 #define PF_INET AF_INET
 
 #define SOCK_STREAM 1

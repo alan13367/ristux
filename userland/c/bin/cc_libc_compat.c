@@ -1,18 +1,22 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <syslog.h>
 #include <time.h>
+#include <unistd.h>
 
 static jmp_buf jump_env;
 
@@ -52,9 +56,11 @@ static int check_string(void) {
     int ok = strcmp(copy, "DropBear") == 0 &&
              strncmp(copy, "Drop", 4) == 0 &&
              strrchr(copy, 'B') == copy + 4 &&
+             memchr(copy, 'B', strlen(copy)) == copy + 4 &&
              strcasecmp(copy, "dropbear") == 0 &&
              strncasecmp(copy, "DROP", 4) == 0 &&
-             strlen(strerror(EINVAL)) > 0;
+             strlen(strerror(EINVAL)) > 0 &&
+             strcmp(strerror(EPIPE), "Broken pipe") == 0;
     free(copy);
     if (!ok) {
         puts("cc_libc_compat: string failed");
@@ -114,6 +120,20 @@ static int check_resource_syslog(void) {
     return 0;
 }
 
+static int check_time_format(void) {
+    time_t epoch = 0;
+    struct tm *tm = localtime(&epoch);
+    char buf[32];
+    if (tm == NULL ||
+        strftime(buf, sizeof(buf), "%b %d %H:%M:%S %Y", tm) == 0 ||
+        strcmp(buf, "Jan 01 00:00:00 1970") != 0) {
+        puts("cc_libc_compat: time format failed");
+        return 1;
+    }
+    puts("cc_libc_compat: time format ok");
+    return 0;
+}
+
 static int check_setjmp(void) {
     volatile int armed = 0;
     int value = setjmp(jump_env);
@@ -157,7 +177,10 @@ static int check_dropbear_types(void) {
     u_int16_t word = 0x3456;
     u_int32_t dword = 0x789abcdeU;
     clock_t ticks = 0;
-    if (byte != 0x12 || word != 0x3456 || dword != 0x789abcdeU || ticks != 0) {
+    if (byte != 0x12 || word != 0x3456 || dword != 0x789abcdeU ||
+        UINT64_MAX != 18446744073709551615UL ||
+        INT64_MAX != 9223372036854775807L ||
+        ticks != 0) {
         puts("cc_libc_compat: type alias failed");
         return 1;
     }
@@ -208,6 +231,57 @@ static int check_stdio_file(void) {
     return 0;
 }
 
+static int check_process_env_open(void) {
+    char *fixture_env[] = { "HOME=/root", "EMPTY=", "PATH=/bin", NULL };
+    environ = fixture_env;
+    if (strcmp(getenv("HOME"), "/root") != 0 ||
+        strcmp(getenv("EMPTY"), "") != 0 ||
+        getenv("NO_SUCH_VAR") != NULL ||
+        getenv("BAD=NAME") != NULL) {
+        puts("cc_libc_compat: getenv failed");
+        return 1;
+    }
+    if (clearenv() < 0 || getenv("HOME") != NULL ||
+        putenv("HOME=/tmp") < 0 ||
+        putenv("SHELL=/bin/sh") < 0 ||
+        strcmp(getenv("HOME"), "/tmp") != 0 ||
+        strcmp(getenv("SHELL"), "/bin/sh") != 0) {
+        puts("cc_libc_compat: putenv failed");
+        return 1;
+    }
+
+    int fd = open("/etc/os-release", O_RDONLY);
+    if (fd < 0) {
+        puts("cc_libc_compat: two arg open failed");
+        return 1;
+    }
+    char byte = 0;
+    if (read(fd, &byte, 1) != 1 || close(fd) < 0) {
+        puts("cc_libc_compat: two arg open read failed");
+        return 1;
+    }
+
+    pid_t child = vfork();
+    if (child < 0) {
+        puts("cc_libc_compat: vfork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { "/bin/true", NULL };
+        execv("/bin/true", argv);
+        _exit(7);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child ||
+        !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_libc_compat: execv failed");
+        return 1;
+    }
+    puts("cc_libc_compat: process env open ok");
+    return 0;
+}
+
 int main(void) {
     assert(PATH_MAX >= 1024);
     if (check_ctype() != 0 ||
@@ -216,9 +290,11 @@ int main(void) {
         check_format() != 0 ||
         check_path() != 0 ||
         check_resource_syslog() != 0 ||
+        check_time_format() != 0 ||
         check_setjmp() != 0 ||
         check_dropbear_types() != 0 ||
-        check_stdio_file() != 0) {
+        check_stdio_file() != 0 ||
+        check_process_env_open() != 0) {
         return 1;
     }
     puts("cc_libc_compat: done");
