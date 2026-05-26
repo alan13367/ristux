@@ -12,6 +12,7 @@ struct sockaddr {
     char sa_data[14];
 };
 
+#define AF_UNSPEC 0
 #define AF_INET 2
 #define PF_INET AF_INET
 

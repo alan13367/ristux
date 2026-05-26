@@ -1,6 +1,9 @@
 #include <errno.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -88,6 +91,7 @@
 #define SYS_CLOCK_GETTIME 228
 
 int errno;
+int h_errno;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
@@ -246,6 +250,486 @@ int setsockopt(int sockfd, int level, int optname, const void *optval,
 int getsockopt(int sockfd, int level, int optname, void *optval,
                socklen_t *optlen) {
     return (int)syscall_ret(syscall6(SYS_GETSOCKOPT, sockfd, level, optname, (long)optval, (long)optlen, 0));
+}
+
+#define DNS_PACKET_MAX 512
+#define DNS_PORT 53
+#define DNS_TYPE_A 1
+#define DNS_CLASS_IN 1
+
+static struct hostent resolver_hostent;
+static char resolver_host_name[256];
+static char *resolver_aliases[1];
+static in_addr_t resolver_host_addr;
+static char *resolver_addr_list[2];
+
+static int resolver_space(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+static int parse_ipv4_literal(const char *text, in_addr_t *out) {
+    unsigned int parts[4] = {0, 0, 0, 0};
+    int part = 0;
+    int saw_digit = 0;
+
+    if (text == NULL || *text == '\0') {
+        return 0;
+    }
+
+    for (const char *p = text; *p != '\0'; p++) {
+        if (*p == '.') {
+            if (!saw_digit || ++part >= 4) {
+                return 0;
+            }
+            saw_digit = 0;
+            continue;
+        }
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+        parts[part] = parts[part] * 10u + (unsigned int)(*p - '0');
+        if (parts[part] > 255u) {
+            return 0;
+        }
+        saw_digit = 1;
+    }
+
+    if (!saw_digit || part != 3) {
+        return 0;
+    }
+
+    *out = htonl((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]);
+    return 1;
+}
+
+static int resolver_streq_ci(const char *a, const char *b) {
+    while (*a != '\0' && *b != '\0') {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') {
+            ca = (char)(ca - 'A' + 'a');
+        }
+        if (cb >= 'A' && cb <= 'Z') {
+            cb = (char)(cb - 'A' + 'a');
+        }
+        if (ca != cb) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static int parse_resolv_nameserver_line(char *line, in_addr_t *out) {
+    const char word[] = "nameserver";
+    char *p = line;
+
+    while (resolver_space(*p)) {
+        p++;
+    }
+    if (*p == '#' || *p == '\0') {
+        return 0;
+    }
+    for (size_t i = 0; word[i] != '\0'; i++) {
+        if (p[i] != word[i]) {
+            return 0;
+        }
+    }
+    p += sizeof(word) - 1;
+    if (!resolver_space(*p)) {
+        return 0;
+    }
+    while (resolver_space(*p)) {
+        p++;
+    }
+
+    char token[32];
+    size_t len = 0;
+    while (*p != '\0' && *p != '#' && !resolver_space(*p)) {
+        if (len + 1 >= sizeof(token)) {
+            return 0;
+        }
+        token[len++] = *p++;
+    }
+    token[len] = '\0';
+    return parse_ipv4_literal(token, out);
+}
+
+static in_addr_t resolver_nameserver(void) {
+    in_addr_t out = htonl((10u << 24) | (0u << 16) | (2u << 8) | 2u);
+    char buf[256];
+    int fd = open("/etc/resolv.conf", O_RDONLY, 0);
+    if (fd < 0) {
+        return out;
+    }
+
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return out;
+    }
+    buf[n] = '\0';
+
+    char *line = buf;
+    while (*line != '\0') {
+        char *next = line;
+        while (*next != '\0' && *next != '\n') {
+            next++;
+        }
+        if (*next == '\n') {
+            *next++ = '\0';
+        }
+        if (parse_resolv_nameserver_line(line, &out)) {
+            return out;
+        }
+        line = next;
+    }
+
+    return out;
+}
+
+static int dns_build_query(const char *name, unsigned short id,
+                           unsigned char *packet, size_t *len) {
+    size_t pos = 0;
+    packet[pos++] = (unsigned char)(id >> 8);
+    packet[pos++] = (unsigned char)(id & 0xff);
+    packet[pos++] = 0x01;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x01;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+    packet[pos++] = 0x00;
+
+    size_t label_start = 0;
+    size_t name_len = strlen(name);
+    if (name_len == 0) {
+        return 0;
+    }
+    for (size_t i = 0; i <= name_len; i++) {
+        if (name[i] != '.' && name[i] != '\0') {
+            continue;
+        }
+        size_t label_len = i - label_start;
+        if (label_len == 0) {
+            if (name[i] == '\0' && i == name_len && i > 0 && name[i - 1] == '.') {
+                break;
+            }
+            return 0;
+        }
+        if (label_len > 63 || pos + 1 + label_len + 5 > DNS_PACKET_MAX) {
+            return 0;
+        }
+        packet[pos++] = (unsigned char)label_len;
+        memcpy(&packet[pos], &name[label_start], label_len);
+        pos += label_len;
+        label_start = i + 1;
+    }
+
+    packet[pos++] = 0;
+    packet[pos++] = 0;
+    packet[pos++] = DNS_TYPE_A;
+    packet[pos++] = 0;
+    packet[pos++] = DNS_CLASS_IN;
+    *len = pos;
+    return 1;
+}
+
+static unsigned short dns_u16(const unsigned char *p) {
+    return (unsigned short)((p[0] << 8) | p[1]);
+}
+
+static int dns_skip_name(const unsigned char *packet, size_t len, size_t *offset) {
+    size_t pos = *offset;
+    for (unsigned int jumps = 0; jumps < 64; jumps++) {
+        if (pos >= len) {
+            return 0;
+        }
+        unsigned char label = packet[pos++];
+        if ((label & 0xc0) == 0xc0) {
+            if (pos >= len) {
+                return 0;
+            }
+            *offset = pos + 1;
+            return 1;
+        }
+        if ((label & 0xc0) != 0) {
+            return 0;
+        }
+        if (label == 0) {
+            *offset = pos;
+            return 1;
+        }
+        if (pos + label > len) {
+            return 0;
+        }
+        pos += label;
+    }
+    return 0;
+}
+
+static int dns_parse_a_response(const unsigned char *packet, size_t len,
+                                unsigned short id, in_addr_t *out) {
+    if (len < 12 || dns_u16(packet) != id) {
+        return 0;
+    }
+    unsigned short flags = dns_u16(&packet[2]);
+    if ((flags & 0x8000) == 0 || (flags & 0x000f) != 0) {
+        return 0;
+    }
+
+    unsigned short questions = dns_u16(&packet[4]);
+    unsigned short answers = dns_u16(&packet[6]);
+    size_t offset = 12;
+    for (unsigned short i = 0; i < questions; i++) {
+        if (!dns_skip_name(packet, len, &offset) || offset + 4 > len) {
+            return 0;
+        }
+        offset += 4;
+    }
+
+    for (unsigned short i = 0; i < answers; i++) {
+        if (!dns_skip_name(packet, len, &offset) || offset + 10 > len) {
+            return 0;
+        }
+        unsigned short type = dns_u16(&packet[offset]);
+        unsigned short class = dns_u16(&packet[offset + 2]);
+        unsigned short rdlen = dns_u16(&packet[offset + 8]);
+        offset += 10;
+        if (offset + rdlen > len) {
+            return 0;
+        }
+        if (type == DNS_TYPE_A && class == DNS_CLASS_IN && rdlen == 4) {
+            memcpy(out, &packet[offset], 4);
+            return 1;
+        }
+        offset += rdlen;
+    }
+
+    return 0;
+}
+
+static int dns_lookup_ipv4(const char *name, in_addr_t *out) {
+    unsigned char query[DNS_PACKET_MAX];
+    unsigned char answer[DNS_PACKET_MAX];
+    const unsigned short id = 0x5253;
+    size_t query_len = 0;
+    if (!dns_build_query(name, id, query, &query_len)) {
+        return 0;
+    }
+
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        h_errno = TRY_AGAIN;
+        return 0;
+    }
+
+    struct timeval timeout = {1, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    struct sockaddr_in ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.sin_family = AF_INET;
+    ns.sin_port = htons(DNS_PORT);
+    ns.sin_addr.s_addr = resolver_nameserver();
+
+    ssize_t sent = sendto(fd, query, query_len, 0,
+                          (struct sockaddr *)&ns, sizeof(ns));
+    if (sent != (ssize_t)query_len) {
+        close(fd);
+        h_errno = TRY_AGAIN;
+        return 0;
+    }
+
+    ssize_t received = recvfrom(fd, answer, sizeof(answer), 0, NULL, NULL);
+    close(fd);
+    if (received <= 0) {
+        h_errno = TRY_AGAIN;
+        return 0;
+    }
+    if (!dns_parse_a_response(answer, (size_t)received, id, out)) {
+        h_errno = HOST_NOT_FOUND;
+        return 0;
+    }
+    return 1;
+}
+
+static struct hostent *resolver_make_hostent(const char *name, in_addr_t addr) {
+    size_t len = strlen(name);
+    if (len >= sizeof(resolver_host_name)) {
+        len = sizeof(resolver_host_name) - 1;
+    }
+    memcpy(resolver_host_name, name, len);
+    resolver_host_name[len] = '\0';
+    resolver_host_addr = addr;
+    resolver_aliases[0] = NULL;
+    resolver_addr_list[0] = (char *)&resolver_host_addr;
+    resolver_addr_list[1] = NULL;
+    resolver_hostent.h_name = resolver_host_name;
+    resolver_hostent.h_aliases = resolver_aliases;
+    resolver_hostent.h_addrtype = AF_INET;
+    resolver_hostent.h_length = sizeof(resolver_host_addr);
+    resolver_hostent.h_addr_list = resolver_addr_list;
+    h_errno = 0;
+    return &resolver_hostent;
+}
+
+struct hostent *gethostbyname(const char *name) {
+    in_addr_t addr;
+    if (name == NULL || *name == '\0') {
+        h_errno = HOST_NOT_FOUND;
+        errno = EINVAL;
+        return NULL;
+    }
+    if (parse_ipv4_literal(name, &addr)) {
+        return resolver_make_hostent(name, addr);
+    }
+    if (resolver_streq_ci(name, "localhost")) {
+        return resolver_make_hostent(name, htonl(INADDR_LOOPBACK));
+    }
+    if (dns_lookup_ipv4(name, &addr)) {
+        return resolver_make_hostent(name, addr);
+    }
+    return NULL;
+}
+
+static int parse_service_port(const char *service, unsigned short *port) {
+    unsigned int value = 0;
+    if (service == NULL || *service == '\0') {
+        *port = 0;
+        return 1;
+    }
+    if (resolver_streq_ci(service, "http")) {
+        *port = 80;
+        return 1;
+    }
+    if (resolver_streq_ci(service, "ssh")) {
+        *port = 22;
+        return 1;
+    }
+    if (resolver_streq_ci(service, "domain")) {
+        *port = DNS_PORT;
+        return 1;
+    }
+    for (const char *p = service; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+        value = value * 10u + (unsigned int)(*p - '0');
+        if (value > 65535u) {
+            return 0;
+        }
+    }
+    *port = (unsigned short)value;
+    return 1;
+}
+
+static char *resolver_strdup(const char *text) {
+    size_t len = strlen(text) + 1;
+    char *copy = malloc(len);
+    if (copy != NULL) {
+        memcpy(copy, text, len);
+    }
+    return copy;
+}
+
+int getaddrinfo(const char *node, const char *service,
+                const struct addrinfo *hints, struct addrinfo **res) {
+    if (res == NULL) {
+        return EAI_FAIL;
+    }
+    *res = NULL;
+
+    int flags = hints != NULL ? hints->ai_flags : 0;
+    int family = hints != NULL ? hints->ai_family : AF_UNSPEC;
+    if ((flags & ~(AI_PASSIVE | AI_CANONNAME)) != 0) {
+        return EAI_BADFLAGS;
+    }
+    if (family != AF_UNSPEC && family != AF_INET) {
+        return EAI_FAMILY;
+    }
+
+    unsigned short port = 0;
+    if (!parse_service_port(service, &port)) {
+        return EAI_SERVICE;
+    }
+
+    in_addr_t addr;
+    const char *canon = node;
+    if (node == NULL || *node == '\0') {
+        addr = (flags & AI_PASSIVE) ? htonl(INADDR_ANY) : htonl(INADDR_LOOPBACK);
+        canon = (flags & AI_PASSIVE) ? "0.0.0.0" : "localhost";
+    } else {
+        struct hostent *host = gethostbyname(node);
+        if (host == NULL || host->h_addr_list == NULL || host->h_addr_list[0] == NULL) {
+            return h_errno == TRY_AGAIN ? EAI_AGAIN : EAI_NONAME;
+        }
+        memcpy(&addr, host->h_addr_list[0], sizeof(addr));
+        canon = host->h_name;
+    }
+
+    struct addrinfo *info = calloc(1, sizeof(*info));
+    struct sockaddr_in *sockaddr = calloc(1, sizeof(*sockaddr));
+    if (info == NULL || sockaddr == NULL) {
+        return EAI_MEMORY;
+    }
+
+    sockaddr->sin_family = AF_INET;
+    sockaddr->sin_port = htons(port);
+    sockaddr->sin_addr.s_addr = addr;
+
+    info->ai_flags = flags;
+    info->ai_family = AF_INET;
+    info->ai_socktype = hints != NULL ? hints->ai_socktype : 0;
+    info->ai_protocol = hints != NULL ? hints->ai_protocol : 0;
+    info->ai_addrlen = sizeof(*sockaddr);
+    info->ai_addr = (struct sockaddr *)sockaddr;
+    if ((flags & AI_CANONNAME) != 0) {
+        info->ai_canonname = resolver_strdup(canon);
+        if (info->ai_canonname == NULL) {
+            return EAI_MEMORY;
+        }
+    }
+
+    *res = info;
+    return 0;
+}
+
+void freeaddrinfo(struct addrinfo *res) {
+    while (res != NULL) {
+        struct addrinfo *next = res->ai_next;
+        free(res->ai_addr);
+        free(res->ai_canonname);
+        free(res);
+        res = next;
+    }
+}
+
+const char *gai_strerror(int ecode) {
+    switch (ecode) {
+    case 0:
+        return "success";
+    case EAI_BADFLAGS:
+        return "bad flags";
+    case EAI_NONAME:
+        return "name not known";
+    case EAI_AGAIN:
+        return "temporary failure";
+    case EAI_FAIL:
+        return "resolver failure";
+    case EAI_FAMILY:
+        return "unsupported family";
+    case EAI_MEMORY:
+        return "out of memory";
+    case EAI_SERVICE:
+        return "unsupported service";
+    default:
+        return "unknown resolver error";
+    }
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

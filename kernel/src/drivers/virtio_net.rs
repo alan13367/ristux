@@ -8,8 +8,10 @@ const VIRTIO_NET_LEGACY: u16 = 0x1000;
 const VIRTIO_NET_MODERN: u16 = 0x1041;
 const MMIO_DEVICE_ID_NET: u32 = 0x01;
 const GATEWAY_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 2]);
+const GUEST_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
 const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
+const DNS_PORT: u16 = 53;
 
 pub struct VirtioNetDriver {
     mmio: usize,
@@ -143,15 +145,33 @@ impl VirtioNetDriver {
 
     fn maybe_udp_gateway_echo(&mut self, frame: &EthernetFrame, ihl: usize, src_ip: Ipv4Addr) {
         let dst_port = u16::from_be_bytes([frame.payload[ihl + 2], frame.payload[ihl + 3]]);
-        if dst_port != 9001 {
+        let src_port = u16::from_be_bytes([frame.payload[ihl], frame.payload[ihl + 1]]);
+        if dst_port == 9001 {
+            self.inject_udp_reply(frame, src_ip, 9001, src_port, b"udp-reply");
             return;
         }
-        let src_port = u16::from_be_bytes([frame.payload[ihl], frame.payload[ihl + 1]]);
+
+        if dst_port == DNS_PORT {
+            let query = &frame.payload[ihl + 4..];
+            if let Some(reply) = build_dns_response(query) {
+                self.inject_udp_reply(frame, src_ip, DNS_PORT, src_port, &reply);
+            }
+        }
+    }
+
+    fn inject_udp_reply(
+        &mut self,
+        frame: &EthernetFrame,
+        dst_ip: Ipv4Addr,
+        src_port: u16,
+        dst_port: u16,
+        payload: &[u8],
+    ) {
         let mut reply_body = Vec::new();
-        reply_body.extend_from_slice(&9001u16.to_be_bytes());
         reply_body.extend_from_slice(&src_port.to_be_bytes());
-        reply_body.extend_from_slice(b"udp-reply");
-        let reply_ip = build_ipv4(IP_PROTO_UDP, GATEWAY_IP, src_ip, &reply_body);
+        reply_body.extend_from_slice(&dst_port.to_be_bytes());
+        reply_body.extend_from_slice(payload);
+        let reply_ip = build_ipv4(IP_PROTO_UDP, GATEWAY_IP, dst_ip, &reply_body);
         self.rx_queue.push(EthernetFrame {
             dst: frame.src,
             src: frame.dst,
@@ -218,6 +238,89 @@ impl VirtioNetDriver {
             ethertype: 0x0800,
             payload: reply_ip,
         });
+    }
+}
+
+fn build_dns_response(query: &[u8]) -> Option<Vec<u8>> {
+    if query.len() < 12 {
+        return None;
+    }
+    let (question_end, answer) = parse_dns_question(query)?;
+    let flags = if answer.is_some() { 0x8180u16 } else { 0x8183u16 };
+
+    let mut response = Vec::new();
+    response.extend_from_slice(&query[0..2]);
+    response.extend_from_slice(&flags.to_be_bytes());
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&(answer.is_some() as u16).to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&query[12..question_end]);
+
+    if let Some(ip) = answer {
+        response.extend_from_slice(&0xc00cu16.to_be_bytes());
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&60u32.to_be_bytes());
+        response.extend_from_slice(&4u16.to_be_bytes());
+        response.extend_from_slice(&ip.0);
+    }
+    Some(response)
+}
+
+fn parse_dns_question(query: &[u8]) -> Option<(usize, Option<Ipv4Addr>)> {
+    let questions = u16::from_be_bytes([query[4], query[5]]);
+    if questions != 1 {
+        return None;
+    }
+
+    let mut offset = 12usize;
+    let mut name = Vec::new();
+    loop {
+        let label_len = *query.get(offset)? as usize;
+        offset += 1;
+        if label_len == 0 {
+            break;
+        }
+        if label_len & 0xc0 != 0 || label_len > 63 || offset + label_len > query.len() {
+            return None;
+        }
+        if !name.is_empty() {
+            name.push(b'.');
+        }
+        for &byte in &query[offset..offset + label_len] {
+            name.push(ascii_lower(byte));
+        }
+        offset += label_len;
+    }
+
+    if offset + 4 > query.len() {
+        return None;
+    }
+    let qtype = u16::from_be_bytes([query[offset], query[offset + 1]]);
+    let qclass = u16::from_be_bytes([query[offset + 2], query[offset + 3]]);
+    let answer = if qtype == 1 && qclass == 1 {
+        dns_answer_for_name(&name)
+    } else {
+        None
+    };
+    Some((offset + 4, answer))
+}
+
+fn ascii_lower(byte: u8) -> u8 {
+    if byte.is_ascii_uppercase() {
+        byte + 32
+    } else {
+        byte
+    }
+}
+
+fn dns_answer_for_name(name: &[u8]) -> Option<Ipv4Addr> {
+    match name {
+        b"gateway.ristux" | b"dns.ristux" => Some(GATEWAY_IP),
+        b"ristux.local" => Some(GUEST_IP),
+        b"localhost" => Some(Ipv4Addr([127, 0, 0, 1])),
+        _ => None,
     }
 }
 
