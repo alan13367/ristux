@@ -7,6 +7,7 @@ QEMU ?= qemu-system-x86_64
 QEMU_FLAGS ?= -m 256M -smp 4
 RUST_HOST := $(shell $(RUSTC) -vV | sed -n 's/^host: //p')
 RUST_LLD ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/$(RUST_HOST)/bin/rust-lld
+HOST_AR ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/$(RUST_HOST)/bin/llvm-ar
 
 TARGET := x86_64-ristux-kernel
 KERNEL_NAME := ristux-kernel
@@ -76,6 +77,7 @@ USER_CRT0_OBJ := build/userland/c/crt0.o
 USER_CRTI_OBJ := build/userland/c/crti.o
 USER_CRTN_OBJ := build/userland/c/crtn.o
 USER_C_LIBC_OBJ := build/userland/c/libc.o
+USER_C_LIBC_A := build/userland/c/libc.a
 USER_CC_HELLO_OBJ := build/userland/c/cc_hello.o
 USER_CC_HELLO_ELF := build/userland/cc_hello.elf
 USER_CC_CRED_OBJ := build/userland/c/cc_cred.o
@@ -140,7 +142,7 @@ ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
 ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
 ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
 ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(ROOTFS_BASE_PACKAGE_ARCHIVE)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc userland/c/linker.ld $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(USER_C_LIBC_A) $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
 .PHONY: all build rootfs disk dropbear-port check-multiboot iso run run-headless smoke quick quick-% debug test clean
 
@@ -264,6 +266,9 @@ $(USER_CRTN_OBJ): userland/c/crt/crtn.S
 $(USER_C_LIBC_OBJ): userland/c/libc/libc.c $(USER_C_HEADERS)
 	mkdir -p build/userland/c
 	$(CLANG) $(USER_C_CFLAGS) -c $< -o $@
+
+$(USER_C_LIBC_A): $(USER_C_LIBC_OBJ) Makefile
+	$(HOST_AR) rcs $@ $<
 
 $(USER_CC_HELLO_OBJ): userland/c/bin/cc_hello.c $(USER_C_HEADERS)
 	mkdir -p build/userland/c

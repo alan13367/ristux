@@ -283,6 +283,8 @@ case "$SCENARIO" in
       "^  /include/stdio.h$"
       "^  /include/sys/stat.h$"
       "^  /lib/crt0.o$"
+      "^  /lib/libc.a$"
+      "^  /lib/ristux.ld$"
       "^#ifndef _RISTUX_STDIO_H$"
     )
     ;;

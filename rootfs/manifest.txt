@@ -69,6 +69,8 @@ file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
 file /lib/crt0.o ../build/userland/c/crt0.o
 file /lib/crti.o ../build/userland/c/crti.o
 file /lib/crtn.o ../build/userland/c/crtn.o
+file /lib/libc.a ../build/userland/c/libc.a
+file /lib/ristux.ld ../userland/c/linker.ld
 file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
@@ -116,6 +118,8 @@ package libc 0.1.0 /lib/libc.so
 package libc-dev 0.1.0 /lib/crt0.o deps=libc
 package libc-dev 0.1.0 /lib/crti.o deps=libc
 package libc-dev 0.1.0 /lib/crtn.o deps=libc
+package libc-dev 0.1.0 /lib/libc.a deps=libc
+package libc-dev 0.1.0 /lib/ristux.ld deps=libc
 package login 0.1.0 /bin/login
 package loopback_check 0.1.0 /bin/loopback_check
 package ls 0.1.0 /bin/ls
