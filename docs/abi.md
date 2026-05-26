@@ -135,7 +135,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
   `getppid`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
-  `setresuid`, `setgroups`.
+  `setresuid`, `setgroups`, and libc user/group database helpers
+  `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
+  `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
   `dup2`, `fcntl`, `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,

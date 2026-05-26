@@ -2,10 +2,13 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pwd.h>
 #include <signal.h>
+#include <shadow.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -811,6 +814,306 @@ int setresuid(uid_t ruid, uid_t euid, uid_t suid) {
 
 int setgroups(size_t size, const gid_t *list) {
     return (int)syscall_ret(syscall2(SYS_SETGROUPS, (long)size, (long)list));
+}
+
+#define USERDB_FILE_MAX 2048
+#define USERDB_LINE_MAX 512
+#define USERDB_GROUP_MAX 16
+
+static char userdb_file[USERDB_FILE_MAX];
+static char userdb_line[USERDB_LINE_MAX];
+static struct passwd userdb_passwd;
+static struct group userdb_group;
+static struct spwd userdb_shadow;
+static char *userdb_group_members[USERDB_GROUP_MAX + 1];
+
+static int userdb_read_file(const char *path, char *buf, size_t cap) {
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    size_t used = 0;
+    while (used + 1 < cap) {
+        ssize_t n = read(fd, buf + used, cap - 1 - used);
+        if (n < 0) {
+            close(fd);
+            return -1;
+        }
+        if (n == 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+    close(fd);
+    buf[used] = '\0';
+    return 0;
+}
+
+static int userdb_copy_line(const char *line, char *out, size_t cap) {
+    size_t len = 0;
+    while (line[len] != '\0' && line[len] != '\n') {
+        if (len + 1 >= cap) {
+            return -1;
+        }
+        out[len] = line[len];
+        len++;
+    }
+    out[len] = '\0';
+    return 0;
+}
+
+static int userdb_split_fields(char *line, char **fields, int max_fields) {
+    int count = 0;
+    char *p = line;
+    while (count < max_fields) {
+        fields[count++] = p;
+        while (*p != '\0' && *p != ':') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        *p++ = '\0';
+    }
+    return count;
+}
+
+static unsigned long userdb_parse_ulong(const char *text, int *ok) {
+    unsigned long value = 0;
+    *ok = 0;
+    if (text == NULL || *text == '\0') {
+        return 0;
+    }
+    for (const char *p = text; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+        value = value * 10ul + (unsigned long)(*p - '0');
+    }
+    *ok = 1;
+    return value;
+}
+
+static long userdb_parse_shadow_long(const char *text) {
+    int ok = 0;
+    if (text == NULL || *text == '\0') {
+        return -1;
+    }
+    unsigned long value = userdb_parse_ulong(text, &ok);
+    return ok ? (long)value : -1;
+}
+
+static struct passwd *userdb_passwd_from_fields(char **fields, int count) {
+    int uid_ok = 0;
+    int gid_ok = 0;
+    if (count < 7) {
+        return NULL;
+    }
+    unsigned long uid = userdb_parse_ulong(fields[2], &uid_ok);
+    unsigned long gid = userdb_parse_ulong(fields[3], &gid_ok);
+    if (!uid_ok || !gid_ok) {
+        return NULL;
+    }
+    userdb_passwd.pw_name = fields[0];
+    userdb_passwd.pw_passwd = fields[1];
+    userdb_passwd.pw_uid = (uid_t)uid;
+    userdb_passwd.pw_gid = (gid_t)gid;
+    userdb_passwd.pw_gecos = fields[4];
+    userdb_passwd.pw_dir = fields[5];
+    userdb_passwd.pw_shell = fields[6];
+    return &userdb_passwd;
+}
+
+static struct group *userdb_group_from_fields(char **fields, int count) {
+    int gid_ok = 0;
+    if (count < 4) {
+        return NULL;
+    }
+    unsigned long gid = userdb_parse_ulong(fields[2], &gid_ok);
+    if (!gid_ok) {
+        return NULL;
+    }
+    int members = 0;
+    char *p = fields[3];
+    while (*p != '\0' && members < USERDB_GROUP_MAX) {
+        userdb_group_members[members++] = p;
+        while (*p != '\0' && *p != ',') {
+            p++;
+        }
+        if (*p == ',') {
+            *p++ = '\0';
+        }
+    }
+    userdb_group_members[members] = NULL;
+    userdb_group.gr_name = fields[0];
+    userdb_group.gr_passwd = fields[1];
+    userdb_group.gr_gid = (gid_t)gid;
+    userdb_group.gr_mem = userdb_group_members;
+    return &userdb_group;
+}
+
+static struct spwd *userdb_shadow_from_fields(char **fields, int count) {
+    if (count < 2) {
+        return NULL;
+    }
+    userdb_shadow.sp_namp = fields[0];
+    userdb_shadow.sp_pwdp = fields[1];
+    userdb_shadow.sp_lstchg = count > 2 ? userdb_parse_shadow_long(fields[2]) : -1;
+    userdb_shadow.sp_min = count > 3 ? userdb_parse_shadow_long(fields[3]) : -1;
+    userdb_shadow.sp_max = count > 4 ? userdb_parse_shadow_long(fields[4]) : -1;
+    userdb_shadow.sp_warn = count > 5 ? userdb_parse_shadow_long(fields[5]) : -1;
+    userdb_shadow.sp_inact = count > 6 ? userdb_parse_shadow_long(fields[6]) : -1;
+    userdb_shadow.sp_expire = count > 7 ? userdb_parse_shadow_long(fields[7]) : -1;
+    userdb_shadow.sp_flag = 0;
+    return &userdb_shadow;
+}
+
+struct passwd *getpwnam(const char *name) {
+    if (name == NULL || userdb_read_file("/etc/passwd", userdb_file, sizeof(userdb_file)) < 0) {
+        return NULL;
+    }
+    char *line = userdb_file;
+    while (*line != '\0') {
+        if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+            char *fields[7];
+            int count = userdb_split_fields(userdb_line, fields, 7);
+            if (count >= 7 && strcmp(fields[0], name) == 0) {
+                return userdb_passwd_from_fields(fields, count);
+            }
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return NULL;
+}
+
+struct passwd *getpwuid(uid_t uid) {
+    if (userdb_read_file("/etc/passwd", userdb_file, sizeof(userdb_file)) < 0) {
+        return NULL;
+    }
+    char *line = userdb_file;
+    while (*line != '\0') {
+        if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+            char *fields[7];
+            int count = userdb_split_fields(userdb_line, fields, 7);
+            struct passwd *pw = userdb_passwd_from_fields(fields, count);
+            if (pw != NULL && pw->pw_uid == uid) {
+                return pw;
+            }
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return NULL;
+}
+
+struct group *getgrnam(const char *name) {
+    if (name == NULL || userdb_read_file("/etc/group", userdb_file, sizeof(userdb_file)) < 0) {
+        return NULL;
+    }
+    char *line = userdb_file;
+    while (*line != '\0') {
+        if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+            char *fields[4];
+            int count = userdb_split_fields(userdb_line, fields, 4);
+            if (count >= 4 && strcmp(fields[0], name) == 0) {
+                return userdb_group_from_fields(fields, count);
+            }
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return NULL;
+}
+
+struct group *getgrgid(gid_t gid) {
+    if (userdb_read_file("/etc/group", userdb_file, sizeof(userdb_file)) < 0) {
+        return NULL;
+    }
+    char *line = userdb_file;
+    while (*line != '\0') {
+        if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+            char *fields[4];
+            int count = userdb_split_fields(userdb_line, fields, 4);
+            struct group *gr = userdb_group_from_fields(fields, count);
+            if (gr != NULL && gr->gr_gid == gid) {
+                return gr;
+            }
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return NULL;
+}
+
+int initgroups(const char *user, gid_t group) {
+    gid_t groups[USERDB_GROUP_MAX];
+    size_t count = 0;
+    groups[count++] = group;
+    if (user != NULL && userdb_read_file("/etc/group", userdb_file, sizeof(userdb_file)) == 0) {
+        char *line = userdb_file;
+        while (*line != '\0' && count < USERDB_GROUP_MAX) {
+            if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+                char *fields[4];
+                int field_count = userdb_split_fields(userdb_line, fields, 4);
+                struct group *gr = userdb_group_from_fields(fields, field_count);
+                if (gr != NULL && gr->gr_gid != group) {
+                    for (char **member = gr->gr_mem; *member != NULL; member++) {
+                        if (strcmp(*member, user) == 0) {
+                            groups[count++] = gr->gr_gid;
+                            break;
+                        }
+                    }
+                }
+            }
+            while (*line != '\0' && *line != '\n') {
+                line++;
+            }
+            if (*line == '\n') {
+                line++;
+            }
+        }
+    }
+    return setgroups(count, groups);
+}
+
+struct spwd *getspnam(const char *name) {
+    if (name == NULL || userdb_read_file("/etc/shadow", userdb_file, sizeof(userdb_file)) < 0) {
+        return NULL;
+    }
+    char *line = userdb_file;
+    while (*line != '\0') {
+        if (userdb_copy_line(line, userdb_line, sizeof(userdb_line)) == 0) {
+            char *fields[9];
+            int count = userdb_split_fields(userdb_line, fields, 9);
+            if (count >= 2 && strcmp(fields[0], name) == 0) {
+                return userdb_shadow_from_fields(fields, count);
+            }
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return NULL;
 }
 
 int ioctl(int fd, unsigned long request, ...) {

@@ -266,6 +266,10 @@ normalize_serial_noise() {
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cc_passwd"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cc_dev"
   sleep 1
   printf 'sendkey ret\n'
@@ -476,6 +480,11 @@ grep -q "cc_cred: ids ok" "$SERIAL_LOG"
 grep -q "cc_cred: setters ok" "$SERIAL_LOG"
 grep -q "cc_cred: ioctl ok" "$SERIAL_LOG"
 grep -q "cc_cred: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cc_passwd" "$SERIAL_LOG"
+grep -q "cc_passwd: passwd ok" "$SERIAL_LOG"
+grep -q "cc_passwd: group ok" "$SERIAL_LOG"
+grep -q "cc_passwd: shadow ok" "$SERIAL_LOG"
+grep -q "cc_passwd: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_dev" "$SERIAL_LOG"
 grep -q "cc_dev: random ok" "$SERIAL_LOG"
 grep -q "cc_dev: urandom ok" "$SERIAL_LOG"
