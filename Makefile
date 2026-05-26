@@ -119,7 +119,7 @@ ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
 ROOTFS_BASE_PACKAGE_ARCHIVE := build/packages/base-files.tar.gz
 ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf $(ROOTFS_BASE_PACKAGE_ARCHIVE)
 
-.PHONY: all build rootfs disk check-multiboot iso run run-headless smoke debug test clean
+.PHONY: all build rootfs disk check-multiboot iso run run-headless smoke quick quick-% debug test clean
 
 all: build
 
@@ -419,6 +419,12 @@ run-headless: iso
 
 smoke:
 	scripts/smoke_test.sh
+
+quick:
+	scripts/quick_fixture.sh boot
+
+quick-%:
+	scripts/quick_fixture.sh $*
 
 debug: iso
 	scripts/debug_qemu.sh

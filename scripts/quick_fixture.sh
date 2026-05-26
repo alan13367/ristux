@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+SCENARIO="${1:-boot}"
+QEMU_BIN="${QEMU:-qemu-system-x86_64}"
+ISO_IMAGE="${ISO_IMAGE:-build/ristux.iso}"
+DISK_IMAGE="${DISK_IMAGE:-build/disk.img}"
+SERIAL_LOG="${RISTUX_QUICK_SERIAL_LOG:-/tmp/ristux-quick-${SCENARIO}.log}"
+QEMU_FLAGS="${QEMU_FLAGS:-}"
+BOOT_WAIT="${RISTUX_QUICK_BOOT_WAIT:-10}"
+KEY_DELAY="${RISTUX_QUICK_KEY_DELAY:-0.01}"
+COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-4}"
+TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-90}"
+REBUILD="${RISTUX_QUICK_REBUILD:-1}"
+
+if [[ -z "$QEMU_FLAGS" ]]; then
+  QEMU_FLAGS="-m 256M -smp 4"
+fi
+
+COMMANDS=()
+EXPECTS=()
+case "$SCENARIO" in
+  boot)
+    COMMANDS=("true")
+    EXPECTS=("Kernel self-test harness passed" "TTY canonical line ready: true")
+    ;;
+  dns)
+    COMMANDS=("cc_dns")
+    EXPECTS=(
+      "cc_dns: resolv.conf ok"
+      "cc_dns: gethostbyname ok"
+      "cc_dns: getaddrinfo ok"
+      "cc_dns: done"
+    )
+    ;;
+  entropy)
+    COMMANDS=("cc_dev")
+    EXPECTS=(
+      "cc_dev: random ok"
+      "cc_dev: urandom ok"
+      "cc_dev: getrandom ok"
+      "cc_dev: done"
+    )
+    ;;
+  socket)
+    COMMANDS=("cc_socket")
+    EXPECTS=(
+      "cc_socket: udp loopback ok"
+      "cc_socket: options ok"
+      "cc_socket: done"
+    )
+    ;;
+  loopback)
+    COMMANDS=("ping 127.0.0.1" "loopback_demo")
+    EXPECTS=(
+      "64 bytes from 127.0.0.1"
+      "loopback: server received"
+      "loopback: client received"
+      "loopback: done"
+    )
+    ;;
+  command)
+    shift
+    if [[ $# -eq 0 ]]; then
+      echo "usage: scripts/quick_fixture.sh command <shell command> [expect...]" >&2
+      exit 2
+    fi
+    COMMANDS=("$1")
+    shift
+    if [[ $# -eq 0 ]]; then
+      EXPECTS=("TTY canonical line ready: ${COMMANDS[0]}")
+    else
+      EXPECTS=("$@")
+    fi
+    ;;
+  *)
+    echo "unknown scenario '$SCENARIO' (try boot, dns, entropy, socket, loopback, command)" >&2
+    exit 2
+    ;;
+esac
+
+send_text() {
+  local text="$1"
+  local i ch
+  for ((i = 0; i < ${#text}; i++)); do
+    ch="${text:i:1}"
+    case "$ch" in
+      [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
+      ' ') printf 'sendkey spc\n' ;;
+      '|') printf 'sendkey shift-backslash\n' ;;
+      '&') printf 'sendkey shift-7\n' ;;
+      '$') printf 'sendkey shift-4\n' ;;
+      '*') printf 'sendkey shift-8\n' ;;
+      '/') printf 'sendkey slash\n' ;;
+      ':') printf 'sendkey shift-semicolon\n' ;;
+      "'") printf 'sendkey apostrophe\n' ;;
+      '"') printf 'sendkey shift-apostrophe\n' ;;
+      '.') printf 'sendkey dot\n' ;;
+      '-') printf 'sendkey minus\n' ;;
+      '_') printf 'sendkey shift-minus\n' ;;
+      '=') printf 'sendkey equal\n' ;;
+      '>') printf 'sendkey shift-dot\n' ;;
+      '<') printf 'sendkey shift-comma\n' ;;
+      '~') printf 'sendkey shift-grave_accent\n' ;;
+      *) echo "quick_fixture: unsupported key '$ch'" >&2; exit 1 ;;
+    esac
+    sleep "$KEY_DELAY"
+  done
+}
+
+normalize_serial_noise() {
+  local log="$1"
+  local tmp="${log}.normalized"
+  perl -0pe 's/(keyboard scancode 0x[0-9a-fA-F]+|timer tick [0-9]+)\r?\n//g' "$log" > "$tmp"
+  mv "$tmp" "$log"
+}
+
+if [[ "$REBUILD" != "0" || ! -f "$ISO_IMAGE" || ! -f "$DISK_IMAGE" ]]; then
+  make iso
+fi
+
+rm -f "$SERIAL_LOG"
+
+QEMU_ARGS=(-cdrom "$ISO_IMAGE")
+QEMU_ARGS+=($QEMU_FLAGS)
+QEMU_ARGS+=(
+  -drive "file=$DISK_IMAGE,if=none,id=hd0,format=raw"
+  -device "virtio-blk-pci,drive=hd0"
+)
+
+(
+  sleep "$BOOT_WAIT"
+  send_text "root"
+  sleep 0.5
+  printf 'sendkey ret\n'
+  sleep 2
+  for command in "${COMMANDS[@]}"; do
+    send_text "$command"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep "$COMMAND_WAIT"
+  done
+  printf 'quit\n'
+) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+  -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-monitor.log &
+QEMU_PID=$!
+
+(
+  sleep "$TIMEOUT_SECONDS"
+  if kill -0 "$QEMU_PID" 2>/dev/null; then
+    echo "quick_fixture: timed out after ${TIMEOUT_SECONDS}s" >&2
+    kill "$QEMU_PID" 2>/dev/null || true
+  fi
+) &
+WATCHDOG_PID=$!
+
+set +e
+wait "$QEMU_PID"
+QEMU_STATUS=$?
+set -e
+kill "$WATCHDOG_PID" 2>/dev/null || true
+wait "$WATCHDOG_PID" 2>/dev/null || true
+
+if [[ "$QEMU_STATUS" -ne 0 ]]; then
+  echo "quick_fixture: qemu exited with $QEMU_STATUS; see $SERIAL_LOG" >&2
+  exit "$QEMU_STATUS"
+fi
+
+normalize_serial_noise "$SERIAL_LOG"
+for pattern in "${EXPECTS[@]}"; do
+  if ! grep -q "$pattern" "$SERIAL_LOG"; then
+    echo "quick_fixture: missing '$pattern' in $SERIAL_LOG" >&2
+    exit 1
+  fi
+done
+if grep -q "kernel panic" "$SERIAL_LOG"; then
+  echo "quick_fixture: kernel panic found in $SERIAL_LOG" >&2
+  exit 1
+fi
+if grep -Eq "User page fault|userland panic|sh: (pipe|exec|fork) failed" "$SERIAL_LOG"; then
+  echo "quick_fixture: userspace failure found in $SERIAL_LOG" >&2
+  exit 1
+fi
+
+echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG"
