@@ -161,6 +161,24 @@ case "$SCENARIO" in
       "cc_uio: done"
     )
     ;;
+  tar)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-5}"
+    COMMANDS=(
+      "mkdir /tmp/tarcheck"
+      "cd /tmp/tarcheck"
+      "echo alpha > a.txt"
+      "tar -cf archive.tar a.txt"
+      "rm a.txt"
+      "tar -tf archive.tar"
+      "tar -xf archive.tar"
+      "cat a.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: tar -cf archive.tar a.txt"
+      "^a.txt$"
+      "^alpha$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -213,7 +231,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

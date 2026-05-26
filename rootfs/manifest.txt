@@ -55,6 +55,7 @@ file /bin/touch ../build/userland/touch.elf
 file /bin/su ../build/userland/su.elf
 file /bin/sleep ../build/userland/sleep.elf
 file /bin/ssh_banner ../build/userland/ssh_banner.elf
+file /bin/tar ../build/userland/tar.elf
 file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /etc/os-release etc/os-release
@@ -116,6 +117,7 @@ package stty 0.1.0 /bin/stty
 package su 0.1.0 /bin/su
 package sleep 0.1.0 /bin/sleep
 package ssh_banner 0.1.0 /bin/ssh_banner
+package tar 0.1.0 /bin/tar
 package touch 0.1.0 /bin/touch
 package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp

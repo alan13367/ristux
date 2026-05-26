@@ -143,7 +143,8 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
                 unmapped
             );
             userspace::record_user_exit(pid, status, unmapped);
-            userspace::return_from_active_user();
+            let _ = yield_until_runnable(frame);
+            return;
         }
         SYS_YIELD => {
             crate::task::yield_current();
@@ -652,7 +653,8 @@ fn sys_lseek_active(fd: usize, offset: isize, whence: u32) -> SyscallResult {
 fn sys_stat_active(path_ptr: usize, stat_ptr: usize) -> SyscallResult {
     let mut path = [0u8; 128];
     let path = read_user_cstr(path_ptr, &mut path)?;
-    let stat = crate::fs::stat(path).map_err(map_vfs_error)?;
+    let path = process::resolve_current_path(path).map_err(map_vfs_error)?;
+    let stat = crate::fs::stat(&path).map_err(map_vfs_error)?;
     let buffer = userspace::active_user_write_buffer(stat_ptr, 18).ok_or(SyscallError(EFAULT))?;
     buffer[0..2].copy_from_slice(&stat.mode.to_le_bytes());
     buffer[2..10].copy_from_slice(&stat.size.to_le_bytes());

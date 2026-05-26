@@ -1093,9 +1093,57 @@ pub fn write_user_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
     })?
 }
 
+fn normalize_process_path(path: &str) -> Result<String, fs::vfs::VfsError> {
+    if !path.starts_with('/') {
+        return Err(fs::vfs::VfsError::NotFound);
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let mut normalized = String::from("/");
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            normalized.push('/');
+        }
+        normalized.push_str(part);
+    }
+    Ok(normalized)
+}
+
+fn resolve_process_path(process: &Process, path: &str) -> Result<String, fs::vfs::VfsError> {
+    if path.is_empty() {
+        return Err(fs::vfs::VfsError::NotFound);
+    }
+    if path.starts_with('/') {
+        return normalize_process_path(path);
+    }
+    let mut combined = if process.cwd.is_empty() {
+        String::from("/")
+    } else {
+        process.cwd.clone()
+    };
+    if !combined.ends_with('/') {
+        combined.push('/');
+    }
+    combined.push_str(path);
+    normalize_process_path(&combined)
+}
+
+pub fn resolve_current_path(path: &str) -> Result<String, fs::vfs::VfsError> {
+    with_current_read(|p| resolve_process_path(p, path)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
-        let vfs_fd = fs::open_read_as(path, p.credentials)?;
+        let path = resolve_process_path(p, path)?;
+        let vfs_fd = fs::open_read_as(&path, p.credentials)?;
         Ok(p.push_fd(vfs_fd))
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
@@ -1113,9 +1161,10 @@ pub fn user_open_options(
     create_mode: u16,
 ) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
+        let path = resolve_process_path(p, path)?;
         let create_mode = create_mode & !p.umask & 0o7777;
         let vfs_fd = if create {
-            match fs::open_with_rights_as(path, p.credentials, read, write) {
+            match fs::open_with_rights_as(&path, p.credentials, read, write) {
                 Ok(fd) if exclusive => {
                     let _ = fs::close(fd);
                     return Err(fs::vfs::VfsError::AlreadyExists);
@@ -1123,19 +1172,19 @@ pub fn user_open_options(
                 Ok(fd) if !truncate => fd,
                 Ok(fd) => {
                     let _ = fs::close(fd);
-                    fs::create_file_with_mode_as(path, p.credentials, create_mode)?
+                    fs::create_file_with_mode_as(&path, p.credentials, create_mode)?
                 }
                 Err(fs::vfs::VfsError::NotFound) => {
-                    fs::create_file_with_mode_as(path, p.credentials, create_mode)?
+                    fs::create_file_with_mode_as(&path, p.credentials, create_mode)?
                 }
                 Err(err) => return Err(err),
             }
         } else if truncate {
-            let fd = fs::open_with_rights_as(path, p.credentials, read, write)?;
+            let fd = fs::open_with_rights_as(&path, p.credentials, read, write)?;
             let _ = fs::close(fd);
-            fs::create_file_as(path, p.credentials)?
+            fs::create_file_as(&path, p.credentials)?
         } else {
-            fs::open_with_rights_as(path, p.credentials, read, write)?
+            fs::open_with_rights_as(&path, p.credentials, read, write)?
         };
         if append {
             let _ = fs::lseek(vfs_fd, 0, 2);
@@ -1147,8 +1196,9 @@ pub fn user_open_options(
 
 pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
+        let path = resolve_process_path(p, path)?;
         let mode = 0o644 & !p.umask;
-        let vfs_fd = fs::create_file_with_mode_as(path, p.credentials, mode)?;
+        let vfs_fd = fs::create_file_with_mode_as(&path, p.credentials, mode)?;
         Ok(p.push_fd(vfs_fd))
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
@@ -1272,43 +1322,69 @@ pub fn user_mkdir(path: &str) -> Result<(), fs::vfs::VfsError> {
 
 pub fn user_mkdir_mode(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
     with_current(|p| {
+        let path = resolve_process_path(p, path)?;
         let mode = mode & !p.umask & 0o7777;
-        fs::mkdir_with_mode_as(path, p.credentials, mode)
+        fs::mkdir_with_mode_as(&path, p.credentials, mode)
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_rmdir(path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::rmdir_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let path = resolve_process_path(p, path)?;
+        fs::rmdir_as(&path, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_unlink(path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::unlink_as(path, p.credentials)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let path = resolve_process_path(p, path)?;
+        fs::unlink_as(&path, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_rename(old_path: &str, new_path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::rename_as(old_path, new_path, p.credentials))
-        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let old_path = resolve_process_path(p, old_path)?;
+        let new_path = resolve_process_path(p, new_path)?;
+        fs::rename_as(&old_path, &new_path, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_symlink(target: &str, link_path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::symlink_as(target, link_path, p.credentials))
-        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let link_path = resolve_process_path(p, link_path)?;
+        fs::symlink_as(target, &link_path, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_link(old_path: &str, new_path: &str) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::link_as(old_path, new_path, p.credentials))
-        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let old_path = resolve_process_path(p, old_path)?;
+        let new_path = resolve_process_path(p, new_path)?;
+        fs::link_as(&old_path, &new_path, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_chown(path: &str, uid: u32, gid: u32) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::chown_as(path, uid, gid, p.credentials))
-        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let path = resolve_process_path(p, path)?;
+        fs::chown_as(&path, uid, gid, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| fs::chmod_as(path, mode, p.credentials))
-        .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    with_current(|p| {
+        let path = resolve_process_path(p, path)?;
+        fs::chmod_as(&path, mode, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_access(
@@ -1318,14 +1394,15 @@ pub fn user_access(
     execute: bool,
 ) -> Result<(), fs::vfs::VfsError> {
     with_current_read(|p| {
-        fs::stat(path)?;
-        if read && !fs::can_access(path, p.credentials, Access::Read)? {
+        let path = resolve_process_path(p, path)?;
+        fs::stat(&path)?;
+        if read && !fs::can_access(&path, p.credentials, Access::Read)? {
             return Err(fs::vfs::VfsError::PermissionDenied);
         }
-        if write && !fs::can_access(path, p.credentials, Access::Write)? {
+        if write && !fs::can_access(&path, p.credentials, Access::Write)? {
             return Err(fs::vfs::VfsError::PermissionDenied);
         }
-        if execute && !fs::can_access(path, p.credentials, Access::Execute)? {
+        if execute && !fs::can_access(&path, p.credentials, Access::Execute)? {
             return Err(fs::vfs::VfsError::PermissionDenied);
         }
         Ok(())
@@ -1819,19 +1896,13 @@ pub fn user_cwd() -> Option<String> {
 
 pub fn user_chdir(path: &str) -> Result<(), ()> {
     with_current(|p| {
-        if path.is_empty() {
+        let resolved = resolve_process_path(p, path).map_err(|_| ())?;
+        let fd = fs::open_read_as(&resolved, p.credentials).map_err(|_| ())?;
+        let is_directory = fs::directory_entries(fd).is_ok();
+        let _ = fs::close(fd);
+        if !is_directory {
             return Err(());
         }
-        let resolved = if path.starts_with('/') {
-            String::from(path)
-        } else {
-            let mut combined = p.cwd.clone();
-            if !combined.ends_with('/') {
-                combined.push('/');
-            }
-            combined.push_str(path);
-            combined
-        };
         p.cwd = resolved;
         Ok(())
     })

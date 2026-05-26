@@ -1482,6 +1482,7 @@ fn linux_execve(
     let args = read_user_argv(argv_ptr).ok_or(EFAULT)?;
     let env = read_user_envp(envp_ptr).ok_or(EFAULT)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
+    let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let env_refs: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
     let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).ok_or(ENOENT)?;
@@ -1703,6 +1704,7 @@ fn linux_symlink(target_ptr: usize, link_ptr: usize) -> Result<u64, i64> {
 
 fn linux_readlink(path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     let target = fs::readlink(&path).map_err(map_vfs_error)?;
     let count = target.len().min(len);
     let out = process::write_user_buffer(buf, count).ok_or(EFAULT)?;
@@ -2032,6 +2034,7 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
 
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
     write_linux_stat(
         buf_ptr,
@@ -2045,6 +2048,7 @@ fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
 
 fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
     let meta = fs::lstat(&path).map_err(|_| ENOENT)?;
     write_linux_stat(
         buf_ptr,
