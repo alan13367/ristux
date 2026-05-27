@@ -5,6 +5,7 @@ extern crate alloc;
 extern crate ristux_userland;
 
 use alloc::vec::Vec;
+use core::ptr;
 use ristux_userland::sys;
 
 fn cstr(bytes: &[u8]) -> Vec<u8> {
@@ -114,7 +115,7 @@ fn print_line(bytes: &[u8]) {
 }
 
 fn print_usage() {
-    let _ = write_all(2, b"usage: pkg list | pkg info NAME | pkg files NAME | pkg deps NAME | pkg hook NAME\n");
+    let _ = write_all(2, b"usage: pkg list | pkg info NAME | pkg files NAME | pkg deps NAME | pkg hook NAME | pkg run-hook NAME\n");
 }
 
 fn list_packages() -> i32 {
@@ -195,6 +196,51 @@ fn print_db_file(name: &[u8], file: &[u8]) -> i32 {
     0
 }
 
+fn wait_exit_status(status: i32) -> i32 {
+    if (status & 0xff) == 0 {
+        (status >> 8) & 0xff
+    } else {
+        128 + (status & 0x7f)
+    }
+}
+
+fn run_hook(name: &[u8]) -> i32 {
+    let Some(bytes) = read_db_file(name, b"post-install") else {
+        let _ = write_all(2, b"pkg: unknown package ");
+        let _ = write_all(2, name);
+        let _ = write_all(2, b"\n");
+        return 1;
+    };
+    let hook = first_line(&bytes);
+    if hook.is_empty() {
+        return 0;
+    }
+
+    let pid = sys::fork();
+    if pid < 0 {
+        let _ = write_all(2, b"pkg: fork failed\n");
+        return 1;
+    }
+    if pid == 0 {
+        let path = cstr(b"/bin/sh");
+        let arg0 = cstr(b"sh");
+        let flag = cstr(b"-c");
+        let command = cstr(hook);
+        let argv = [arg0.as_ptr(), flag.as_ptr(), command.as_ptr(), ptr::null()];
+        let envp = [ptr::null()];
+        let _ = sys::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
+        let _ = write_all(2, b"pkg: hook exec failed\n");
+        sys::exit(127);
+    }
+
+    let mut status = 0i32;
+    if sys::wait4(pid, &mut status as *mut i32, 0, 0) < 0 {
+        let _ = write_all(2, b"pkg: wait failed\n");
+        return 1;
+    }
+    wait_exit_status(status)
+}
+
 fn main(args: &[&[u8]]) -> i32 {
     if args.len() == 2 && args[1] == b"list" {
         return list_packages();
@@ -210,6 +256,9 @@ fn main(args: &[&[u8]]) -> i32 {
     }
     if args.len() == 3 && args[1] == b"hook" {
         return print_db_file(args[2], b"post-install");
+    }
+    if args.len() == 3 && args[1] == b"run-hook" {
+        return run_hook(args[2]);
     }
     print_usage();
     2

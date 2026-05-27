@@ -237,4 +237,4 @@ package which 0.1.0 /bin/which
 package xargs 0.1.0 /bin/xargs
 package yes 0.1.0 /bin/yes
 package libc-pc 0.1.0 /usr/lib/pkgconfig/libc.pc deps=libc
-package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/true
+package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/uname
