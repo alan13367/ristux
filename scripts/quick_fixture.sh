@@ -310,6 +310,29 @@ case "$SCENARIO" in
       "^  /bin/make$"
     )
     ;;
+  tinycc)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "tcc -v"
+      "mkdir /tmp/tcccheck"
+      "cd /tmp/tcccheck"
+      "cp /usr/share/testdata/tinycc-hello.c hello.c"
+      "tcc hello.c -o hello"
+      "./hello"
+      "pkg info tcc"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: tcc -v"
+      "tcc version"
+      "TTY canonical line ready: tcc hello\\.c -o hello"
+      "TTY canonical line ready: ./hello"
+      "^tinycc hello$"
+      "^name: tcc$"
+      "^version: 0\\.9\\.28rc$"
+      "^  /bin/tcc$"
+      "^  /lib/tcc/include/tccdefs\\.h$"
+    )
+    ;;
   libc-dev)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1184,7 +1207,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -1204,10 +1227,10 @@ send_text() {
       '*') printf 'sendkey shift-8\n' ;;
       '(') printf 'sendkey shift-9\n' ;;
       ')') printf 'sendkey shift-0\n' ;;
-      '[') printf 'sendkey leftbracket\n' ;;
-      ']') printf 'sendkey rightbracket\n' ;;
-      '{') printf 'sendkey shift-leftbracket\n' ;;
-      '}') printf 'sendkey shift-rightbracket\n' ;;
+      '[') printf 'sendkey bracketleft\n' ;;
+      ']') printf 'sendkey bracketright\n' ;;
+      '{') printf 'sendkey shift-bracketleft\n' ;;
+      '}') printf 'sendkey shift-bracketright\n' ;;
       '/') printf 'sendkey slash\n' ;;
       \\) printf 'sendkey backslash\n' ;;
       '?') printf 'sendkey shift-slash\n' ;;

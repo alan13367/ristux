@@ -92,6 +92,7 @@ file /bin/su ../build/userland/su.elf
 file /bin/sleep ../build/userland/sleep.elf
 file /bin/ssh_banner ../build/userland/ssh_banner.elf
 file /bin/tar ../build/userland/tar.elf
+file /bin/tcc ../build/userland/tcc.elf
 file /bin/tr ../build/userland/tr.elf
 file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
@@ -108,7 +109,9 @@ file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
 file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
 file /usr/share/testdata/ristuxpkg-0.1.tar.gz ../build/testdata/ristuxpkg-0.1.tar.gz
 file /usr/share/testdata/ristuxpkg.patch testdata/ristuxpkg.patch
+file /usr/share/testdata/tinycc-hello.c testdata/tinycc-hello.c
 file /lib/crt0.o ../build/userland/c/crt0.o
+file /lib/crt1.o ../build/userland/c/crt0.o
 file /lib/crti.o ../build/userland/c/crti.o
 file /lib/crtn.o ../build/userland/c/crtn.o
 file /lib/libc.a ../build/userland/c/libc.a
@@ -116,6 +119,7 @@ file /lib/ristux.ld ../userland/c/linker.ld
 file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
+package-tree tcc 0.9.28rc ../build/ports/tinycc/root/lib/tcc /lib/tcc deps=libc,libc-dev
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
 package awk 0.1.0 /bin/awk
@@ -177,6 +181,7 @@ package install 0.1.0 /bin/install
 package kill 0.1.0 /bin/kill
 package libc 0.1.0 /lib/libc.so
 package libc-dev 0.1.0 /lib/crt0.o deps=libc
+package libc-dev 0.1.0 /lib/crt1.o deps=libc
 package libc-dev 0.1.0 /lib/crti.o deps=libc
 package libc-dev 0.1.0 /lib/crtn.o deps=libc
 package libc-dev 0.1.0 /lib/libc.a deps=libc
@@ -212,6 +217,7 @@ package stat 0.1.0 /bin/stat
 package ssh_banner 0.1.0 /bin/ssh_banner
 package tail 0.1.0 /bin/tail
 package tar 0.1.0 /bin/tar
+package tcc 0.9.28rc /bin/tcc deps=libc,libc-dev
 package tee 0.1.0 /bin/tee
 package touch 0.1.0 /bin/touch
 package tr 0.1.0 /bin/tr
