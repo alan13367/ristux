@@ -817,6 +817,38 @@ case "$SCENARIO" in
       "^  /bin/cmp$"
     )
     ;;
+  dd)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/ddcheck"
+      "cd /tmp/ddcheck"
+      "echo abcde12345 > source.txt"
+      "dd if=source.txt of=copy.txt bs=11 count=1 status=none"
+      "cat copy.txt"
+      "dd if=source.txt of=tail.txt bs=5 skip=1 count=2 status=none"
+      "cat tail.txt"
+      "echo 0000000000 > seek.txt"
+      "dd if=source.txt of=seek.txt bs=5 count=1 seek=1 conv=notrunc status=none"
+      "cat seek.txt"
+      "echo pipe-data | dd bs=10 count=1 status=none"
+      "pkg info dd"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: dd if=source\\.txt of=copy\\.txt bs=11 count=1 status=none"
+      "TTY canonical line ready: cat copy\\.txt"
+      "^abcde12345$"
+      "TTY canonical line ready: dd if=source\\.txt of=tail\\.txt bs=5 skip=1 count=2 status=none"
+      "TTY canonical line ready: cat tail\\.txt"
+      "^12345$"
+      "TTY canonical line ready: dd if=source\\.txt of=seek\\.txt bs=5 count=1 seek=1 conv=notrunc status=none"
+      "TTY canonical line ready: cat seek\\.txt"
+      "^00000abcde$"
+      "TTY canonical line ready: echo pipe-data | dd bs=10 count=1 status=none"
+      "^pipe-data$"
+      "^name: dd$"
+      "^  /bin/dd$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -869,7 +901,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
