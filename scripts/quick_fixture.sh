@@ -61,6 +61,16 @@ case "$SCENARIO" in
       "cc_file_sync: done"
     )
     ;;
+  ext2-reboot)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=("cc_ext2")
+    EXPECTS=(
+      "TTY canonical line ready: cc_ext2"
+      "^cc_ext2: ops ok$"
+      "^cc_ext2: marker ok$"
+      "^cc_ext2: done$"
+    )
+    ;;
   cred)
     COMMANDS=("cc_cred")
     EXPECTS=(
@@ -1330,7 +1340,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -1388,6 +1398,27 @@ normalize_serial_noise() {
   mv "$tmp" "$log"
 }
 
+check_log() {
+  local log="$1"
+  shift
+  normalize_serial_noise "$log"
+  local pattern
+  for pattern in "$@"; do
+    if ! grep -q "$pattern" "$log"; then
+      echo "quick_fixture: missing '$pattern' in $log" >&2
+      exit 1
+    fi
+  done
+  if grep -q "kernel panic" "$log"; then
+    echo "quick_fixture: kernel panic found in $log" >&2
+    exit 1
+  fi
+  if grep -Eq "User page fault|userland panic|sh: (pipe|exec|fork) failed" "$log"; then
+    echo "quick_fixture: userspace failure found in $log" >&2
+    exit 1
+  fi
+}
+
 if [[ "$REBUILD" != "0" || ! -f "$ISO_IMAGE" || ! -f "$DISK_IMAGE" ]]; then
   make iso
 fi
@@ -1400,6 +1431,95 @@ QEMU_ARGS+=(
   -drive "file=$DISK_IMAGE,if=none,id=hd0,format=raw"
   -device "virtio-blk-pci,drive=hd0"
 )
+
+if [[ "$SCENARIO" == "ext2-reboot" ]]; then
+  REBOOT_SERIAL_LOG="${RISTUX_QUICK_REBOOT_SERIAL_LOG:-/tmp/ristux-quick-ext2-reboot-second.log}"
+  rm -f "$REBOOT_SERIAL_LOG"
+
+  (
+    sleep "$BOOT_WAIT"
+    send_text "root"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep 2
+    for command in "${COMMANDS[@]}"; do
+      send_text "$command"
+      sleep 0.5
+      printf 'sendkey ret\n'
+      sleep "$COMMAND_WAIT"
+    done
+    printf 'quit\n'
+  ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+    -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-monitor.log &
+  QEMU_PID=$!
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+      echo "quick_fixture: timed out after ${TIMEOUT_SECONDS}s" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+    fi
+  ) &
+  WATCHDOG_PID=$!
+  set +e
+  wait "$QEMU_PID"
+  QEMU_STATUS=$?
+  set -e
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  if [[ "$QEMU_STATUS" -ne 0 ]]; then
+    echo "quick_fixture: qemu exited with $QEMU_STATUS; see $SERIAL_LOG" >&2
+    exit "$QEMU_STATUS"
+  fi
+  check_log "$SERIAL_LOG" "${EXPECTS[@]}"
+
+  (
+    sleep "$BOOT_WAIT"
+    send_text "alice"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep 2
+    send_text "cat /home/ext2_reboot_marker"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep "$COMMAND_WAIT"
+    send_text "mount"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep "$COMMAND_WAIT"
+    printf 'quit\n'
+  ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+    -serial "file:$REBOOT_SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-reboot-monitor.log &
+  QEMU_PID=$!
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+      echo "quick_fixture: reboot check timed out after ${TIMEOUT_SECONDS}s" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+    fi
+  ) &
+  WATCHDOG_PID=$!
+  set +e
+  wait "$QEMU_PID"
+  QEMU_STATUS=$?
+  set -e
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  if [[ "$QEMU_STATUS" -ne 0 ]]; then
+    echo "quick_fixture: reboot qemu exited with $QEMU_STATUS; see $REBOOT_SERIAL_LOG" >&2
+    exit "$QEMU_STATUS"
+  fi
+  check_log "$REBOOT_SERIAL_LOG" \
+    "Kernel self-test harness passed" \
+    "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." \
+    "TTY canonical line ready: alice" \
+    "TTY canonical line ready: cat /home/ext2_reboot_marker" \
+    "^ext2 persisted$" \
+    "TTY canonical line ready: mount" \
+    "ext2 on /" \
+    "tmpfs on /tmp"
+  echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG $REBOOT_SERIAL_LOG"
+  exit 0
+fi
 
 (
   sleep "$BOOT_WAIT"
@@ -1439,20 +1559,6 @@ if [[ "$QEMU_STATUS" -ne 0 ]]; then
   exit "$QEMU_STATUS"
 fi
 
-normalize_serial_noise "$SERIAL_LOG"
-for pattern in "${EXPECTS[@]}"; do
-  if ! grep -q "$pattern" "$SERIAL_LOG"; then
-    echo "quick_fixture: missing '$pattern' in $SERIAL_LOG" >&2
-    exit 1
-  fi
-done
-if grep -q "kernel panic" "$SERIAL_LOG"; then
-  echo "quick_fixture: kernel panic found in $SERIAL_LOG" >&2
-  exit 1
-fi
-if grep -Eq "User page fault|userland panic|sh: (pipe|exec|fork) failed" "$SERIAL_LOG"; then
-  echo "quick_fixture: userspace failure found in $SERIAL_LOG" >&2
-  exit 1
-fi
+check_log "$SERIAL_LOG" "${EXPECTS[@]}"
 
 echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG"
