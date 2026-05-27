@@ -41,6 +41,7 @@ file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/date ../build/userland/date.elf
 file /bin/dd ../build/userland/dd.elf
 file /bin/dbclient ../build/userland/dbclient.elf
+file /bin/diff ../build/userland/diff.elf
 file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
@@ -144,6 +145,7 @@ package curl_lite 0.1.0 /bin/curl_lite
 package date 0.1.0 /bin/date
 package dd 0.1.0 /bin/dd
 package dbclient 2026.91 /bin/dbclient
+package diff 0.1.0 /bin/diff
 package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit

@@ -925,6 +925,34 @@ case "$SCENARIO" in
       "^  /bin/yes$"
     )
     ;;
+  diff)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/diffcheck"
+      "cd /tmp/diffcheck"
+      "echo alpha > left.txt"
+      "echo beta >> left.txt"
+      "echo alpha > right.txt"
+      "echo gamma >> right.txt"
+      "diff left.txt left.txt"
+      "diff -q left.txt right.txt"
+      "diff -u left.txt right.txt"
+      "pkg info diff"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: diff left\\.txt left\\.txt"
+      "TTY canonical line ready: diff -q left\\.txt right\\.txt"
+      "^Files left\\.txt and right\\.txt differ$"
+      "TTY canonical line ready: diff -u left\\.txt right\\.txt"
+      "^--- left\\.txt$"
+      "^+++ right\\.txt$"
+      "^@@ -1,2 +1,2 @@$"
+      "^-beta$"
+      "^+gamma$"
+      "^name: diff$"
+      "^  /bin/diff$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -977,7 +1005,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
