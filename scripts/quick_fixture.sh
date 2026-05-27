@@ -600,6 +600,29 @@ case "$SCENARIO" in
       "^  /bin/\\[$"
     )
     ;;
+  shell-script)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shscript"
+      "cd /tmp/shscript"
+      "echo 'echo script-start' > run.sh"
+      "echo 'mkdir out' >> run.sh"
+      "echo 'echo alpha > out/a.txt' >> run.sh"
+      "echo 'cp out/a.txt out/b.txt' >> run.sh"
+      "echo 'grep alpha out/b.txt' >> run.sh"
+      "echo 'cat out/b.txt | wc -l' >> run.sh"
+      "echo 'cmp out/a.txt out/b.txt' >> run.sh"
+      "echo 'echo script-done' >> run.sh"
+      "sh run.sh"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh run.sh"
+      "^script-start$"
+      "^alpha$"
+      "^1$"
+      "^script-done$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1373,7 +1396,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

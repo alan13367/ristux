@@ -861,15 +861,15 @@ fn run_line(
     last_status
 }
 
-fn run_profile(
+fn run_script_file(
     path: &[u8],
     jobs: &mut Vec<Job>,
     next_job_id: &mut usize,
     env: &mut ShellEnv,
     last_status: &mut i32,
-) {
+) -> bool {
     let Some(data) = read_file(path) else {
-        return;
+        return false;
     };
     for raw in data.split(|byte| *byte == b'\n') {
         let line = raw
@@ -887,6 +887,17 @@ fn run_profile(
         }
         *last_status = run_line(trimmed, jobs, next_job_id, env, *last_status);
     }
+    true
+}
+
+fn run_profile(
+    path: &[u8],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: &mut i32,
+) {
+    let _ = run_script_file(path, jobs, next_job_id, env, last_status);
 }
 
 fn run_login_profiles(
@@ -919,6 +930,17 @@ fn main(args: &[&[u8]]) -> i32 {
         || args.iter().any(|arg| *arg == b"--login");
     if login_shell {
         run_login_profiles(&mut jobs, &mut next_job_id, &mut env, &mut last_status);
+    }
+    if let Some(script) = args
+        .iter()
+        .skip(1)
+        .find(|arg| **arg != b"--login" && **arg != b"-l")
+    {
+        if !run_script_file(script, &mut jobs, &mut next_job_id, &mut env, &mut last_status) {
+            let _ = sys::write(FD_STDERR, b"sh: cannot open script\n");
+            return 127;
+        }
+        return last_status;
     }
     loop {
         let prompt = env.get(b"PS1").unwrap_or(PS1);
