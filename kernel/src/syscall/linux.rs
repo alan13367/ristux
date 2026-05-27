@@ -151,6 +151,7 @@ const IOV_MAX: usize = 1024;
 /// registers and the SYSV-style return state for `iretq`.
 #[unsafe(no_mangle)]
 pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame) {
+    process::save_current_fpu();
     let nr = frame.rax;
     let a0 = frame.rdi;
     let a1 = frame.rsi;
@@ -160,6 +161,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let a5 = frame.r9;
 
     if deliver_pending_signal(frame) {
+        process::restore_current_fpu();
         return;
     }
 
@@ -291,11 +293,15 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
 
     frame.rax = match result {
         Ok(v) => v,
-        Err(CONTEXT_SWITCHED) => return,
+        Err(CONTEXT_SWITCHED) => {
+            process::restore_current_fpu();
+            return;
+        }
         Err(e) => e as u64,
     };
 
     let _ = deliver_pending_signal(frame);
+    process::restore_current_fpu();
 }
 
 fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {

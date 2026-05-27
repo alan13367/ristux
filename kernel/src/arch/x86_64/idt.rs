@@ -235,12 +235,12 @@ extern "x86-interrupt" fn stack_segment_fault_handler(
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
-    _stack_frame: InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
     panic!(
-        "general protection fault exception, error code {:#x}",
-        error_code
+        "general protection fault exception, error code {:#x}, rip {:#x}",
+        error_code, stack_frame.instruction_pointer
     );
 }
 

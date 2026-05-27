@@ -58,7 +58,7 @@ impl LinkedListAllocator {
         unsafe {
             let size = layout.size();
             let align = layout.align();
-            let total = align_up(HEADER_SIZE + size, align);
+            let alloc_size = align_up(HEADER_SIZE + size, core::mem::align_of::<FreeBlock>());
 
             let mut head_ptr = self.head.lock();
             let mut current = *head_ptr;
@@ -66,13 +66,35 @@ impl LinkedListAllocator {
 
             while !current.is_null() {
                 let block_size = (*current).size;
+                let block_start = current as usize;
+                let mut alloc_start = align_up(block_start + HEADER_SIZE, align) - HEADER_SIZE;
+                if alloc_start > block_start && alloc_start - block_start < HEADER_SIZE {
+                    alloc_start = align_up(block_start + HEADER_SIZE * 2, align) - HEADER_SIZE;
+                }
+                let prefix = alloc_start - block_start;
+                let total = prefix + alloc_size;
 
                 if block_size >= total {
                     let remainder = block_size - total;
+                    let used_size = if remainder >= HEADER_SIZE {
+                        alloc_size
+                    } else {
+                        alloc_size + remainder
+                    };
+                    let alloc_ptr = alloc_start as *mut FreeBlock;
+                    let remainder_ptr = (alloc_start + used_size) as *mut FreeBlock;
+
                     if remainder >= HEADER_SIZE {
-                        let remainder_ptr = (current as *mut u8).add(total) as *mut FreeBlock;
                         (*remainder_ptr).size = remainder;
                         (*remainder_ptr).next = (*current).next;
+                    }
+
+                    if prefix >= HEADER_SIZE {
+                        (*current).size = prefix;
+                        if remainder >= HEADER_SIZE {
+                            (*current).next = remainder_ptr;
+                        }
+                    } else if remainder >= HEADER_SIZE {
                         if prev.is_null() {
                             *head_ptr = remainder_ptr;
                         } else {
@@ -84,7 +106,8 @@ impl LinkedListAllocator {
                         (*prev).next = (*current).next;
                     }
 
-                    return (current as *mut u8).add(HEADER_SIZE);
+                    (*alloc_ptr).size = used_size;
+                    return (alloc_start as *mut u8).add(HEADER_SIZE);
                 }
 
                 prev = current;
@@ -97,8 +120,9 @@ impl LinkedListAllocator {
 
     unsafe fn dealloc_to_free_list(&self, ptr: *mut u8, layout: Layout) {
         unsafe {
+            let _ = layout;
             let block = ptr.sub(HEADER_SIZE) as *mut FreeBlock;
-            let block_size = align_up(HEADER_SIZE + layout.size(), layout.align());
+            let block_size = (*block).size;
 
             (*block).size = block_size;
             (*block).next = ptr::null_mut();
@@ -236,6 +260,15 @@ pub fn self_test() {
     }
     unsafe {
         ALLOCATOR.dealloc(second, layout);
+    }
+
+    let aligned = Layout::from_size_align(512, 16).unwrap();
+    let aligned_ptr = unsafe { ALLOCATOR.alloc(aligned) };
+    if aligned_ptr.is_null() || (aligned_ptr as usize) & 0xf != 0 {
+        panic!("heap alignment self-test failed");
+    }
+    unsafe {
+        ALLOCATOR.dealloc(aligned_ptr, aligned);
     }
 
     for _ in 0..64 {

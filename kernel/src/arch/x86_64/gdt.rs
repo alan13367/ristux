@@ -101,6 +101,7 @@ fn init_cpu(cpu_id: usize) {
         );
         asm!("ltr ax", in("ax") TSS_SELECTOR, options(nostack, preserves_flags));
     }
+    super::fpu::init_cpu();
 }
 
 pub const fn double_fault_ist() -> u16 {

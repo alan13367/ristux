@@ -2,6 +2,7 @@ use alloc::{string::String, vec::Vec};
 use core::{cmp, ptr, slice};
 
 use crate::{
+    arch::x86_64::fpu,
     fs,
     memory::{
         address_space::AddressSpace,
@@ -83,6 +84,7 @@ pub struct Process {
     waiters: Vec<Pid>,
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
+    fpu_state: fpu::FpuState,
 }
 
 /// Saved register frame for resuming a blocked syscall (mirrors SyscallInterruptFrame).
@@ -160,6 +162,7 @@ impl Process {
             waiters: Vec::new(),
             is_user: true,
             saved_syscall: None,
+            fpu_state: fpu::initial_state(),
         }
     }
 
@@ -393,6 +396,7 @@ impl Process {
             return Err(elf::ElfError::Unsupported);
         }
         self.timed_wait = None;
+        self.fpu_state = fpu::initial_state();
         self.name = String::from(path);
         self.entry = entry;
         Ok(entry)
@@ -765,6 +769,7 @@ impl Process {
             waiters: Vec::new(),
             is_user: self.is_user,
             saved_syscall: None,
+            fpu_state: self.fpu_state,
         })
     }
 }
@@ -1026,6 +1031,28 @@ pub fn clear_current() {
 
 pub fn current_pid() -> Option<Pid> {
     *CURRENT_PID.lock()
+}
+
+pub fn save_current_fpu() {
+    let Some(pid) = current_pid() else {
+        return;
+    };
+    with_table(|table| {
+        if let Some(process) = table.get_mut(pid) {
+            fpu::save(&mut process.fpu_state);
+        }
+    });
+}
+
+pub fn restore_current_fpu() {
+    let Some(pid) = current_pid() else {
+        return;
+    };
+    with_table(|table| {
+        if let Some(process) = table.get(pid) {
+            fpu::restore(&process.fpu_state);
+        }
+    });
 }
 
 pub fn is_runnable(pid: Pid) -> bool {

@@ -35,6 +35,7 @@ file /bin/cc_session ../build/userland/cc_session.elf
 file /bin/cc_signal ../build/userland/cc_signal.elf
 file /bin/cc_socket ../build/userland/cc_socket.elf
 file /bin/cc_stack ../build/userland/cc_stack.elf
+file /bin/cc_sse ../build/userland/cc_sse.elf
 file /bin/cc_tcp ../build/userland/cc_tcp.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/cc_uio ../build/userland/cc_uio.elf
@@ -143,6 +144,7 @@ package cc_session 0.1.0 /bin/cc_session
 package cc_signal 0.1.0 /bin/cc_signal
 package cc_socket 0.1.0 /bin/cc_socket
 package cc_stack 0.1.0 /bin/cc_stack
+package cc_sse 0.1.0 /bin/cc_sse
 package cc_tcp 0.1.0 /bin/cc_tcp
 package cc_tty 0.1.0 /bin/cc_tty
 package cc_uio 0.1.0 /bin/cc_uio
