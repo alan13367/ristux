@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{
-    Ipv4Addr, LOCAL_IP, LOOPBACK_IP, SocketId,
+    IcmpSocketId, Ipv4Addr, LOCAL_IP, LOOPBACK_IP, SocketId,
     tcp::{TcpError, TcpStack},
 };
 use crate::sync::spinlock::SpinLock;
@@ -15,6 +15,7 @@ pub enum SocketDomain {
 pub enum SocketType {
     Stream,
     Datagram,
+    RawIcmp,
 }
 
 pub struct SocketTable {
@@ -44,6 +45,7 @@ enum SocketBackend {
     Closed,
     Tcp(usize),
     Udp(SocketId),
+    Icmp(IcmpSocketId),
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +130,14 @@ impl SocketTable {
                 let udp = super::udp_socket_open(0)?;
                 Some(self.insert_entry(SocketEntry::new(domain, kind, SocketBackend::Udp(udp))))
             }
+            (SocketDomain::Inet, SocketType::RawIcmp) => {
+                let icmp = super::icmp_socket_open()?;
+                Some(self.insert_entry(SocketEntry::new(
+                    domain,
+                    kind,
+                    SocketBackend::Icmp(icmp),
+                )))
+            }
         }
     }
 
@@ -170,6 +180,11 @@ impl SocketTable {
                     return Err(SocketError::BadFd);
                 }
             }
+            SocketBackend::Icmp(socket) => {
+                if !super::icmp_socket_close(socket) {
+                    return Err(SocketError::BadFd);
+                }
+            }
         }
         self.sockets[handle].backend = SocketBackend::Closed;
         self.sockets[handle].ref_count = 0;
@@ -190,6 +205,7 @@ impl SocketTable {
                     Err(SocketError::BadFd)
                 }
             }
+            SocketBackend::Icmp(_) => Err(SocketError::Invalid),
         }
     }
 
@@ -197,7 +213,7 @@ impl SocketTable {
         match self.entry(handle)?.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => self.tcp.listen(socket).map_err(map_tcp_error),
-            SocketBackend::Udp(_) => Err(SocketError::Invalid),
+            SocketBackend::Udp(_) | SocketBackend::Icmp(_) => Err(SocketError::Invalid),
         }
     }
 
@@ -237,6 +253,13 @@ impl SocketTable {
                 });
                 Ok(())
             }
+            SocketBackend::Icmp(_) => {
+                self.entry_mut(handle)?.peer = Some(SocketAddress {
+                    ip: remote_ip,
+                    port: 0,
+                });
+                Ok(())
+            }
         }
     }
 
@@ -257,7 +280,7 @@ impl SocketTable {
                 socket_entry.options = entry.options;
                 Ok(self.insert_entry(socket_entry))
             }
-            SocketBackend::Udp(_) => Err(SocketError::Invalid),
+            SocketBackend::Udp(_) | SocketBackend::Icmp(_) => Err(SocketError::Invalid),
         }
     }
 
@@ -291,6 +314,14 @@ impl SocketTable {
             SocketBackend::Udp(socket) => {
                 let target = target.or(entry.peer).ok_or(SocketError::Invalid)?;
                 if super::udp_socket_send(socket, target.ip, target.port, data) {
+                    Ok(data.len())
+                } else {
+                    Err(SocketError::Invalid)
+                }
+            }
+            SocketBackend::Icmp(socket) => {
+                let target = target.or(entry.peer).ok_or(SocketError::Invalid)?;
+                if super::icmp_socket_send(socket, target.ip, data) {
                     Ok(data.len())
                 } else {
                     Err(SocketError::Invalid)
@@ -344,6 +375,18 @@ impl SocketTable {
                     }),
                 })
             }
+            SocketBackend::Icmp(socket) => {
+                let datagram = super::icmp_socket_recv(socket).ok_or(SocketError::WouldBlock)?;
+                let len = datagram.payload.len().min(output.len());
+                output[..len].copy_from_slice(&datagram.payload[..len]);
+                Ok(SocketRecv {
+                    len,
+                    peer: Some(SocketAddress {
+                        ip: datagram.src,
+                        port: 0,
+                    }),
+                })
+            }
         }
     }
 
@@ -354,6 +397,7 @@ impl SocketTable {
             SocketBackend::Udp(socket) => {
                 super::udp_socket_local_port(socket).ok_or(SocketError::BadFd)
             }
+            SocketBackend::Icmp(_) => Ok(0),
         }
     }
 
@@ -375,6 +419,7 @@ impl SocketTable {
                 .peer_addr(socket)
                 .map(|(ip, port)| SocketAddress { ip, port })),
             SocketBackend::Udp(_) => Ok(entry.peer),
+            SocketBackend::Icmp(_) => Ok(entry.peer),
         }
     }
 
@@ -417,6 +462,12 @@ impl SocketTable {
                 hangup: entry.recv_shutdown,
                 ..SocketReady::default()
             }),
+            SocketBackend::Icmp(socket) => Ok(SocketReady {
+                read: entry.recv_shutdown || super::icmp_socket_readable(socket),
+                write: !entry.send_shutdown,
+                hangup: entry.recv_shutdown,
+                ..SocketReady::default()
+            }),
         }
     }
 
@@ -444,7 +495,7 @@ impl SocketTable {
                     self.tcp.close(socket).map_err(map_tcp_error)?;
                     super::drive_tcp(&mut self.tcp);
                 }
-                SocketBackend::Udp(_) => {}
+                SocketBackend::Udp(_) | SocketBackend::Icmp(_) => {}
             }
         }
         Ok(())

@@ -22,6 +22,7 @@ struct sockaddr {
 
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
+#define SOCK_RAW 3
 
 #define SOL_SOCKET 1
 #define SO_REUSEADDR 2

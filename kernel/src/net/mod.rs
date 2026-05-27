@@ -44,6 +44,9 @@ pub struct EthernetFrame {
 pub struct SocketId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct IcmpSocketId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NetStats {
     pub rx_frames: usize,
     pub tx_frames: usize,
@@ -73,10 +76,20 @@ struct UdpSocket {
     inbox: Vec<UdpDatagram>,
 }
 
+struct IcmpSocket {
+    inbox: Vec<IcmpDatagram>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UdpDatagram {
     pub src: Ipv4Addr,
     pub src_port: u16,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IcmpDatagram {
+    pub src: Ipv4Addr,
     pub payload: Vec<u8>,
 }
 
@@ -86,6 +99,7 @@ struct NetworkStack {
     device: VirtioNetDriver,
     arp_cache: Vec<ArpEntry>,
     udp_sockets: Vec<UdpSocket>,
+    icmp_sockets: Vec<IcmpSocket>,
     tcp_inbox: Vec<tcp::TcpPacket>,
     rx_frames: usize,
     tx_frames: usize,
@@ -100,6 +114,7 @@ impl NetworkStack {
             device,
             arp_cache: Vec::new(),
             udp_sockets: Vec::new(),
+            icmp_sockets: Vec::new(),
             tcp_inbox: Vec::new(),
             rx_frames: 0,
             tx_frames: 0,
@@ -129,6 +144,19 @@ impl NetworkStack {
             return false;
         };
         socket.local_port = 0;
+        socket.inbox.clear();
+        true
+    }
+
+    fn open_icmp(&mut self) -> IcmpSocketId {
+        self.icmp_sockets.push(IcmpSocket { inbox: Vec::new() });
+        IcmpSocketId(self.icmp_sockets.len() - 1)
+    }
+
+    fn close_icmp(&mut self, socket: IcmpSocketId) -> bool {
+        let Some(socket) = self.icmp_sockets.get_mut(socket.0) else {
+            return false;
+        };
         socket.inbox.clear();
         true
     }
@@ -192,8 +220,33 @@ impl NetworkStack {
         true
     }
 
+    fn send_icmp(&mut self, socket: IcmpSocketId, dst_ip: Ipv4Addr, payload: &[u8]) -> bool {
+        if self.icmp_sockets.get(socket.0).is_none() || payload.len() < 4 {
+            return false;
+        }
+        if dst_ip.is_loopback() {
+            self.transmit_loopback_ipv4(dst_ip, IP_PROTO_ICMP, payload);
+            return true;
+        }
+
+        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
+            return false;
+        };
+        self.transmit_ipv4(dst_mac, dst_ip, IP_PROTO_ICMP, payload);
+        true
+    }
+
     fn recv_udp(&mut self, socket: SocketId) -> Option<UdpDatagram> {
         let inbox = &mut self.udp_sockets.get_mut(socket.0)?.inbox;
+        if inbox.is_empty() {
+            None
+        } else {
+            Some(inbox.remove(0))
+        }
+    }
+
+    fn recv_icmp(&mut self, socket: IcmpSocketId) -> Option<IcmpDatagram> {
+        let inbox = &mut self.icmp_sockets.get_mut(socket.0)?.inbox;
         if inbox.is_empty() {
             None
         } else {
@@ -286,15 +339,33 @@ impl NetworkStack {
     }
 
     fn handle_icmp(&mut self, dst_mac: MacAddr, packet: Ipv4Packet) {
-        if packet.payload.len() < 4 || packet.payload[0] != ICMP_ECHO_REQUEST {
+        if packet.payload.len() < 4 {
             return;
         }
 
-        let mut reply = Vec::new();
-        reply.push(ICMP_ECHO_REPLY);
-        reply.push(0);
-        reply.extend_from_slice(&packet.payload[2..]);
-        self.transmit_ipv4(dst_mac, packet.src, IP_PROTO_ICMP, &reply);
+        match packet.payload[0] {
+            ICMP_ECHO_REQUEST => {
+                let mut reply = packet.payload;
+                reply[0] = ICMP_ECHO_REPLY;
+                reply[1] = 0;
+                reply[2] = 0;
+                reply[3] = 0;
+                let checksum = internet_checksum(&reply);
+                reply[2] = (checksum >> 8) as u8;
+                reply[3] = (checksum & 0xff) as u8;
+                self.transmit_ipv4(dst_mac, packet.src, IP_PROTO_ICMP, &reply);
+            }
+            ICMP_ECHO_REPLY => {
+                for socket in &mut self.icmp_sockets {
+                    socket.inbox.push(IcmpDatagram {
+                        src: packet.src,
+                        payload: packet.payload.clone(),
+                    });
+                }
+                crate::process::wake_io_waiters();
+            }
+            _ => {}
+        }
     }
 
     fn handle_udp(&mut self, packet: Ipv4Packet) {
@@ -486,6 +557,52 @@ pub(crate) fn udp_socket_readable(socket: SocketId) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn icmp_socket_open() -> Option<IcmpSocketId> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    Some(stack.open_icmp())
+}
+
+pub(crate) fn icmp_socket_close(socket: IcmpSocketId) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    stack.close_icmp(socket)
+}
+
+pub(crate) fn icmp_socket_send(
+    socket: IcmpSocketId,
+    dst_ip: Ipv4Addr,
+    payload: &[u8],
+) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    stack.send_icmp(socket, dst_ip, payload)
+}
+
+pub(crate) fn icmp_socket_recv(socket: IcmpSocketId) -> Option<IcmpDatagram> {
+    let mut guard = NET_STACK.lock();
+    let stack = guard.as_mut()?;
+    stack.poll();
+    stack.recv_icmp(socket)
+}
+
+pub(crate) fn icmp_socket_readable(socket: IcmpSocketId) -> bool {
+    let mut guard = NET_STACK.lock();
+    let Some(stack) = guard.as_mut() else {
+        return false;
+    };
+    stack.poll();
+    stack
+        .icmp_sockets
+        .get(socket.0)
+        .map(|socket| !socket.inbox.is_empty())
+        .unwrap_or(false)
+}
+
 pub fn udp_send(socket: usize, dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> bool {
     let socket = SocketId(socket);
     let dst_ip = Ipv4Addr(dst_ip);
@@ -620,17 +737,24 @@ fn build_ipv4(protocol: u8, src: Ipv4Addr, dst: Ipv4Addr, body: &[u8]) -> Vec<u8
     packet
 }
 
-fn ipv4_checksum(header: &[u8]) -> u16 {
+fn internet_checksum(bytes: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut index = 0;
-    while index + 1 < header.len() {
-        sum += u32::from(u16::from_be_bytes([header[index], header[index + 1]]));
+    while index + 1 < bytes.len() {
+        sum += u32::from(u16::from_be_bytes([bytes[index], bytes[index + 1]]));
         index += 2;
+    }
+    if index < bytes.len() {
+        sum += u32::from(bytes[index]) << 8;
     }
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
     !sum as u16
+}
+
+fn ipv4_checksum(header: &[u8]) -> u16 {
+    internet_checksum(header)
 }
 
 fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {

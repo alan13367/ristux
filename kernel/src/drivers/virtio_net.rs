@@ -9,8 +9,11 @@ const VIRTIO_NET_MODERN: u16 = 0x1041;
 const MMIO_DEVICE_ID_NET: u32 = 0x01;
 const GATEWAY_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 2]);
 const GUEST_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
+const IP_PROTO_ICMP: u8 = 1;
 const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
+const ICMP_ECHO_REPLY: u8 = 0;
+const ICMP_ECHO_REQUEST: u8 = 8;
 const DNS_PORT: u16 = 53;
 
 pub struct VirtioNetDriver {
@@ -137,10 +140,34 @@ impl VirtioNetDriver {
         }
 
         match last.payload[9] {
+            IP_PROTO_ICMP => self.maybe_icmp_gateway_echo(&last, ihl, src_ip),
             IP_PROTO_UDP => self.maybe_udp_gateway_echo(&last, ihl, src_ip),
             IP_PROTO_TCP => self.maybe_tcp_gateway_echo(&last, ihl, src_ip, dst_ip),
             _ => {}
         }
+    }
+
+    fn maybe_icmp_gateway_echo(&mut self, frame: &EthernetFrame, ihl: usize, src_ip: Ipv4Addr) {
+        let request = &frame.payload[ihl..];
+        if request.len() < 8 || request[0] != ICMP_ECHO_REQUEST {
+            return;
+        }
+
+        let mut reply = Vec::from(request);
+        reply[0] = ICMP_ECHO_REPLY;
+        reply[1] = 0;
+        reply[2] = 0;
+        reply[3] = 0;
+        let checksum = internet_checksum(&reply);
+        reply[2] = (checksum >> 8) as u8;
+        reply[3] = (checksum & 0xff) as u8;
+        let reply_ip = build_ipv4(IP_PROTO_ICMP, GATEWAY_IP, src_ip, &reply);
+        self.rx_queue.push(EthernetFrame {
+            dst: frame.src,
+            src: frame.dst,
+            ethertype: 0x0800,
+            payload: reply_ip,
+        });
     }
 
     fn maybe_udp_gateway_echo(&mut self, frame: &EthernetFrame, ihl: usize, src_ip: Ipv4Addr) {
@@ -343,17 +370,24 @@ fn build_ipv4(protocol: u8, src: Ipv4Addr, dst: Ipv4Addr, body: &[u8]) -> Vec<u8
     packet
 }
 
-fn ipv4_checksum(header: &[u8]) -> u16 {
+fn internet_checksum(bytes: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut index = 0;
-    while index + 1 < header.len() {
-        sum += u32::from(u16::from_be_bytes([header[index], header[index + 1]]));
+    while index + 1 < bytes.len() {
+        sum += u32::from(u16::from_be_bytes([bytes[index], bytes[index + 1]]));
         index += 2;
+    }
+    if index < bytes.len() {
+        sum += u32::from(bytes[index]) << 8;
     }
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
     !sum as u16
+}
+
+fn ipv4_checksum(header: &[u8]) -> u16 {
+    internet_checksum(header)
 }
 
 fn read_mac(mmio: *mut u8) -> MacAddr {

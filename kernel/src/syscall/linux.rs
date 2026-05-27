@@ -120,6 +120,8 @@ const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const SOCK_DGRAM: i32 = 2;
+const SOCK_RAW: i32 = 3;
+const IPPROTO_ICMP: i32 = 1;
 const SOL_SOCKET: i32 = 1;
 const SO_REUSEADDR: i32 = 2;
 const SO_ERROR: i32 = 4;
@@ -1108,6 +1110,7 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
     let socket_type = match kind & 0xf {
         SOCK_STREAM => crate::net::socket::SocketType::Stream,
         SOCK_DGRAM => crate::net::socket::SocketType::Datagram,
+        SOCK_RAW if _protocol == IPPROTO_ICMP => crate::net::socket::SocketType::RawIcmp,
         _ => return Err(EINVAL),
     };
     let handle = crate::net::socket::with_sockets(|table| {
