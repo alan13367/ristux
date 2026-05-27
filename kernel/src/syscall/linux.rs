@@ -166,7 +166,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     }
 
     let result: Result<u64, i64> = match nr {
-        NR_write => linux_write(a0 as usize, a1 as usize, a2 as usize),
+        NR_write => linux_write(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_writev => linux_writev(a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
@@ -434,7 +434,45 @@ fn apply_linux_saved_frame(frame: &mut SyscallInterruptFrame, saved: &process::S
     frame.ss = saved.ss;
 }
 
-fn linux_write(fd: usize, buf: usize, len: usize) -> Result<u64, i64> {
+fn linux_write(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    buf: usize,
+    len: usize,
+) -> Result<u64, i64> {
+    if let Some(vfs_fd) = process::user_vfs_fd(fd) {
+        let nonblocking = process::user_fd_status_flags(fd)
+            .map(|flags| flags & O_NONBLOCK != 0)
+            .unwrap_or(false);
+        let mut total = 0usize;
+        loop {
+            let ptr = buf.checked_add(total).ok_or(EFAULT)?;
+            let bytes = process::read_user(ptr, len - total).ok_or(EFAULT)?;
+            match fs::write(vfs_fd, bytes) {
+                Ok(n) => {
+                    total += n;
+                    if total == len || n == 0 {
+                        return Ok(total as u64);
+                    }
+                }
+                Err(fs::vfs::VfsError::WouldBlock) => {
+                    if nonblocking || total > 0 {
+                        return if total > 0 {
+                            Ok(total as u64)
+                        } else {
+                            Err(EAGAIN)
+                        };
+                    }
+                    process::block_current(process::BlockReason::WaitIo);
+                    if !crate::syscall::yield_blocked(frame) {
+                        return Err(CONTEXT_SWITCHED);
+                    }
+                }
+                Err(_) => return if total > 0 { Ok(total as u64) } else { Err(EBADF) },
+            }
+        }
+    }
+
     let bytes = process::read_user(buf, len).ok_or(EFAULT)?;
     linux_write_bytes(fd, bytes).map(|written| written as u64)
 }

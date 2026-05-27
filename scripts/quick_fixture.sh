@@ -366,6 +366,42 @@ case "$SCENARIO" in
       "^  /usr/share/testdata/tinycc-project/Makefile$"
     )
     ;;
+  nativepkg)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "mkdir /tmp/nativepkg"
+      "cd /tmp/nativepkg"
+      "gzip -dc /usr/share/testdata/ristux-hello-0.1.tar.gz | tar -xf -"
+      "cd ristux-hello-0.1"
+      "make -s"
+      "build/ristux-hello one two"
+      "make -s install"
+      "/tmp/pkgroot/bin/ristux-hello installed"
+      "cat /tmp/pkgroot/share/doc/ristux-hello/README.txt"
+      "pkg info native-build-fixture"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: gzip -dc /usr/share/testdata/ristux-hello-0\\.1\\.tar\\.gz | tar -xf -"
+      "TTY canonical line ready: make -s"
+      "TTY canonical line ready: build/ristux-hello one two"
+      "^native package rebuilt by ristux$"
+      "^argc=3$"
+      "^arg\\[1\\]=one$"
+      "^arg\\[2\\]=two$"
+      "TTY canonical line ready: make -s install"
+      "TTY canonical line ready: /tmp/pkgroot/bin/ristux-hello installed"
+      "^argc=2$"
+      "^arg\\[1\\]=installed$"
+      "^ristux-hello is a tiny C package used to prove native source rebuilds\\.$"
+      "^name: native-build-fixture$"
+      "^  tcc$"
+      "^  make$"
+      "^  tar$"
+      "^  gzip$"
+      "^  install$"
+      "^  /usr/share/testdata/ristux-hello-0\\.1\\.tar\\.gz$"
+    )
+    ;;
   libc-dev)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1240,7 +1276,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

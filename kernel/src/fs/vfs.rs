@@ -1207,21 +1207,33 @@ impl Vfs {
             }
             OpenHandle::PipeRead { pipe } => {
                 let pipe = self.pipes.get_mut(*pipe).ok_or(VfsError::BadFd)?;
-                pipe.read(output)
+                let read = pipe.read(output)?;
+                if read > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(read)
             }
             OpenHandle::PtyMaster { pty, rights } => {
                 if !rights.read {
                     return Err(VfsError::BadFd);
                 }
                 let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
-                pty.read_master(output)
+                let read = pty.read_master(output)?;
+                if read > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(read)
             }
             OpenHandle::PtySlave { pty, rights } => {
                 if !rights.read {
                     return Err(VfsError::BadFd);
                 }
                 let pty = self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?;
-                pty.read_slave(output)
+                let read = pty.read_slave(output)?;
+                if read > 0 {
+                    crate::process::wake_io_waiters();
+                }
+                Ok(read)
             }
             OpenHandle::Ext2File { .. } => Err(VfsError::BadFd),
             OpenHandle::Ext2Dir { .. } => Err(VfsError::NotFile),
