@@ -52,6 +52,7 @@ struct ShellEnv {
     vars: Vec<EnvVar>,
     positionals: Vec<Vec<u8>>,
     loop_signal: Option<LoopSignal>,
+    return_status: Option<i32>,
     functions: Vec<FunctionDef>,
 }
 
@@ -92,6 +93,7 @@ impl ShellEnv {
             vars: Vec::new(),
             positionals: Vec::new(),
             loop_signal: None,
+            return_status: None,
             functions: Vec::new(),
         };
         if sys::getuid() == 0 {
@@ -215,6 +217,20 @@ fn cstr(s: &[u8]) -> Vec<u8> {
     v.extend_from_slice(s);
     v.push(0);
     v
+}
+
+fn parse_status(bytes: &[u8]) -> Option<i32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value = 0i32;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.saturating_mul(10).saturating_add((byte - b'0') as i32);
+    }
+    Some(value & 0xff)
 }
 
 fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
@@ -734,6 +750,9 @@ fn run_function(
     let mut status = last_status;
     let ok = execute_script_lines(&body, jobs, next_job_id, env, &mut status);
     env.positionals = saved_positionals;
+    if let Some(return_status) = env.return_status.take() {
+        return Some(return_status);
+    }
     if ok {
         Some(status)
     } else {
@@ -784,6 +803,19 @@ fn builtin(
             } else {
                 Some(1)
             }
+        }
+        b"return" => {
+            let status = if let Some(arg) = stage.argv.get(1) {
+                let Some(status) = parse_status(arg) else {
+                    let _ = sys::write(FD_STDERR, b"return: bad status\n");
+                    return Some(2);
+                };
+                status
+            } else {
+                last_status
+            };
+            env.return_status = Some(status);
+            Some(status)
         }
         b"export" => {
             if stage.argv.len() == 1 {
@@ -1513,7 +1545,7 @@ fn execute_script_lines(
                     ) {
                         return false;
                     }
-                    if env.loop_signal.is_some() {
+                    if env.loop_signal.is_some() || env.return_status.is_some() {
                         return true;
                     }
                 } else {
@@ -1530,7 +1562,7 @@ fn execute_script_lines(
                     ) {
                         return false;
                     }
-                    if env.loop_signal.is_some() {
+                    if env.loop_signal.is_some() || env.return_status.is_some() {
                         return true;
                     }
                 } else {
@@ -1576,6 +1608,9 @@ fn execute_script_lines(
                     last_status,
                 ) {
                     return false;
+                }
+                if env.return_status.is_some() {
+                    return true;
                 }
                 match env.loop_signal {
                     Some(LoopSignal::Break) => {
@@ -1624,6 +1659,9 @@ fn execute_script_lines(
                     last_status,
                 ) {
                     return false;
+                }
+                if env.return_status.is_some() {
+                    return true;
                 }
                 match env.loop_signal {
                     Some(LoopSignal::Break) => {
@@ -1683,7 +1721,7 @@ fn execute_script_lines(
                         ) {
                             return false;
                         }
-                        if env.loop_signal.is_some() {
+                        if env.loop_signal.is_some() || env.return_status.is_some() {
                             return true;
                         }
                     } else {
@@ -1724,7 +1762,7 @@ fn execute_script_lines(
             return false;
         }
         *last_status = run_line(line, jobs, next_job_id, env, *last_status);
-        if env.loop_signal.is_some() {
+        if env.loop_signal.is_some() || env.return_status.is_some() {
             return true;
         }
         index += 1;
@@ -1761,6 +1799,10 @@ fn run_script_file(
     }
     if !execute_script_lines(&lines, jobs, next_job_id, env, last_status) {
         return false;
+    }
+    if let Some(return_status) = env.return_status.take() {
+        *last_status = return_status;
+        return true;
     }
     match env.loop_signal.take() {
         Some(LoopSignal::Break) => {
@@ -1862,6 +1904,10 @@ fn main(args: &[&[u8]]) -> i32 {
                     continue;
                 }
                 last_status = run_line(&line, &mut jobs, &mut next_job_id, &mut env, last_status);
+                if env.return_status.take().is_some() {
+                    let _ = sys::write(FD_STDERR, b"sh: return outside function\n");
+                    last_status = 2;
+                }
             }
             None => {
                 let _ = sys::write(FD_STDOUT, b"\n");

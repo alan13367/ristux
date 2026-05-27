@@ -967,12 +967,22 @@ case "$SCENARIO" in
       "echo 'cd /tmp/shfunc/sub' >> funcs.sh"
       "echo 'echo here-\$1 > made.txt' >> funcs.sh"
       "echo R | tr R '\\175' >> funcs.sh"
+      "echo 'returner()' >> funcs.sh"
+      "echo L | tr L '\\173' >> funcs.sh"
+      "echo 'echo before-return' >> funcs.sh"
+      "echo 'VAR=return-kept' >> funcs.sh"
+      "echo 'return 7' >> funcs.sh"
+      "echo 'VAR=bad' >> funcs.sh"
+      "echo 'echo after-return' >> funcs.sh"
+      "echo R | tr R '\\175' >> funcs.sh"
       "VAR=start"
       ". /tmp/shfunc/funcs.sh"
       "greet alpha beta"
       "echo after-\$VAR"
       "twoline ok"
       "cat /tmp/shfunc/sub/made.txt"
+      "returner"
+      "echo rc-\$?-var-\$VAR"
     )
     EXPECTS=(
       "TTY canonical line ready: greet alpha beta"
@@ -980,6 +990,9 @@ case "$SCENARIO" in
       "^after-changed$"
       "TTY canonical line ready: twoline ok"
       "^here-ok$"
+      "TTY canonical line ready: returner"
+      "^before-return$"
+      "^rc-7-var-return-kept$"
     )
     ;;
   links)
