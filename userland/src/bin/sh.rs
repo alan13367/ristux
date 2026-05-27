@@ -59,6 +59,18 @@ struct LexToken {
     has_unquoted_glob: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ListOp {
+    Always,
+    And,
+    Or,
+}
+
+struct ListCommand {
+    op: ListOp,
+    bytes: Vec<u8>,
+}
+
 impl ShellEnv {
     fn new() -> Self {
         let mut env = Self { vars: Vec::new() };
@@ -147,6 +159,16 @@ fn cstr(s: &[u8]) -> Vec<u8> {
     v
 }
 
+fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
+    while bytes.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        bytes = &bytes[1..];
+    }
+    while bytes.last().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
+}
+
 fn read_line(fd: i32) -> Option<Vec<u8>> {
     let mut line: Vec<u8> = Vec::new();
     let mut buf = [0u8; 128];
@@ -192,6 +214,69 @@ fn read_file(path: &[u8]) -> Option<Vec<u8>> {
     }
     let _ = sys::close(fd as i32);
     Some(out)
+}
+
+fn push_list_command(out: &mut Vec<ListCommand>, cur: &mut Vec<u8>, op: ListOp) {
+    if !trim_ascii(cur).is_empty() {
+        out.push(ListCommand {
+            op,
+            bytes: core::mem::take(cur),
+        });
+    } else {
+        cur.clear();
+    }
+}
+
+fn split_command_list(line: &[u8]) -> Vec<ListCommand> {
+    let mut out: Vec<ListCommand> = Vec::new();
+    let mut cur: Vec<u8> = Vec::new();
+    let mut quote = 0u8;
+    let mut escaped = false;
+    let mut next_op = ListOp::Always;
+    let mut i = 0usize;
+    while i < line.len() {
+        let b = line[i];
+        if escaped {
+            cur.push(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' && quote != b'\'' {
+            cur.push(b);
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' if quote == 0 => {
+                quote = b;
+                cur.push(b);
+            }
+            b if quote == b => {
+                quote = 0;
+                cur.push(b);
+            }
+            b';' if quote == 0 => {
+                push_list_command(&mut out, &mut cur, next_op);
+                next_op = ListOp::Always;
+            }
+            b'&' if quote == 0 && i + 1 < line.len() && line[i + 1] == b'&' => {
+                push_list_command(&mut out, &mut cur, next_op);
+                next_op = ListOp::And;
+                i += 1;
+            }
+            b'|' if quote == 0 && i + 1 < line.len() && line[i + 1] == b'|' => {
+                push_list_command(&mut out, &mut cur, next_op);
+                next_op = ListOp::Or;
+                i += 1;
+            }
+            _ => cur.push(b),
+        }
+        i += 1;
+    }
+    push_list_command(&mut out, &mut cur, next_op);
+    out
 }
 
 fn split_pipeline(line: &[u8]) -> Vec<Vec<u8>> {
@@ -752,15 +837,14 @@ fn spawn_stage(
     sys::exit(127);
 }
 
-fn run_line(
+fn run_pipeline(
     line: &[u8],
     jobs: &mut Vec<Job>,
     next_job_id: &mut usize,
     env: &mut ShellEnv,
     last_status: i32,
 ) -> i32 {
-    let trimmed: Vec<u8> = line.iter().copied().filter(|b| *b != b'\r').collect();
-    let segments = split_pipeline(&trimmed);
+    let segments = split_pipeline(line);
 
     let stages: Vec<(Stage, bool)> = segments
         .iter()
@@ -815,7 +899,7 @@ fn run_line(
             jobs.push(Job {
                 id: *next_job_id,
                 pid,
-                command: trimmed.clone(),
+                command: line.to_vec(),
                 state: JobState::Running,
             });
             *next_job_id += 1;
@@ -848,7 +932,7 @@ fn run_line(
             jobs.push(Job {
                 id: *next_job_id,
                 pid,
-                command: trimmed.clone(),
+                command: line.to_vec(),
                 state: JobState::Stopped,
             });
             *next_job_id += 1;
@@ -859,6 +943,38 @@ fn run_line(
         return stopped_status(signal);
     }
     last_status
+}
+
+fn run_line(
+    line: &[u8],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: i32,
+) -> i32 {
+    let cleaned: Vec<u8> = line.iter().copied().filter(|b| *b != b'\r').collect();
+    let commands = split_command_list(&cleaned);
+    if commands.is_empty() {
+        return 0;
+    }
+
+    let mut status = last_status;
+    for command in commands {
+        match command.op {
+            ListOp::Always => {}
+            ListOp::And if status != 0 => continue,
+            ListOp::Or if status == 0 => continue,
+            ListOp::And | ListOp::Or => {}
+        }
+        status = run_pipeline(
+            trim_ascii(&command.bytes),
+            jobs,
+            next_job_id,
+            env,
+            status,
+        );
+    }
+    status
 }
 
 fn run_script_file(

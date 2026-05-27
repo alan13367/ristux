@@ -701,6 +701,32 @@ case "$SCENARIO" in
       "^script-done$"
     )
     ;;
+  shell-list)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shlist"
+      "cd /tmp/shlist"
+      "echo 'echo list-start > out.txt' > run.sh"
+      "echo 'false && echo bad-and >> out.txt' >> run.sh"
+      "echo 'true || echo bad-or >> out.txt' >> run.sh"
+      "echo 'false || echo or-ran >> out.txt' >> run.sh"
+      "echo 'true && echo and-ran >> out.txt' >> run.sh"
+      "echo 'false; echo status-\$? >> out.txt' >> run.sh"
+      "echo 'grep bad out.txt' >> run.sh"
+      "echo 'echo bad-status-\$?' >> run.sh"
+      "sh run.sh"
+      "cat out.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh run.sh"
+      "^bad-status-1$"
+      "TTY canonical line ready: cat out.txt"
+      "^list-start$"
+      "^or-ran$"
+      "^and-ran$"
+      "^status-1$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1474,7 +1500,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
