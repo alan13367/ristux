@@ -91,6 +91,77 @@ case "$SCENARIO" in
       "cc_fs: done"
     )
     ;;
+  kernel-prims)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "cc_fcntl"
+      "cc_cow"
+      "__wait 8"
+      "cc_mmap"
+      "cc_path"
+      "cc_poll"
+      "cc_select"
+      "cc_stack"
+      "cc_signal"
+      "cc_links"
+      "cc_proc"
+      "cc_procfs"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cc_fcntl"
+      "^cc_fcntl: nonblock ok$"
+      "^cc_fcntl: cloexec ok$"
+      "^cc_fcntl: done$"
+      "TTY canonical line ready: cc_cow"
+      "^cc_cow: fork storm ok$"
+      "^cc_cow: isolation ok$"
+      "^cc_cow: done$"
+      "TTY canonical line ready: cc_mmap"
+      "^cc_mmap: anonymous ok$"
+      "^cc_mmap: mprotect ok$"
+      "^cc_mmap: munmap ok$"
+      "^cc_mmap: file ok$"
+      "^cc_mmap: done$"
+      "TTY canonical line ready: cc_path"
+      "^cc_path: normalized io ok$"
+      "^cc_path: symlink ok$"
+      "^cc_path: done$"
+      "TTY canonical line ready: cc_poll"
+      "^cc_poll: stdin ok$"
+      "^cc_poll: pipe ok$"
+      "^cc_poll: invalid ok$"
+      "^cc_poll: done$"
+      "TTY canonical line ready: cc_select"
+      "^cc_select: pipe ok$"
+      "^cc_select: invalid ok$"
+      "^cc_select: done$"
+      "TTY canonical line ready: cc_stack"
+      "^cc_stack: growth ok$"
+      "^cc_stack: done$"
+      "TTY canonical line ready: cc_signal"
+      "^cc_signal: handler$"
+      "^cc_signal: after handler$"
+      "TTY canonical line ready: cc_links"
+      "^cc_links: hardlink ok$"
+      "^cc_links: symlink ok$"
+      "^cc_links: rename ok$"
+      "^cc_links: chown ok$"
+      "^cc_links: rmdir ok$"
+      "^cc_links: done$"
+      "TTY canonical line ready: cc_proc"
+      "^cc_proc: pipe exec ok$"
+      "^cc_proc: wait ok$"
+      "^cc_proc: done$"
+      "TTY canonical line ready: cc_procfs"
+      "^cc_procfs: dir ok$"
+      "^cc_procfs: mounts ok$"
+      "^cc_procfs: meminfo ok$"
+      "^cc_procfs: uptime ok$"
+      "^cc_procfs: stat ok$"
+      "^cc_procfs: self ok$"
+      "^cc_procfs: done$"
+    )
+    ;;
   passwd)
     COMMANDS=("cc_passwd")
     EXPECTS=(
@@ -1396,7 +1467,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
