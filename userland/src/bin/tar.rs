@@ -186,7 +186,10 @@ fn build_header(name: &[u8], size: usize, mode: usize, typeflag: u8) -> Option<[
 }
 
 fn name_from_header(header: &[u8; BLOCK]) -> Option<&[u8]> {
-    let end = header[..100].iter().position(|byte| *byte == 0).unwrap_or(100);
+    let end = header[..100]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(100);
     let name = trim_trailing_slash(&header[..end]);
     if safe_archive_path(name) {
         Some(name)
@@ -204,7 +207,14 @@ fn valid_checksum(header: &[u8; BLOCK]) -> bool {
 }
 
 fn padded_size(size: usize) -> Option<usize> {
-    size.checked_add(BLOCK - 1).map(|value| value & !(BLOCK - 1))
+    size.checked_add(BLOCK - 1)
+        .map(|value| value & !(BLOCK - 1))
+}
+
+fn close_if_owned(fd: i32, owned: bool) {
+    if owned {
+        let _ = sys::close(fd);
+    }
 }
 
 fn create_archive(archive: &[u8], files: &[&[u8]]) -> i32 {
@@ -212,44 +222,49 @@ fn create_archive(archive: &[u8], files: &[&[u8]]) -> i32 {
         let _ = sys::write(2, b"tar: no input files\n");
         return 1;
     }
-    let archive_c = cstr(archive);
-    let out = sys::open(archive_c.as_ptr(), O_WRONLY | O_CREAT | O_TRUNC, 0o644);
-    if out < 0 {
-        print_err(b"cannot create ", archive);
-        return 1;
-    }
+    let (out, close_out) = if archive == b"-" {
+        (1, false)
+    } else {
+        let archive_c = cstr(archive);
+        let out = sys::open(archive_c.as_ptr(), O_WRONLY | O_CREAT | O_TRUNC, 0o644);
+        if out < 0 {
+            print_err(b"cannot create ", archive);
+            return 1;
+        }
+        (out as i32, true)
+    };
     let zero = [0u8; BLOCK];
     for path in files {
         let Some(data) = read_file(path) else {
             print_err(b"cannot read ", path);
-            let _ = sys::close(out as i32);
+            close_if_owned(out, close_out);
             return 1;
         };
         let name = archive_name(path);
         if !safe_archive_path(name) {
             print_err(b"unsafe path ", path);
-            let _ = sys::close(out as i32);
+            close_if_owned(out, close_out);
             return 1;
         }
         let Some(header) = build_header(name, data.len(), 0o644, b'0') else {
             print_err(b"name too long ", path);
-            let _ = sys::close(out as i32);
+            close_if_owned(out, close_out);
             return 1;
         };
-        if !write_all(out as i32, &header) || !write_all(out as i32, &data) {
+        if !write_all(out, &header) || !write_all(out, &data) {
             print_err(b"write failed ", archive);
-            let _ = sys::close(out as i32);
+            close_if_owned(out, close_out);
             return 1;
         }
         let pad = (BLOCK - (data.len() % BLOCK)) % BLOCK;
-        if pad != 0 && !write_all(out as i32, &zero[..pad]) {
+        if pad != 0 && !write_all(out, &zero[..pad]) {
             print_err(b"write failed ", archive);
-            let _ = sys::close(out as i32);
+            close_if_owned(out, close_out);
             return 1;
         }
     }
-    let ok = write_all(out as i32, &zero) && write_all(out as i32, &zero);
-    let _ = sys::close(out as i32);
+    let ok = write_all(out, &zero) && write_all(out, &zero);
+    close_if_owned(out, close_out);
     if !ok {
         print_err(b"write failed ", archive);
         return 1;
@@ -270,7 +285,10 @@ fn chmod_path(path: &[u8], mode: u32) {
 
 fn ensure_parent_dirs(path: &[u8]) -> bool {
     let mut cur = Vec::new();
-    for part in path.split(|byte| *byte == b'/').take_while(|part| !part.is_empty()) {
+    for part in path
+        .split(|byte| *byte == b'/')
+        .take_while(|part| !part.is_empty())
+    {
         if cur.is_empty() {
             cur.extend_from_slice(part);
         } else {
@@ -310,17 +328,22 @@ fn skip_bytes(fd: i32, mut count: usize) -> bool {
 }
 
 fn walk_archive(archive: &[u8], extract: bool) -> i32 {
-    let archive_c = cstr(archive);
-    let fd = sys::open(archive_c.as_ptr(), O_RDONLY, 0);
-    if fd < 0 {
-        print_err(b"cannot open ", archive);
-        return 1;
-    }
+    let (fd, close_fd) = if archive == b"-" {
+        (0, false)
+    } else {
+        let archive_c = cstr(archive);
+        let fd = sys::open(archive_c.as_ptr(), O_RDONLY, 0);
+        if fd < 0 {
+            print_err(b"cannot open ", archive);
+            return 1;
+        }
+        (fd as i32, true)
+    };
     let mut header = [0u8; BLOCK];
     loop {
-        if !read_exact(fd as i32, &mut header) {
+        if !read_exact(fd, &mut header) {
             print_err(b"truncated archive ", archive);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         }
         if header.iter().all(|byte| *byte == 0) {
@@ -328,18 +351,18 @@ fn walk_archive(archive: &[u8], extract: bool) -> i32 {
         }
         if !valid_checksum(&header) {
             print_err(b"bad checksum in ", archive);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         }
         let Some(name) = name_from_header(&header) else {
             let _ = sys::write(2, b"tar: unsafe archive path\n");
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         };
         let size = parse_octal(&header[124..136]).unwrap_or(usize::MAX);
         let Some(padded) = padded_size(size) else {
             print_err(b"bad size in ", archive);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         };
         let mode = parse_octal(&header[100..108]).unwrap_or(0o644) as u32;
@@ -347,9 +370,9 @@ fn walk_archive(archive: &[u8], extract: bool) -> i32 {
         if !extract {
             let _ = sys::write(1, name);
             let _ = sys::write(1, b"\n");
-            if !skip_bytes(fd as i32, padded) {
+            if !skip_bytes(fd, padded) {
                 print_err(b"truncated archive ", archive);
-                let _ = sys::close(fd as i32);
+                close_if_owned(fd, close_fd);
                 return 1;
             }
             continue;
@@ -357,57 +380,57 @@ fn walk_archive(archive: &[u8], extract: bool) -> i32 {
         if typeflag == b'5' {
             if !mkdir_path(name, mode) {
                 print_err(b"cannot mkdir ", name);
-                let _ = sys::close(fd as i32);
+                close_if_owned(fd, close_fd);
                 return 1;
             }
-            if !skip_bytes(fd as i32, padded) {
+            if !skip_bytes(fd, padded) {
                 print_err(b"truncated archive ", archive);
-                let _ = sys::close(fd as i32);
+                close_if_owned(fd, close_fd);
                 return 1;
             }
             continue;
         }
         if typeflag != 0 && typeflag != b'0' {
-            if !skip_bytes(fd as i32, padded) {
+            if !skip_bytes(fd, padded) {
                 print_err(b"truncated archive ", archive);
-                let _ = sys::close(fd as i32);
+                close_if_owned(fd, close_fd);
                 return 1;
             }
             continue;
         }
         if !ensure_parent_dirs(name) {
             print_err(b"cannot create parent for ", name);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         }
         let name_c = cstr(name);
         let out = sys::open(name_c.as_ptr(), O_WRONLY | O_CREAT | O_TRUNC, mode);
         if out < 0 {
             print_err(b"cannot extract ", name);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         }
         let mut remaining = size;
         let mut buf = [0u8; BLOCK];
         while remaining > 0 {
             let n = remaining.min(buf.len());
-            if !read_exact(fd as i32, &mut buf[..n]) || !write_all(out as i32, &buf[..n]) {
+            if !read_exact(fd, &mut buf[..n]) || !write_all(out as i32, &buf[..n]) {
                 print_err(b"extract failed ", name);
                 let _ = sys::close(out as i32);
-                let _ = sys::close(fd as i32);
+                close_if_owned(fd, close_fd);
                 return 1;
             }
             remaining -= n;
         }
         let _ = sys::close(out as i32);
         chmod_path(name, mode);
-        if padded > size && !skip_bytes(fd as i32, padded - size) {
+        if padded > size && !skip_bytes(fd, padded - size) {
             print_err(b"truncated archive ", archive);
-            let _ = sys::close(fd as i32);
+            close_if_owned(fd, close_fd);
             return 1;
         }
     }
-    let _ = sys::close(fd as i32);
+    close_if_owned(fd, close_fd);
     0
 }
 
@@ -449,7 +472,10 @@ fn parse_options<'a>(args: &'a [&'a [u8]]) -> Option<Options<'a>> {
 
 fn main(args: &[&[u8]]) -> i32 {
     let Some(options) = parse_options(args) else {
-        let _ = sys::write(2, b"usage: tar -cf archive file... | tar -tf archive | tar -xf archive\n");
+        let _ = sys::write(
+            2,
+            b"usage: tar -cf archive file... | tar -tf archive | tar -xf archive\n",
+        );
         return 2;
     };
     match options.mode {

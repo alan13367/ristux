@@ -162,7 +162,7 @@ case "$SCENARIO" in
     )
     ;;
   tar)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-5}"
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
       "mkdir /tmp/tarcheck"
       "cd /tmp/tarcheck"
@@ -172,11 +172,22 @@ case "$SCENARIO" in
       "tar -tf archive.tar"
       "tar -xf archive.tar"
       "cat a.txt"
+      "echo beta > b.txt"
+      "tar -cf - b.txt > pipe.tar"
+      "rm b.txt"
+      "tar -tf pipe.tar"
+      "gzip -c pipe.tar > pipe.tar.gz"
+      "gzip -dc pipe.tar.gz | tar -xf -"
+      "cat b.txt"
     )
     EXPECTS=(
       "TTY canonical line ready: tar -cf archive.tar a.txt"
       "^a.txt$"
       "^alpha$"
+      "TTY canonical line ready: tar -cf - b.txt > pipe.tar"
+      "^b.txt$"
+      "TTY canonical line ready: gzip -dc pipe.tar.gz | tar -xf -"
+      "^beta$"
     )
     ;;
   pkg)
