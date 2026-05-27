@@ -21,10 +21,13 @@ int getchar(void);
 int puts(const char *s);
 int printf(const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);
+int sprintf(char *str, const char *fmt, ...);
+int vsprintf(char *str, const char *fmt, va_list ap);
 int fprintf(FILE *stream, const char *fmt, ...);
 int vfprintf(FILE *stream, const char *fmt, va_list ap);
 FILE *fopen(const char *path, const char *mode);
 FILE *fdopen(int fd, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
 int fclose(FILE *stream);
 int fflush(FILE *stream);
 int fileno(FILE *stream);
@@ -40,5 +43,6 @@ long ftell(FILE *stream);
 int snprintf(char *str, size_t size, const char *fmt, ...);
 int vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
 int rename(const char *oldpath, const char *newpath);
+int remove(const char *path);
 
 #endif

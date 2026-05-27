@@ -7,6 +7,7 @@
 #include <grp.h>
 #include <libgen.h>
 #include <limits.h>
+#include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -892,6 +893,51 @@ int execv(const char *path, char *const argv[]) {
     return execve(path, argv, environ);
 }
 
+int execvp(const char *file, char *const argv[]) {
+    if (file == NULL || file[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (strchr(file, '/') != NULL) {
+        return execve(file, argv, environ);
+    }
+
+    const char *path = getenv("PATH");
+    if (path == NULL || path[0] == '\0') {
+        path = "/bin";
+    }
+
+    char candidate[PATH_MAX];
+    const char *start = path;
+    int saw_access_denied = 0;
+    for (;;) {
+        const char *end = strchr(start, ':');
+        size_t dir_len = end != NULL ? (size_t)(end - start) : strlen(start);
+        if (dir_len == 0) {
+            dir_len = 1;
+            start = ".";
+        }
+        size_t file_len = strlen(file);
+        if (dir_len + 1 + file_len + 1 <= sizeof(candidate)) {
+            memcpy(candidate, start, dir_len);
+            candidate[dir_len] = '/';
+            memcpy(candidate + dir_len + 1, file, file_len + 1);
+            execve(candidate, argv, environ);
+            if (errno == EACCES) {
+                saw_access_denied = 1;
+            } else if (errno != ENOENT && errno != ENOTDIR) {
+                return -1;
+            }
+        }
+        if (end == NULL) {
+            break;
+        }
+        start = end + 1;
+    }
+    errno = saw_access_denied ? EACCES : ENOENT;
+    return -1;
+}
+
 pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
     return (pid_t)syscall_ret(syscall4(SYS_WAIT4, pid, (long)status, options, (long)rusage));
 }
@@ -1498,6 +1544,13 @@ int rename(const char *oldpath, const char *newpath) {
     return (int)syscall_ret(syscall2(SYS_RENAME, (long)oldpath, (long)newpath));
 }
 
+int remove(const char *path) {
+    if (unlink(path) == 0) {
+        return 0;
+    }
+    return rmdir(path);
+}
+
 int link(const char *oldpath, const char *newpath) {
     return (int)syscall_ret(syscall2(SYS_LINK, (long)oldpath, (long)newpath));
 }
@@ -1517,6 +1570,94 @@ int chown(const char *path, uid_t owner, gid_t group) {
 char *getcwd(char *buf, size_t size) {
     long ret = syscall_ret(syscall2(SYS_GETCWD, (long)buf, (long)size));
     return ret < 0 ? NULL : (char *)ret;
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    if (path == NULL || path[0] == '\0') {
+        errno = EINVAL;
+        return NULL;
+    }
+    char input[PATH_MAX];
+    if (path[0] == '/') {
+        if (strlen(path) >= sizeof(input)) {
+            errno = EINVAL;
+            return NULL;
+        }
+        strcpy(input, path);
+    } else {
+        if (getcwd(input, sizeof(input)) == NULL) {
+            return NULL;
+        }
+        size_t cwd_len = strlen(input);
+        size_t path_len = strlen(path);
+        if (cwd_len + 1 + path_len >= sizeof(input)) {
+            errno = EINVAL;
+            return NULL;
+        }
+        if (cwd_len > 1) {
+            input[cwd_len++] = '/';
+        }
+        memcpy(input + cwd_len, path, path_len + 1);
+    }
+
+    char normalized[PATH_MAX];
+    size_t out = 0;
+    normalized[out++] = '/';
+    size_t index = 0;
+    while (input[index] != '\0') {
+        while (input[index] == '/') {
+            index++;
+        }
+        size_t start = index;
+        while (input[index] != '\0' && input[index] != '/') {
+            index++;
+        }
+        size_t len = index - start;
+        if (len == 0 || (len == 1 && input[start] == '.')) {
+            continue;
+        }
+        if (len == 2 && input[start] == '.' && input[start + 1] == '.') {
+            if (out > 1) {
+                out--;
+                while (out > 1 && normalized[out - 1] != '/') {
+                    out--;
+                }
+                if (out > 1 && normalized[out - 1] == '/') {
+                    out--;
+                }
+            }
+            continue;
+        }
+        if (out > 1) {
+            if (out + 1 >= sizeof(normalized)) {
+                errno = EINVAL;
+                return NULL;
+            }
+            normalized[out++] = '/';
+        }
+        if (out + len >= sizeof(normalized)) {
+            errno = EINVAL;
+            return NULL;
+        }
+        memcpy(normalized + out, input + start, len);
+        out += len;
+    }
+    normalized[out] = '\0';
+
+    if (access(normalized, F_OK) < 0) {
+        return NULL;
+    }
+
+    char *target = resolved_path;
+    if (target == NULL) {
+        target = malloc(PATH_MAX);
+        if (target == NULL) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+    strcpy(target, normalized);
+    return target;
 }
 
 int stat(const char *path, struct stat *buf) {
@@ -2069,6 +2210,62 @@ unsigned long strtoul(const char *nptr, char **endptr, int base) {
     return neg ? (unsigned long)(-value) : value;
 }
 
+unsigned long long strtoull(const char *nptr, char **endptr, int base) {
+    const char *p = nptr;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+        neg = *p == '-';
+        p++;
+    }
+    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    } else if (base == 0 && *p == '0') {
+        base = 8;
+    } else if (base == 0) {
+        base = 10;
+    }
+    if (base < 2 || base > 36) {
+        if (endptr != NULL) {
+            *endptr = (char *)nptr;
+        }
+        errno = EINVAL;
+        return 0;
+    }
+
+    unsigned long long value = 0;
+    int any = 0;
+    for (;;) {
+        int digit = digit_value((unsigned char)*p);
+        if (digit < 0 || digit >= base) {
+            break;
+        }
+        any = 1;
+        if (value > (ULLONG_MAX - (unsigned long long)digit) / (unsigned long long)base) {
+            errno = ERANGE;
+            value = ULLONG_MAX;
+            p++;
+            while (digit_value((unsigned char)*p) >= 0 &&
+                   digit_value((unsigned char)*p) < base) {
+                p++;
+            }
+            break;
+        }
+        value = value * (unsigned long long)base + (unsigned long long)digit;
+        p++;
+    }
+    if (!any) {
+        p = nptr;
+    }
+    if (endptr != NULL) {
+        *endptr = (char *)p;
+    }
+    return neg ? (unsigned long long)(-value) : value;
+}
+
 long strtol(const char *nptr, char **endptr, int base) {
     const char *p = nptr;
     while (isspace((unsigned char)*p)) {
@@ -2101,8 +2298,163 @@ long strtol(const char *nptr, char **endptr, int base) {
     return (long)value;
 }
 
+long long strtoll(const char *nptr, char **endptr, int base) {
+    const char *p = nptr;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+        neg = *p == '-';
+        p++;
+    }
+    char *local_end = NULL;
+    unsigned long long value = strtoull(p, &local_end, base);
+    if (endptr != NULL) {
+        *endptr = local_end == p ? (char *)nptr : local_end;
+    }
+    if (neg) {
+        if (value > (unsigned long long)LLONG_MAX + 1ULL) {
+            errno = ERANGE;
+            return LLONG_MIN;
+        }
+        if (value == (unsigned long long)LLONG_MAX + 1ULL) {
+            return LLONG_MIN;
+        }
+        return -(long long)value;
+    }
+    if (value > (unsigned long long)LLONG_MAX) {
+        errno = ERANGE;
+        return LLONG_MAX;
+    }
+    return (long long)value;
+}
+
 int atoi(const char *nptr) {
     return (int)strtol(nptr, NULL, 10);
+}
+
+long double ldexpl(long double x, int exp) {
+    if (exp > 0) {
+        while (exp-- > 0) {
+            x *= 2.0L;
+        }
+    } else {
+        while (exp++ < 0) {
+            x *= 0.5L;
+        }
+    }
+    return x;
+}
+
+static long double parse_decimal_float(const char *nptr, char **endptr) {
+    const char *p = nptr;
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+        neg = *p == '-';
+        p++;
+    }
+
+    long double value = 0.0L;
+    int any = 0;
+    while (isdigit((unsigned char)*p)) {
+        any = 1;
+        value = value * 10.0L + (long double)(*p - '0');
+        p++;
+    }
+    if (*p == '.') {
+        p++;
+        long double place = 0.1L;
+        while (isdigit((unsigned char)*p)) {
+            any = 1;
+            value += (long double)(*p - '0') * place;
+            place *= 0.1L;
+            p++;
+        }
+    }
+    if (!any) {
+        if (endptr != NULL) {
+            *endptr = (char *)nptr;
+        }
+        return 0.0L;
+    }
+
+    if (*p == 'e' || *p == 'E') {
+        const char *exp_start = p;
+        p++;
+        int exp_neg = 0;
+        if (*p == '+' || *p == '-') {
+            exp_neg = *p == '-';
+            p++;
+        }
+        int exp = 0;
+        int exp_any = 0;
+        while (isdigit((unsigned char)*p)) {
+            exp_any = 1;
+            if (exp < 10000) {
+                exp = exp * 10 + (*p - '0');
+            }
+            p++;
+        }
+        if (exp_any) {
+            if (exp_neg) {
+                exp = -exp;
+            }
+            if (exp > 0) {
+                while (exp-- > 0) {
+                    value *= 10.0L;
+                }
+            } else {
+                while (exp++ < 0) {
+                    value *= 0.1L;
+                }
+            }
+        } else {
+            p = exp_start;
+        }
+    }
+    if (endptr != NULL) {
+        *endptr = (char *)p;
+    }
+    return neg ? -value : value;
+}
+
+double strtod(const char *nptr, char **endptr) {
+    return (double)parse_decimal_float(nptr, endptr);
+}
+
+float strtof(const char *nptr, char **endptr) {
+    return (float)parse_decimal_float(nptr, endptr);
+}
+
+long double strtold(const char *nptr, char **endptr) {
+    return parse_decimal_float(nptr, endptr);
+}
+
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    if (base == NULL || compar == NULL || size == 0 || nmemb < 2) {
+        return;
+    }
+    unsigned char *bytes = base;
+    for (size_t i = 1; i < nmemb; i++) {
+        size_t j = i;
+        while (j > 0) {
+            unsigned char *left = bytes + (j - 1) * size;
+            unsigned char *right = bytes + j * size;
+            if (compar(left, right) <= 0) {
+                break;
+            }
+            for (size_t k = 0; k < size; k++) {
+                unsigned char tmp = left[k];
+                left[k] = right[k];
+                right[k] = tmp;
+            }
+            j--;
+        }
+    }
 }
 
 void *memcpy(void *dst, const void *src, size_t n) {
@@ -2220,6 +2572,11 @@ char *strncpy(char *dst, const char *src, size_t n) {
     return dst;
 }
 
+char *strcat(char *dst, const char *src) {
+    strcpy(dst + strlen(dst), src);
+    return dst;
+}
+
 char *strchr(const char *s, int ch) {
     while (*s != '\0') {
         if (*s == (char)ch) {
@@ -2238,6 +2595,36 @@ char *strrchr(const char *s, int ch) {
         }
     } while (*s++ != '\0');
     return (char *)last;
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    if (s == NULL || accept == NULL) {
+        return NULL;
+    }
+    for (; *s != '\0'; s++) {
+        for (const char *a = accept; *a != '\0'; a++) {
+            if (*s == *a) {
+                return (char *)s;
+            }
+        }
+    }
+    return NULL;
+}
+
+char *strstr(const char *haystack, const char *needle) {
+    if (haystack == NULL || needle == NULL) {
+        return NULL;
+    }
+    if (*needle == '\0') {
+        return (char *)haystack;
+    }
+    size_t needle_len = strlen(needle);
+    for (; *haystack != '\0'; haystack++) {
+        if (*haystack == *needle && strncmp(haystack, needle, needle_len) == 0) {
+            return (char *)haystack;
+        }
+    }
+    return NULL;
 }
 
 char *strdup(const char *s) {
@@ -2630,6 +3017,18 @@ int snprintf(char *str, size_t size, const char *fmt, ...) {
     return ret;
 }
 
+int vsprintf(char *str, const char *fmt, va_list ap) {
+    return vsnprintf(str, (size_t)-1, fmt, ap);
+}
+
+int sprintf(char *str, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsprintf(str, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
 int vfprintf(FILE *stream, const char *fmt, va_list ap) {
     if (stream == NULL) {
         errno = EBADF;
@@ -2708,6 +3107,27 @@ FILE *fopen(const char *path, const char *mode) {
         close(fd);
         return NULL;
     }
+    return stream;
+}
+
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+    if (stream == NULL) {
+        errno = EBADF;
+        return NULL;
+    }
+    int flags = stdio_mode_flags(mode);
+    if (flags < 0) {
+        return NULL;
+    }
+    int fd = open(path, flags, 0644);
+    if (fd < 0) {
+        return NULL;
+    }
+    if (stream->owned || stream == stdin || stream == stdout || stream == stderr) {
+        close(stream->fd);
+    }
+    stream->fd = fd;
+    stream->owned = 1;
     return stream;
 }
 

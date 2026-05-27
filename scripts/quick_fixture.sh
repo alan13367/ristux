@@ -126,6 +126,23 @@ case "$SCENARIO" in
       "cc_libc_compat: done"
     )
     ;;
+  libc-hosted)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "cc_libc_hosted"
+      "pkg info cc_libc_hosted"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cc_libc_hosted"
+      "^cc_libc_hosted: parse math ok$"
+      "^cc_libc_hosted: sort string format ok$"
+      "^cc_libc_hosted: stdio paths ok$"
+      "^cc_libc_hosted: execvp ok$"
+      "^cc_libc_hosted: done$"
+      "^name: cc_libc_hosted$"
+      "^  /bin/cc_libc_hosted$"
+    )
+    ;;
   sse)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1167,7 +1184,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
