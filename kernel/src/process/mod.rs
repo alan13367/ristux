@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::{cmp, ptr, slice};
 
 use crate::{
@@ -62,6 +62,7 @@ pub struct Process {
     pub cwd: String,
     pub pgrp: Pid,
     pub sid: Pid,
+    controlling_tty: Option<ControllingTty>,
     pub pending_signals: u64,
     pending_signal_status: Option<i32>,
     pub signal_mask: u64,
@@ -85,6 +86,12 @@ pub struct Process {
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
     fpu_state: fpu::FpuState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ControllingTty {
+    Console,
+    Pty(usize),
 }
 
 /// Saved register frame for resuming a blocked syscall (mirrors SyscallInterruptFrame).
@@ -135,6 +142,7 @@ impl Process {
             cwd: String::from("/"),
             pgrp: pid,
             sid: parent.unwrap_or(pid),
+            controlling_tty: Some(ControllingTty::Console),
             pending_signals: 0,
             pending_signal_status: None,
             signal_mask: 0,
@@ -747,6 +755,7 @@ impl Process {
             cwd: self.cwd.clone(),
             pgrp: self.pgrp,
             sid: self.sid,
+            controlling_tty: self.controlling_tty,
             pending_signals: self.pending_signals,
             pending_signal_status: None,
             signal_mask: self.signal_mask,
@@ -964,8 +973,25 @@ pub fn setsid_current() -> Option<Pid> {
         }
         process.sid = process.pid;
         process.pgrp = process.pid;
+        process.controlling_tty = None;
         Some(process.sid)
     })
+}
+
+pub fn detach_current_controlling_tty() -> bool {
+    with_current(|process| {
+        process.controlling_tty = None;
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn set_current_controlling_pty(pty: usize) -> bool {
+    with_current(|process| {
+        process.controlling_tty = Some(ControllingTty::Pty(pty));
+        true
+    })
+    .unwrap_or(false)
 }
 
 pub fn set_pgid(pid: Pid, pgid: Pid) -> bool {
@@ -1163,13 +1189,25 @@ fn resolve_process_path(process: &Process, path: &str) -> Result<String, fs::vfs
     normalize_process_path(&combined)
 }
 
+fn resolve_open_path(process: &Process, path: &str) -> Result<String, fs::vfs::VfsError> {
+    let path = resolve_process_path(process, path)?;
+    if path != "/dev/tty" {
+        return Ok(path);
+    }
+    match process.controlling_tty {
+        Some(ControllingTty::Console) => Ok(String::from("/dev/tty")),
+        Some(ControllingTty::Pty(pty)) => Ok(format!("/dev/pts/{}", pty)),
+        None => Err(fs::vfs::VfsError::NotFound),
+    }
+}
+
 pub fn resolve_current_path(path: &str) -> Result<String, fs::vfs::VfsError> {
     with_current_read(|p| resolve_process_path(p, path)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
-        let path = resolve_process_path(p, path)?;
+        let path = resolve_open_path(p, path)?;
         let vfs_fd = fs::open_read_as(&path, p.credentials)?;
         Ok(p.push_fd(vfs_fd))
     })
@@ -1188,7 +1226,7 @@ pub fn user_open_options(
     create_mode: u16,
 ) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
-        let path = resolve_process_path(p, path)?;
+        let path = resolve_open_path(p, path)?;
         let create_mode = create_mode & !p.umask & 0o7777;
         let vfs_fd = if create {
             match fs::open_with_rights_as(&path, p.credentials, read, write) {

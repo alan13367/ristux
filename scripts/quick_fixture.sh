@@ -1253,12 +1253,14 @@ case "$SCENARIO" in
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
     COMMANDS=(
       "dropbear -F -E -R -B -p 127.0.0.1:2222 &"
-      "dbclient -y -y -t -p 2222 -l root 127.0.0.1 echo ssh_session_check"
+      "dbclient -y -y -t -p 2222 -l root 127.0.0.1"
+      "echo ssh_session_check"
+      "exit"
     )
     EXPECTS=(
       "TTY canonical line ready: dropbear -F -E -R -B -p 127.0.0.1:2222 &"
-      "TTY canonical line ready: dbclient -y -y -t -p 2222 -l root 127.0.0.1 echo ssh_session_check"
-      "ssh_session_check"
+      "TTY canonical line ready: dbclient -y -y -t -p 2222 -l root 127.0.0.1"
+      "^ssh_session_check$"
     )
     ;;
   command)

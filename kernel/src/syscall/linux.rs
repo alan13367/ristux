@@ -1946,8 +1946,10 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const TCSETS: u64 = 0x5402;
     const TCSETSW: u64 = 0x5403;
     const TCSETSF: u64 = 0x5404;
+    const TIOCSCTTY: u64 = 0x540e;
     const TIOCGPGRP: u64 = 0x540f;
     const TIOCSPGRP: u64 = 0x5410;
+    const TIOCNOTTY: u64 = 0x5422;
     const TIOCGWINSZ: u64 = 0x5413;
     const TIOCSWINSZ: u64 = 0x5414;
     const TIOCGPTN: u64 = 0x8004_5430;
@@ -1969,6 +1971,22 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             let input = process::read_user(argp, 4).ok_or(EFAULT)?;
             let locked = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) != 0;
             fs::set_pty_locked(vfs_fd, locked).map_err(|_| ENOTTY)?;
+            Ok(0)
+        }
+        TIOCSCTTY => {
+            let number = fs::pty_number(vfs_fd).ok_or(ENOTTY)?;
+            if !process::set_current_controlling_pty(number) {
+                return Err(ESRCH);
+            }
+            Ok(0)
+        }
+        TIOCNOTTY => {
+            if !is_tty {
+                return Err(ENOTTY);
+            }
+            if !process::detach_current_controlling_tty() {
+                return Err(ESRCH);
+            }
             Ok(0)
         }
         TIOCGPGRP => {
