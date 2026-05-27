@@ -92,6 +92,7 @@ file /bin/uniq ../build/userland/uniq.elf
 file /bin/wc ../build/userland/wc.elf
 file /bin/which ../build/userland/which.elf
 file /bin/xargs ../build/userland/xargs.elf
+file /bin/yes ../build/userland/yes.elf
 file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
 file /usr/lib/pkgconfig/libc.pc usr/lib/pkgconfig/libc.pc
@@ -202,5 +203,6 @@ package uniq 0.1.0 /bin/uniq
 package wc 0.1.0 /bin/wc
 package which 0.1.0 /bin/which
 package xargs 0.1.0 /bin/xargs
+package yes 0.1.0 /bin/yes
 package libc-pc 0.1.0 /usr/lib/pkgconfig/libc.pc deps=libc
 package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/true
