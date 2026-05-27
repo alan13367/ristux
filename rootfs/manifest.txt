@@ -7,6 +7,7 @@ file /bin/ar ../build/userland/ar.elf
 file /bin/basename ../build/userland/basename.elf
 file /bin/cat ../build/userland/cat.elf
 file /bin/chmod ../build/userland/chmod.elf
+file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
 file /bin/cut ../build/userland/cut.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
@@ -132,6 +133,7 @@ package cc_tcp 0.1.0 /bin/cc_tcp
 package cc_tty 0.1.0 /bin/cc_tty
 package cc_uio 0.1.0 /bin/cc_uio
 package chmod 0.1.0 /bin/chmod
+package cmp 0.1.0 /bin/cmp
 package cp 0.1.0 /bin/cp
 package cut 0.1.0 /bin/cut
 package curl_lite 0.1.0 /bin/curl_lite

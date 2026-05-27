@@ -795,6 +795,28 @@ case "$SCENARIO" in
       "^  /bin/which$"
     )
     ;;
+  cmp)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/cmpcheck"
+      "cd /tmp/cmpcheck"
+      "echo alpha > a.txt"
+      "echo alpha > b.txt"
+      "echo alpine > c.txt"
+      "cmp a.txt b.txt"
+      "cmp a.txt c.txt"
+      "cmp -s a.txt c.txt"
+      "pkg info cmp"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cmp a.txt b.txt"
+      "TTY canonical line ready: cmp a.txt c.txt"
+      "^a.txt c.txt differ: byte 4, line 1$"
+      "TTY canonical line ready: cmp -s a.txt c.txt"
+      "^name: cmp$"
+      "^  /bin/cmp$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -847,7 +869,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
