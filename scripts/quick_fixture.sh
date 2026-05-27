@@ -225,6 +225,39 @@ case "$SCENARIO" in
       "cc_session: done"
     )
     ;;
+  job-control)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "sleep 60 &"
+      "jobs"
+      "fg"
+      "__sendkey ctrl-c"
+      "echo after ctrlc"
+      "sleep 60"
+      "__sendkey ctrl-z"
+      "jobs"
+      "bg"
+      "fg"
+      "__sendkey ctrl-c"
+      "echo after ctrlz"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sleep 60 &"
+      "\\[[0-9]\\] Running sleep 60 &"
+      "TTY canonical line ready: jobs"
+      "TTY canonical line ready: fg"
+      "TTY delivered signal 2 to foreground pgrp"
+      "TTY canonical line ready: echo after ctrlc"
+      "^after ctrlc$"
+      "TTY canonical line ready: sleep 60"
+      "TTY delivered signal 20 to foreground pgrp"
+      "\\[[0-9]\\] Stopped sleep 60"
+      "TTY canonical line ready: bg"
+      "\\[[0-9]\\] Running sleep 60"
+      "TTY canonical line ready: echo after ctrlz"
+      "^after ctrlz$"
+    )
+    ;;
   socket)
     COMMANDS=("cc_socket")
     EXPECTS=(
@@ -1340,7 +1373,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -1389,6 +1422,25 @@ send_text() {
     esac
     sleep "$KEY_DELAY"
   done
+}
+
+send_command() {
+  local command="$1"
+  case "$command" in
+    "__sendkey "*)
+      printf 'sendkey %s\n' "${command#__sendkey }"
+      ;;
+    "__wait "*)
+      sleep "${command#__wait }"
+      return
+      ;;
+    *)
+      send_text "$command"
+      sleep 0.5
+      printf 'sendkey ret\n'
+      ;;
+  esac
+  sleep "$COMMAND_WAIT"
 }
 
 normalize_serial_noise() {
@@ -1443,10 +1495,7 @@ if [[ "$SCENARIO" == "ext2-reboot" ]]; then
     printf 'sendkey ret\n'
     sleep 2
     for command in "${COMMANDS[@]}"; do
-      send_text "$command"
-      sleep 0.5
-      printf 'sendkey ret\n'
-      sleep "$COMMAND_WAIT"
+      send_command "$command"
     done
     printf 'quit\n'
   ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
@@ -1528,10 +1577,7 @@ fi
   printf 'sendkey ret\n'
   sleep 2
   for command in "${COMMANDS[@]}"; do
-    send_text "$command"
-    sleep 0.5
-    printf 'sendkey ret\n'
-    sleep "$COMMAND_WAIT"
+    send_command "$command"
   done
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
