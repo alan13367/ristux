@@ -771,6 +771,43 @@ case "$SCENARIO" in
       "^cargs-runner-alpha-1$"
     )
     ;;
+  shell-if)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shif"
+      "cd /tmp/shif"
+      "echo 'if test \$1 = one' > flow.sh"
+      "echo 'then' >> flow.sh"
+      "echo 'echo then-\$1' >> flow.sh"
+      "echo 'else' >> flow.sh"
+      "echo 'echo else-\$1' >> flow.sh"
+      "echo 'fi' >> flow.sh"
+      "echo 'if false; then' >> flow.sh"
+      "echo 'echo bad-if' >> flow.sh"
+      "echo 'else' >> flow.sh"
+      "echo 'echo else-ran' >> flow.sh"
+      "echo 'fi' >> flow.sh"
+      "echo 'if true' >> flow.sh"
+      "echo 'then' >> flow.sh"
+      "echo 'if false' >> flow.sh"
+      "echo 'then' >> flow.sh"
+      "echo 'echo nested-bad' >> flow.sh"
+      "echo 'else' >> flow.sh"
+      "echo 'echo nested-ok' >> flow.sh"
+      "echo 'fi' >> flow.sh"
+      "echo 'fi' >> flow.sh"
+      "sh flow.sh one"
+      "sh flow.sh two"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh flow.sh one"
+      "^then-one$"
+      "^else-ran$"
+      "^nested-ok$"
+      "TTY canonical line ready: sh flow.sh two"
+      "^else-two$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1544,7 +1581,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

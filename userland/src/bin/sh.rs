@@ -1009,6 +1009,148 @@ fn run_line(
     status
 }
 
+fn is_if_start(line: &[u8]) -> bool {
+    line == b"if"
+        || line
+            .strip_prefix(b"if")
+            .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
+}
+
+fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
+    line = trim_ascii(line);
+    if line.len() < 4 || &line[line.len() - 4..] != b"then" {
+        return (line, false);
+    }
+    let before_then = &line[..line.len() - 4];
+    if before_then
+        .last()
+        .is_none_or(|byte| !byte.is_ascii_whitespace())
+    {
+        return (line, false);
+    }
+    let mut condition = trim_ascii(before_then);
+    if condition.ends_with(b";") {
+        condition = trim_ascii(&condition[..condition.len() - 1]);
+    }
+    (condition, true)
+}
+
+fn parse_if_condition(line: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let rest = line.strip_prefix(b"if")?;
+    if !rest.is_empty() && !rest.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+    let (condition, has_then) = strip_trailing_then(rest);
+    if condition.is_empty() {
+        None
+    } else {
+        Some((condition.to_vec(), has_then))
+    }
+}
+
+fn find_if_bounds(
+    lines: &[Vec<u8>],
+    body_start: usize,
+) -> Option<(Option<usize>, usize)> {
+    let mut depth = 0usize;
+    let mut else_index = None;
+    let mut index = body_start;
+    while index < lines.len() {
+        let line = trim_ascii(&lines[index]);
+        if is_if_start(line) {
+            depth += 1;
+        } else if line == b"fi" {
+            if depth == 0 {
+                return Some((else_index, index));
+            }
+            depth -= 1;
+        } else if line == b"else" && depth == 0 && else_index.is_none() {
+            else_index = Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn execute_script_lines(
+    lines: &[Vec<u8>],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: &mut i32,
+) -> bool {
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = trim_ascii(&lines[index]);
+        if is_if_start(line) {
+            let Some((condition, inline_then)) = parse_if_condition(line) else {
+                let _ = sys::write(FD_STDERR, b"sh: syntax error in if\n");
+                *last_status = 2;
+                return false;
+            };
+            let mut body_start = index + 1;
+            if !inline_then {
+                if body_start >= lines.len() || trim_ascii(&lines[body_start]) != b"then" {
+                    let _ = sys::write(FD_STDERR, b"sh: expected then\n");
+                    *last_status = 2;
+                    return false;
+                }
+                body_start += 1;
+            }
+            let Some((else_index, fi_index)) = find_if_bounds(lines, body_start) else {
+                let _ = sys::write(FD_STDERR, b"sh: expected fi\n");
+                *last_status = 2;
+                return false;
+            };
+
+            let condition_status = run_line(&condition, jobs, next_job_id, env, *last_status);
+            if condition_status == 0 {
+                let end = else_index.unwrap_or(fi_index);
+                if body_start < end {
+                    if !execute_script_lines(
+                        &lines[body_start..end],
+                        jobs,
+                        next_job_id,
+                        env,
+                        last_status,
+                    ) {
+                        return false;
+                    }
+                } else {
+                    *last_status = 0;
+                }
+            } else if let Some(else_index) = else_index {
+                if else_index + 1 < fi_index {
+                    if !execute_script_lines(
+                        &lines[else_index + 1..fi_index],
+                        jobs,
+                        next_job_id,
+                        env,
+                        last_status,
+                    ) {
+                        return false;
+                    }
+                } else {
+                    *last_status = 0;
+                }
+            } else {
+                *last_status = 0;
+            }
+            index = fi_index + 1;
+            continue;
+        }
+
+        if line == b"then" || line == b"else" || line == b"fi" {
+            let _ = sys::write(FD_STDERR, b"sh: unexpected control word\n");
+            *last_status = 2;
+            return false;
+        }
+        *last_status = run_line(line, jobs, next_job_id, env, *last_status);
+        index += 1;
+    }
+    true
+}
+
 fn run_script_file(
     path: &[u8],
     jobs: &mut Vec<Job>,
@@ -1019,6 +1161,7 @@ fn run_script_file(
     let Some(data) = read_file(path) else {
         return false;
     };
+    let mut lines: Vec<Vec<u8>> = Vec::new();
     for raw in data.split(|byte| *byte == b'\n') {
         let line = raw
             .iter()
@@ -1033,9 +1176,9 @@ fn run_script_file(
         if trimmed.is_empty() || trimmed.starts_with(b"#") {
             continue;
         }
-        *last_status = run_line(trimmed, jobs, next_job_id, env, *last_status);
+        lines.push(trimmed.to_vec());
     }
-    true
+    execute_script_lines(&lines, jobs, next_job_id, env, last_status)
 }
 
 fn run_profile(
