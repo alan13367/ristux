@@ -1016,6 +1016,13 @@ fn is_if_start(line: &[u8]) -> bool {
             .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
 }
 
+fn is_for_start(line: &[u8]) -> bool {
+    line == b"for"
+        || line
+            .strip_prefix(b"for")
+            .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
+}
+
 fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
     line = trim_ascii(line);
     if line.len() < 4 || &line[line.len() - 4..] != b"then" {
@@ -1035,6 +1042,25 @@ fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
     (condition, true)
 }
 
+fn strip_trailing_do(mut line: &[u8]) -> (&[u8], bool) {
+    line = trim_ascii(line);
+    if line.len() < 2 || &line[line.len() - 2..] != b"do" {
+        return (line, false);
+    }
+    let before_do = &line[..line.len() - 2];
+    if before_do
+        .last()
+        .is_none_or(|byte| !byte.is_ascii_whitespace())
+    {
+        return (line, false);
+    }
+    let mut words = trim_ascii(before_do);
+    if words.ends_with(b";") {
+        words = trim_ascii(&words[..words.len() - 1]);
+    }
+    (words, true)
+}
+
 fn parse_if_condition(line: &[u8]) -> Option<(Vec<u8>, bool)> {
     let rest = line.strip_prefix(b"if")?;
     if !rest.is_empty() && !rest.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
@@ -1046,6 +1072,39 @@ fn parse_if_condition(line: &[u8]) -> Option<(Vec<u8>, bool)> {
     } else {
         Some((condition.to_vec(), has_then))
     }
+}
+
+fn parse_for_clause(
+    line: &[u8],
+    env: &ShellEnv,
+    last_status: i32,
+) -> Option<(Vec<u8>, Vec<Vec<u8>>, bool)> {
+    let rest = trim_ascii(line.strip_prefix(b"for")?);
+    let name_end = rest.iter().position(|byte| byte.is_ascii_whitespace())?;
+    let name = &rest[..name_end];
+    if !valid_name(name) {
+        return None;
+    }
+    let rest = trim_ascii(&rest[name_end..]);
+    let after_in = if rest == b"in" {
+        &[][..]
+    } else if rest.starts_with(b"in")
+        && rest
+            .get(2)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        trim_ascii(&rest[2..])
+    } else {
+        return None;
+    };
+    let (words_part, inline_do) = strip_trailing_do(after_in);
+    let mut words = Vec::new();
+    for token in lex_segment(words_part, env, last_status) {
+        for expanded in expand_argv_token(token, env) {
+            words.push(expanded);
+        }
+    }
+    Some((name.to_vec(), words, inline_do))
 }
 
 fn find_if_bounds(
@@ -1066,6 +1125,24 @@ fn find_if_bounds(
             depth -= 1;
         } else if line == b"else" && depth == 0 && else_index.is_none() {
             else_index = Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_for_done(lines: &[Vec<u8>], body_start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = body_start;
+    while index < lines.len() {
+        let line = trim_ascii(&lines[index]);
+        if is_for_start(line) {
+            depth += 1;
+        } else if line == b"done" {
+            if depth == 0 {
+                return Some(index);
+            }
+            depth -= 1;
         }
         index += 1;
     }
@@ -1140,7 +1217,46 @@ fn execute_script_lines(
             continue;
         }
 
-        if line == b"then" || line == b"else" || line == b"fi" {
+        if is_for_start(line) {
+            let Some((name, words, inline_do)) = parse_for_clause(line, env, *last_status) else {
+                let _ = sys::write(FD_STDERR, b"sh: syntax error in for\n");
+                *last_status = 2;
+                return false;
+            };
+            let mut body_start = index + 1;
+            if !inline_do {
+                if body_start >= lines.len() || trim_ascii(&lines[body_start]) != b"do" {
+                    let _ = sys::write(FD_STDERR, b"sh: expected do\n");
+                    *last_status = 2;
+                    return false;
+                }
+                body_start += 1;
+            }
+            let Some(done_index) = find_for_done(lines, body_start) else {
+                let _ = sys::write(FD_STDERR, b"sh: expected done\n");
+                *last_status = 2;
+                return false;
+            };
+            if words.is_empty() {
+                *last_status = 0;
+            }
+            for word in words {
+                env.set(&name, &word);
+                if !execute_script_lines(
+                    &lines[body_start..done_index],
+                    jobs,
+                    next_job_id,
+                    env,
+                    last_status,
+                ) {
+                    return false;
+                }
+            }
+            index = done_index + 1;
+            continue;
+        }
+
+        if line == b"then" || line == b"else" || line == b"fi" || line == b"do" || line == b"done" {
             let _ = sys::write(FD_STDERR, b"sh: unexpected control word\n");
             *last_status = 2;
             return false;
