@@ -1050,6 +1050,30 @@ case "$SCENARIO" in
       "^  /bin/gunzip$"
     )
     ;;
+  sourcepkg)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/sourcepkg"
+      "cd /tmp/sourcepkg"
+      "gzip -dc /usr/share/testdata/ristuxpkg-0.1.tar.gz | tar -xf -"
+      "patch -p1 -i /usr/share/testdata/ristuxpkg.patch"
+      "cd ristuxpkg-0.1"
+      "make -s"
+      "cat build/output.txt"
+      "make -s install"
+      "cat /tmp/pkgroot/share/ristuxpkg/output.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: gzip -dc /usr/share/testdata/ristuxpkg-0.1.tar.gz | tar -xf -"
+      "^patching file ristuxpkg-0.1/src/message\\.txt$"
+      "TTY canonical line ready: make -s"
+      "^source package payload$"
+      "^patched by ristux patch$"
+      "^built-from-source$"
+      "TTY canonical line ready: make -s install"
+      "TTY canonical line ready: cat /tmp/pkgroot/share/ristuxpkg/output\\.txt"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -1102,7 +1126,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

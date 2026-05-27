@@ -1,0 +1,5 @@
+--- a/ristuxpkg-0.1/src/message.txt
++++ b/ristuxpkg-0.1/src/message.txt
+@@ -1,1 +1,2 @@
+ source package payload
++patched by ristux patch

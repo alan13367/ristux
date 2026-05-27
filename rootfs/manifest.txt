@@ -103,6 +103,8 @@ file /etc/resolv.conf etc/resolv.conf
 file /usr/lib/pkgconfig/libc.pc usr/lib/pkgconfig/libc.pc
 file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
 file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
+file /usr/share/testdata/ristuxpkg-0.1.tar.gz ../build/testdata/ristuxpkg-0.1.tar.gz
+file /usr/share/testdata/ristuxpkg.patch testdata/ristuxpkg.patch
 file /lib/crt0.o ../build/userland/c/crt0.o
 file /lib/crti.o ../build/userland/c/crti.o
 file /lib/crtn.o ../build/userland/c/crtn.o
