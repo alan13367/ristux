@@ -71,6 +71,67 @@ static int check_string(void) {
     return 0;
 }
 
+static int check_malloc_free(void) {
+    char *seed = malloc(4096);
+    if (seed == NULL || ((uintptr_t)seed & 15) != 0) {
+        puts("cc_libc_compat: malloc alignment failed");
+        return 1;
+    }
+    void *break_after_seed = sbrk(0);
+    strcpy(seed, "seed-block");
+    free(seed);
+    char *reuse = malloc(2048);
+    if (reuse == NULL || sbrk(0) != break_after_seed) {
+        puts("cc_libc_compat: free reuse failed");
+        return 1;
+    }
+    strcpy(reuse, "reuse");
+
+    char *left = malloc(1024);
+    char *right = malloc(1024);
+    if (left == NULL || right == NULL) {
+        puts("cc_libc_compat: coalesce alloc failed");
+        return 1;
+    }
+    void *break_after_pair = sbrk(0);
+    free(left);
+    free(right);
+    char *combined = malloc(3072);
+    if (combined == NULL || sbrk(0) != break_after_pair) {
+        puts("cc_libc_compat: coalesce failed");
+        return 1;
+    }
+    free(combined);
+    free(reuse);
+
+    char *zeroed = calloc(8, 4);
+    if (zeroed == NULL) {
+        puts("cc_libc_compat: calloc alloc failed");
+        return 1;
+    }
+    for (int i = 0; i < 32; i++) {
+        if (zeroed[i] != 0) {
+            puts("cc_libc_compat: calloc zero failed");
+            return 1;
+        }
+    }
+    strcpy(zeroed, "allocator");
+    char *grown = realloc(zeroed, 128);
+    if (grown == NULL || strcmp(grown, "allocator") != 0) {
+        puts("cc_libc_compat: realloc grow failed");
+        return 1;
+    }
+    char *shrunk = realloc(grown, 16);
+    if (shrunk == NULL || strcmp(shrunk, "allocator") != 0) {
+        puts("cc_libc_compat: realloc shrink failed");
+        return 1;
+    }
+    free(shrunk);
+    free(NULL);
+    puts("cc_libc_compat: malloc free ok");
+    return 0;
+}
+
 static int check_format(void) {
     char buf[128];
     int n = snprintf(buf, sizeof(buf), "%04o %.3s %02x %lld %zd %.*s",
@@ -306,6 +367,7 @@ int main(void) {
     if (check_ctype() != 0 ||
         check_parse() != 0 ||
         check_string() != 0 ||
+        check_malloc_free() != 0 ||
         check_format() != 0 ||
         check_path() != 0 ||
         check_resource_syslog() != 0 ||

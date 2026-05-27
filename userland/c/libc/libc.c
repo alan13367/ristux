@@ -2022,24 +2022,104 @@ void __assert_fail(const char *expr, const char *file, int line, const char *fun
 
 struct malloc_header {
     size_t size;
+    int free;
+    struct malloc_header *next;
+    struct malloc_header *prev;
 };
+
+static struct malloc_header *malloc_head;
+static struct malloc_header *malloc_tail;
+
+static size_t malloc_align(size_t size) {
+    return (size + 15) & ~(size_t)15;
+}
+
+static void malloc_split(struct malloc_header *block, size_t size) {
+    size_t header_size = sizeof(struct malloc_header);
+    if (block->size < size + header_size + 16) {
+        return;
+    }
+    struct malloc_header *next = (struct malloc_header *)((char *)(block + 1) + size);
+    next->size = block->size - size - header_size;
+    next->free = 1;
+    next->next = block->next;
+    next->prev = block;
+    if (next->next != NULL) {
+        next->next->prev = next;
+    } else {
+        malloc_tail = next;
+    }
+    block->size = size;
+    block->next = next;
+}
+
+static void malloc_merge_next(struct malloc_header *block) {
+    struct malloc_header *next = block->next;
+    if (next == NULL || !next->free) {
+        return;
+    }
+    block->size += sizeof(struct malloc_header) + next->size;
+    block->next = next->next;
+    if (block->next != NULL) {
+        block->next->prev = block;
+    } else {
+        malloc_tail = block;
+    }
+}
+
+static struct malloc_header *malloc_find_free(size_t size) {
+    for (struct malloc_header *block = malloc_head; block != NULL; block = block->next) {
+        if (block->free && block->size >= size) {
+            return block;
+        }
+    }
+    return NULL;
+}
 
 void *malloc(size_t size) {
     if (size == 0) {
         size = 1;
     }
-    size = (size + 15) & ~(size_t)15;
+    if (size > (size_t)-1 - 15 ||
+        malloc_align(size) > (size_t)-1 - sizeof(struct malloc_header)) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    size = malloc_align(size);
+    struct malloc_header *header = malloc_find_free(size);
+    if (header != NULL) {
+        header->free = 0;
+        malloc_split(header, size);
+        return header + 1;
+    }
     size_t total = sizeof(struct malloc_header) + size;
-    struct malloc_header *header = (struct malloc_header *)sbrk((long)total);
+    header = (struct malloc_header *)sbrk((long)total);
     if (header == (void *)-1) {
         return NULL;
     }
     header->size = size;
+    header->free = 0;
+    header->next = NULL;
+    header->prev = malloc_tail;
+    if (malloc_tail != NULL) {
+        malloc_tail->next = header;
+    } else {
+        malloc_head = header;
+    }
+    malloc_tail = header;
     return header + 1;
 }
 
 void free(void *ptr) {
-    (void)ptr;
+    if (ptr == NULL) {
+        return;
+    }
+    struct malloc_header *header = ((struct malloc_header *)ptr) - 1;
+    header->free = 1;
+    malloc_merge_next(header);
+    if (header->prev != NULL && header->prev->free) {
+        malloc_merge_next(header->prev);
+    }
 }
 
 void *calloc(size_t nmemb, size_t size) {
@@ -2064,12 +2144,24 @@ void *realloc(void *ptr, size_t size) {
         return NULL;
     }
     struct malloc_header *old_header = ((struct malloc_header *)ptr) - 1;
+    size = malloc_align(size);
+    if (old_header->size >= size) {
+        malloc_split(old_header, size);
+        return ptr;
+    }
+    if (old_header->next != NULL && old_header->next->free &&
+        old_header->size + sizeof(struct malloc_header) + old_header->next->size >= size) {
+        malloc_merge_next(old_header);
+        malloc_split(old_header, size);
+        return ptr;
+    }
     void *next = malloc(size);
     if (next == NULL) {
         return NULL;
     }
     size_t copy = old_header->size < size ? old_header->size : size;
     memcpy(next, ptr, copy);
+    free(ptr);
     return next;
 }
 

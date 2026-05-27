@@ -195,9 +195,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
   `printf`, `vprintf`.
 
-`free` is currently a no-op because the first allocator is a simple `sbrk`
-bump allocator. Programs must not depend on reclaimed heap memory until a fuller
-allocator is introduced.
+The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
+are reused and adjacent free blocks are coalesced, but heap pages are not yet
+returned to the kernel.
 
 ## Structure Layouts
 
