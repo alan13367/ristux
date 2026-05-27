@@ -1094,6 +1094,34 @@ case "$SCENARIO" in
       "^quoted-15$"
     )
     ;;
+  shell-param)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shparam"
+      "cd /tmp/shparam"
+      "echo 'USERVAL=ristux' > param.sh"
+      "echo 'EMPTY=' >> param.sh"
+      "echo 'echo brace-\$QUSERVALZ' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'echo positional-\$Q0Z-\$Q1Z-\$Q2Z-\$Q#Z' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'echo all-\$Q@Z' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'echo star-\$Q*Z' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'echo defaults-\$QMISSING:-fallbackZ-\$QEMPTY:-emptyZ-\$QEMPTY-keepZ' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'echo alt-\$QUSERVAL:+yesZ-\$QMISSING:+noZ-\$QEMPTY+setZ-\$QEMPTY:+badZ' | tr QZ '\\173\\175' >> param.sh"
+      "echo 'false' >> param.sh"
+      "echo 'echo rc-\$Q?Z' | tr QZ '\\173\\175' >> param.sh"
+      "sh param.sh alpha beta"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh param.sh alpha beta"
+      "^brace-ristux$"
+      "^positional-param.sh-alpha-beta-2$"
+      "^all-alpha beta$"
+      "^star-alpha beta$"
+      "^defaults-fallback-empty-$"
+      "^alt-yes--set-$"
+      "^rc-1$"
+    )
+    ;;
   shell-envp)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1918,7 +1946,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

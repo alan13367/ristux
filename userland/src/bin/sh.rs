@@ -215,6 +215,17 @@ impl ShellEnv {
         self.positionals.len().saturating_sub(1)
     }
 
+    fn joined_positionals(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (index, arg) in self.positionals.iter().skip(1).enumerate() {
+            if index != 0 {
+                out.push(b' ');
+            }
+            out.extend_from_slice(arg);
+        }
+        out
+    }
+
     fn set_function(&mut self, name: &[u8], body: &[Vec<u8>]) {
         if let Some(function) = self
             .functions
@@ -688,6 +699,23 @@ fn find_backtick_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+fn find_braced_parameter_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut escaped = false;
+    let mut index = start;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'}' {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
 fn expand_substitution_command(command: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8> {
     let mut out = Vec::new();
     let mut quote = 0u8;
@@ -949,6 +977,85 @@ fn eval_arithmetic_expression(bytes: &[u8], env: &ShellEnv) -> Option<i64> {
     }
 }
 
+fn lookup_parameter_value(name: &[u8], env: &ShellEnv, last_status: i32) -> Option<Vec<u8>> {
+    match name {
+        b"?" => Some(last_status.to_string().into_bytes()),
+        b"#" => Some(env.positional_count().to_string().into_bytes()),
+        b"@" | b"*" => Some(env.joined_positionals()),
+        _ if name.iter().all(u8::is_ascii_digit) => {
+            env.positional(parse_usize(name)?).map(<[u8]>::to_vec)
+        }
+        _ if valid_name(name) => env.get(name).map(<[u8]>::to_vec),
+        _ => None,
+    }
+}
+
+fn split_parameter_operator(body: &[u8]) -> (&[u8], Option<(u8, bool, &[u8])>) {
+    let mut index = 0usize;
+    while index < body.len() {
+        if body[index] == b':' && index + 1 < body.len() {
+            let op = body[index + 1];
+            if op == b'-' || op == b'+' {
+                return (&body[..index], Some((op, true, &body[index + 2..])));
+            }
+        } else if body[index] == b'-' || body[index] == b'+' {
+            return (&body[..index], Some((body[index], false, &body[index + 1..])));
+        }
+        index += 1;
+    }
+    (body, None)
+}
+
+fn expand_inline_bytes(bytes: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'$' => push_var_expansion(&mut out, bytes, &mut index, env, last_status),
+            b'`' => {
+                if let Some(end) = find_backtick_end(bytes, index + 1) {
+                    let expanded = run_command_substitution(&bytes[index + 1..end], env, last_status);
+                    out.extend_from_slice(&expanded);
+                    index = end;
+                } else {
+                    out.push(b'`');
+                }
+            }
+            byte => out.push(byte),
+        }
+        index += 1;
+    }
+    out
+}
+
+fn expand_braced_parameter(body: &[u8], env: &ShellEnv, last_status: i32) -> Option<Vec<u8>> {
+    let (name, operator) = split_parameter_operator(body);
+    if name.is_empty() {
+        return None;
+    }
+    let value = lookup_parameter_value(name, env, last_status);
+    let is_set = value.is_some();
+    let is_empty = value.as_ref().is_none_or(Vec::is_empty);
+    match operator {
+        None => Some(value.unwrap_or_default()),
+        Some((b'-', use_empty, word)) => {
+            if !is_set || use_empty && is_empty {
+                Some(expand_inline_bytes(word, env, last_status))
+            } else {
+                Some(value.unwrap_or_default())
+            }
+        }
+        Some((b'+', use_empty, word)) => {
+            if is_set && (!use_empty || !is_empty) {
+                Some(expand_inline_bytes(word, env, last_status))
+            } else {
+                Some(Vec::new())
+            }
+        }
+        _ => None,
+    }
+}
+
 fn push_var_expansion(
     out: &mut Vec<u8>,
     bytes: &[u8],
@@ -977,6 +1084,21 @@ fn push_var_expansion(
             let expanded = run_command_substitution(&bytes[*index + 2..end], env, last_status);
             out.extend_from_slice(&expanded);
             *index = end;
+        } else {
+            out.push(b'$');
+        }
+        return;
+    }
+    if next == b'{' {
+        if let Some(end) = find_braced_parameter_end(bytes, *index + 2) {
+            if let Some(expanded) =
+                expand_braced_parameter(&bytes[*index + 2..end], env, last_status)
+            {
+                out.extend_from_slice(&expanded);
+                *index = end;
+            } else {
+                out.push(b'$');
+            }
         } else {
             out.push(b'$');
         }
