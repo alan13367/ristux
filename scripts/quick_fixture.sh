@@ -752,6 +752,28 @@ case "$SCENARIO" in
       "^  /bin/tr$"
     )
     ;;
+  date)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "date +%Y"
+      "date +%F"
+      "date -u +%T"
+      "date +%s"
+      "pkg info date"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: date +%Y"
+      "^20[0-9][0-9]$"
+      "TTY canonical line ready: date +%F"
+      "^20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]$"
+      "TTY canonical line ready: date -u +%T"
+      "^[0-2][0-9]:[0-5][0-9]:[0-5][0-9]$"
+      "TTY canonical line ready: date +%s"
+      "^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$"
+      "^name: date$"
+      "^  /bin/date$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -804,7 +826,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

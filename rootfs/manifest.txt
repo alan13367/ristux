@@ -37,6 +37,7 @@ file /bin/cc_tcp ../build/userland/cc_tcp.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
 file /bin/cc_uio ../build/userland/cc_uio.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
+file /bin/date ../build/userland/date.elf
 file /bin/dbclient ../build/userland/dbclient.elf
 file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
@@ -133,6 +134,7 @@ package chmod 0.1.0 /bin/chmod
 package cp 0.1.0 /bin/cp
 package cut 0.1.0 /bin/cut
 package curl_lite 0.1.0 /bin/curl_lite
+package date 0.1.0 /bin/date
 package dbclient 2026.91 /bin/dbclient
 package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
