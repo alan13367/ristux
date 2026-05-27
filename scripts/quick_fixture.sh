@@ -108,6 +108,56 @@ case "$SCENARIO" in
       "pty_shell_check: done"
     )
     ;;
+  termios)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "cc_tty"
+      "stty -a"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cc_tty"
+      "^cc_tty: tcgetattr ok$"
+      "^cc_tty: cfmakeraw ok$"
+      "^cc_tty: tcsetattr ok$"
+      "^cc_tty: restore ok$"
+      "^cc_tty: done$"
+      "TTY canonical line ready: stty -a"
+      "^speed 38400 baud; rows 24; columns 80;$"
+      "isig icanon echo iexten"
+      "min 1 time 0"
+      "intr = \\^C;"
+      "erase = \\^[?];"
+      "eof = \\^D;"
+      "susp = \\^Z;"
+    )
+    ;;
+  editor)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "rm -f /tmp/editcheck.txt"
+      "edit /tmp/editcheck.txt"
+      "a"
+      "alpha"
+      "beta"
+      "."
+      "w"
+      "q"
+      "edit /tmp/editcheck.txt"
+      "p"
+      "q"
+      "cat /tmp/editcheck.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: edit /tmp/editcheck.txt"
+      "^edit: new file$"
+      "^edit: wrote 2 line[(]s[)]$"
+      "^edit: done$"
+      "^1.alpha$"
+      "^2.beta$"
+      "^alpha$"
+      "^beta$"
+    )
+    ;;
   libc)
     COMMANDS=("cc_libc_compat")
     EXPECTS=(
@@ -1278,7 +1328,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
