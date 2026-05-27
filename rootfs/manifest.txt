@@ -64,6 +64,7 @@ file /bin/make ../build/userland/make.elf
 file /bin/mount ../build/userland/mount.elf
 file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/mv ../build/userland/mv.elf
+file /bin/patch ../build/userland/patch.elf
 file /bin/ping ../build/userland/ping.elf
 file /bin/pkg ../build/userland/pkg.elf
 file /bin/pkgconf ../build/userland/pkgconf.elf
@@ -176,6 +177,7 @@ package make 0.1.0 /bin/make
 package mount 0.1.0 /bin/mount
 package mkdir 0.1.0 /bin/mkdir
 package mv 0.1.0 /bin/mv
+package patch 0.1.0 /bin/patch
 package ping 0.1.0 /bin/ping
 package pkg 0.1.0 /bin/pkg
 package pkgconf 0.1.0 /bin/pkgconf

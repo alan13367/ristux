@@ -984,6 +984,32 @@ case "$SCENARIO" in
       "^  /bin/awk$"
     )
     ;;
+  patch)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/patchcheck"
+      "cd /tmp/patchcheck"
+      "echo alpha > sample.txt"
+      "echo beta >> sample.txt"
+      "echo --- a/sample.txt > change.patch"
+      "echo +++ b/sample.txt >> change.patch"
+      "echo @@ -1,2 +1,2 @@ >> change.patch"
+      "echo -alpha >> change.patch"
+      "echo +ALPHA >> change.patch"
+      "echo -beta >> change.patch"
+      "echo +beta patched >> change.patch"
+      "patch -p1 -i change.patch"
+      "cat sample.txt"
+      "pkg info patch"
+    )
+    EXPECTS=(
+      "^patching file sample\\.txt$"
+      "^ALPHA$"
+      "^beta patched$"
+      "^name: patch$"
+      "^  /bin/patch$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -1036,7 +1062,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
