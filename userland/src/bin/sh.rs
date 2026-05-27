@@ -649,6 +649,23 @@ fn find_command_substitution_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+fn find_backtick_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut escaped = false;
+    let mut index = start;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'`' {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
 fn expand_substitution_command(command: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8> {
     let mut out = Vec::new();
     let mut quote = 0u8;
@@ -821,6 +838,15 @@ fn lex_segment(segment: &[u8], env: &ShellEnv, last_status: i32) -> Vec<LexToken
             }
             b'$' if quote != b'\'' => {
                 push_var_expansion(&mut cur, segment, &mut i, env, last_status)
+            }
+            b'`' if quote != b'\'' => {
+                if let Some(end) = find_backtick_end(segment, i + 1) {
+                    let expanded = run_command_substitution(&segment[i + 1..end], env, last_status);
+                    cur.extend_from_slice(&expanded);
+                    i = end;
+                } else {
+                    cur.push(b'`');
+                }
             }
             b' ' | b'\t' if quote == 0 => {
                 push_token(&mut tokens, &mut cur, &mut has_unquoted_glob);
