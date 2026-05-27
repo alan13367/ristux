@@ -877,6 +877,38 @@ case "$SCENARIO" in
       "^  /bin/seq$"
     )
     ;;
+  expr)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "expr 2 + 3"
+      "expr 2 '*' 4"
+      "expr ristux = ristux"
+      "expr length ristux"
+      "expr substr ristux 2 3"
+      "expr index ristux ux"
+      "expr abc123 : '.*'"
+      "expr match abc123 '.*'"
+      "pkg info expr"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: expr 2 + 3"
+      "^5$"
+      "^8$"
+      "^1$"
+      "TTY canonical line ready: expr length ristux"
+      "^6$"
+      "TTY canonical line ready: expr substr ristux 2 3"
+      "^ist$"
+      "TTY canonical line ready: expr index ristux ux"
+      "^5$"
+      "TTY canonical line ready: expr abc123 : '\\.\\*'"
+      "^6$"
+      "TTY canonical line ready: expr match abc123 '\\.\\*'"
+      "^6$"
+      "^name: expr$"
+      "^  /bin/expr$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -929,7 +961,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
