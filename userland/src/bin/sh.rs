@@ -128,6 +128,16 @@ impl ShellEnv {
         });
     }
 
+    fn unset(&mut self, name: &[u8]) {
+        if let Some(index) = self
+            .vars
+            .iter()
+            .position(|var| var.name.as_slice() == name)
+        {
+            self.vars.remove(index);
+        }
+    }
+
     fn assignment(&mut self, token: &[u8]) -> bool {
         let Some(eq) = token.iter().position(|&b| b == b'=') else {
             return false;
@@ -188,6 +198,16 @@ impl ShellEnv {
             .iter()
             .find(|function| function.name.as_slice() == name)
             .map(|function| function.body.clone())
+    }
+
+    fn unset_function(&mut self, name: &[u8]) {
+        if let Some(index) = self
+            .functions
+            .iter()
+            .position(|function| function.name.as_slice() == name)
+        {
+            self.functions.remove(index);
+        }
     }
 }
 
@@ -733,6 +753,47 @@ fn continue_job(job: &Job) {
     }
 }
 
+fn is_builtin_name(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"exit"
+            | b"cd"
+            | b"."
+            | b"source"
+            | b"return"
+            | b"unset"
+            | b"export"
+            | b"jobs"
+            | b"fg"
+            | b"bg"
+            | b":"
+            | b"type"
+    )
+}
+
+fn external_command_exists(name: &[u8]) -> bool {
+    if name.contains(&b'/') {
+        let path = cstr(name);
+        let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
+        if fd >= 0 {
+            let _ = sys::close(fd as i32);
+            return true;
+        }
+        return false;
+    }
+    let mut path = Vec::with_capacity(b"/bin/".len() + name.len() + 1);
+    path.extend_from_slice(b"/bin/");
+    path.extend_from_slice(name);
+    path.push(0);
+    let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
+    if fd >= 0 {
+        let _ = sys::close(fd as i32);
+        true
+    } else {
+        false
+    }
+}
+
 fn run_function(
     name: &[u8],
     args: &[Vec<u8>],
@@ -815,6 +876,56 @@ fn builtin(
                 last_status
             };
             env.return_status = Some(status);
+            Some(status)
+        }
+        b"unset" => {
+            let mut function_mode = false;
+            let mut status = 0;
+            for arg in &stage.argv[1..] {
+                if arg.as_slice() == b"-f" {
+                    function_mode = true;
+                    continue;
+                }
+                if arg.as_slice() == b"-v" {
+                    function_mode = false;
+                    continue;
+                }
+                if !valid_name(arg) {
+                    let _ = sys::write(FD_STDERR, b"unset: bad name\n");
+                    status = 1;
+                    continue;
+                }
+                if function_mode {
+                    env.unset_function(arg);
+                } else {
+                    env.unset(arg);
+                }
+            }
+            Some(status)
+        }
+        b"type" => {
+            if stage.argv.len() == 1 {
+                return Some(0);
+            }
+            let mut status = 0;
+            for arg in &stage.argv[1..] {
+                if env.function_body(arg).is_some() {
+                    let _ = sys::write(FD_STDOUT, arg);
+                    let _ = sys::write(FD_STDOUT, b" is a function\n");
+                } else if is_builtin_name(arg) {
+                    let _ = sys::write(FD_STDOUT, arg);
+                    let _ = sys::write(FD_STDOUT, b" is a shell builtin\n");
+                } else if external_command_exists(arg) {
+                    let _ = sys::write(FD_STDOUT, arg);
+                    let _ = sys::write(FD_STDOUT, b" is /bin/");
+                    let _ = sys::write(FD_STDOUT, arg);
+                    let _ = sys::write(FD_STDOUT, b"\n");
+                } else {
+                    let _ = sys::write(FD_STDERR, arg);
+                    let _ = sys::write(FD_STDERR, b": not found\n");
+                    status = 1;
+                }
+            }
             Some(status)
         }
         b"export" => {
