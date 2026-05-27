@@ -534,6 +534,128 @@ fn expand_argv_token(token: LexToken, env: &ShellEnv) -> Vec<Vec<u8>> {
     vec![bytes]
 }
 
+fn find_command_substitution_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote = 0u8;
+    let mut escaped = false;
+    let mut index = start;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'\\' && quote != b'\'' {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' if quote == 0 => quote = byte,
+            b if quote == b => quote = 0,
+            b'$' if quote != b'\'' && bytes.get(index + 1) == Some(&b'(') => {
+                depth += 1;
+                index += 1;
+            }
+            b')' if quote == 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn expand_substitution_command(command: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut quote = 0u8;
+    let mut escaped = false;
+    let mut index = 0usize;
+    while index < command.len() {
+        let byte = command[index];
+        if escaped {
+            out.push(byte);
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'\\' && quote != b'\'' {
+            out.push(byte);
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' if quote == 0 => {
+                quote = byte;
+                out.push(byte);
+            }
+            b if quote == b => {
+                quote = 0;
+                out.push(byte);
+            }
+            b'$' if quote != b'\'' => {
+                push_var_expansion(&mut out, command, &mut index, env, last_status);
+            }
+            _ => out.push(byte),
+        }
+        index += 1;
+    }
+    out
+}
+
+fn run_command_substitution(command: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8> {
+    let mut fds = [0i32; 2];
+    if sys::pipe(fds.as_mut_ptr()) < 0 {
+        return Vec::new();
+    }
+    let pid = sys::fork();
+    if pid == 0 {
+        sys::close(fds[0]);
+        sys::dup2(fds[1], FD_STDOUT);
+        sys::close(fds[1]);
+
+        let path = cstr(b"/bin/sh");
+        let arg0 = cstr(b"sh");
+        let arg1 = cstr(b"-c");
+        let command = expand_substitution_command(command, env, last_status);
+        let arg2 = cstr(&command);
+        let argv = [arg0.as_ptr(), arg1.as_ptr(), arg2.as_ptr(), ptr::null()];
+        let owned_env = env.entries();
+        let mut env_ptrs: Vec<*const u8> = owned_env.iter().map(|entry| entry.as_ptr()).collect();
+        env_ptrs.push(ptr::null());
+        let _ = sys::execve(path.as_ptr(), argv.as_ptr(), env_ptrs.as_ptr());
+        sys::exit(127);
+    }
+    sys::close(fds[1]);
+    if pid < 0 {
+        sys::close(fds[0]);
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut buf = [0u8; 128];
+    loop {
+        let n = sys::read(fds[0], &mut buf);
+        if n <= 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n as usize]);
+    }
+    sys::close(fds[0]);
+    let mut status = 0i32;
+    let _ = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    while out.last() == Some(&b'\n') {
+        out.pop();
+    }
+    out
+}
+
 fn push_var_expansion(
     out: &mut Vec<u8>,
     bytes: &[u8],
@@ -546,6 +668,16 @@ fn push_var_expansion(
         return;
     }
     let next = bytes[*index + 1];
+    if next == b'(' {
+        if let Some(end) = find_command_substitution_end(bytes, *index + 2) {
+            let expanded = run_command_substitution(&bytes[*index + 2..end], env, last_status);
+            out.extend_from_slice(&expanded);
+            *index = end;
+        } else {
+            out.push(b'$');
+        }
+        return;
+    }
     if next == b'?' {
         out.extend_from_slice(last_status.to_string().as_bytes());
         *index += 1;

@@ -1024,6 +1024,29 @@ case "$SCENARIO" in
       "^function-gone$"
     )
     ;;
+  shell-subst)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shsubst"
+      "cd /tmp/shsubst"
+      "echo 'VAR=outer' > subst.sh"
+      "echo 'echo sub-\$(echo alpha)' >> subst.sh"
+      "echo 'name=\$(echo beta)' >> subst.sh"
+      "echo 'echo name-\$name' >> subst.sh"
+      "echo 'echo quoted-\"\$(echo gamma)\"' >> subst.sh"
+      "echo 'echo trim-\$(echo z)-end' >> subst.sh"
+      "echo 'echo env-\$(echo \$VAR)' >> subst.sh"
+      "sh subst.sh"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh subst.sh"
+      "^sub-alpha$"
+      "^name-beta$"
+      "^quoted-gamma$"
+      "^trim-z-end$"
+      "^env-outer$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1797,7 +1820,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
