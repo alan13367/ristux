@@ -1030,6 +1030,13 @@ fn is_while_start(line: &[u8]) -> bool {
             .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
 }
 
+fn is_case_start(line: &[u8]) -> bool {
+    line == b"case"
+        || line
+            .strip_prefix(b"case")
+            .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
+}
+
 fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
     line = trim_ascii(line);
     if line.len() < 4 || &line[line.len() - 4..] != b"then" {
@@ -1066,6 +1073,21 @@ fn strip_trailing_do(mut line: &[u8]) -> (&[u8], bool) {
         words = trim_ascii(&words[..words.len() - 1]);
     }
     (words, true)
+}
+
+fn strip_trailing_in(mut line: &[u8]) -> (&[u8], bool) {
+    line = trim_ascii(line);
+    if line.len() < 2 || &line[line.len() - 2..] != b"in" {
+        return (line, false);
+    }
+    let before_in = &line[..line.len() - 2];
+    if before_in
+        .last()
+        .is_none_or(|byte| !byte.is_ascii_whitespace())
+    {
+        return (line, false);
+    }
+    (trim_ascii(before_in), true)
 }
 
 fn parse_if_condition(line: &[u8]) -> Option<(Vec<u8>, bool)> {
@@ -1127,6 +1149,23 @@ fn parse_while_condition(line: &[u8]) -> Option<(Vec<u8>, bool)> {
     }
 }
 
+fn parse_case_word(line: &[u8], env: &ShellEnv, last_status: i32) -> Option<Vec<u8>> {
+    let rest = line.strip_prefix(b"case")?;
+    if !rest.is_empty() && !rest.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+    let (word_part, has_in) = strip_trailing_in(rest);
+    if !has_in || word_part.is_empty() {
+        return None;
+    }
+    for token in lex_segment(word_part, env, last_status) {
+        if let Some(word) = expand_argv_token(token, env).into_iter().next() {
+            return Some(word);
+        }
+    }
+    None
+}
+
 fn find_if_bounds(
     lines: &[Vec<u8>],
     body_start: usize,
@@ -1167,6 +1206,89 @@ fn find_loop_done(lines: &[Vec<u8>], body_start: usize) -> Option<usize> {
         index += 1;
     }
     None
+}
+
+fn find_case_esac(lines: &[Vec<u8>], body_start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = body_start;
+    while index < lines.len() {
+        let line = trim_ascii(&lines[index]);
+        if is_case_start(line) {
+            depth += 1;
+        } else if line == b"esac" {
+            if depth == 0 {
+                return Some(index);
+            }
+            depth -= 1;
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_case_arm_end(lines: &[Vec<u8>], arm_start: usize, case_end: usize) -> usize {
+    let mut depth = 0usize;
+    let mut index = arm_start;
+    while index < case_end {
+        let line = trim_ascii(&lines[index]);
+        if is_case_start(line) {
+            depth += 1;
+        } else if line == b"esac" && depth > 0 {
+            depth -= 1;
+        } else if line == b";;" && depth == 0 {
+            return index;
+        }
+        index += 1;
+    }
+    case_end
+}
+
+fn is_case_arm_header(line: &[u8]) -> bool {
+    trim_ascii(line).ends_with(b")")
+}
+
+fn case_pattern_match(pattern: &[u8], word: &[u8]) -> bool {
+    let mut p = 0usize;
+    let mut w = 0usize;
+    let mut star: Option<usize> = None;
+    let mut retry = 0usize;
+    while w < word.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == word[w]) {
+            p += 1;
+            w += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = w;
+        } else if let Some(star_pos) = star {
+            p = star_pos + 1;
+            retry += 1;
+            w = retry;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+fn case_arm_matches(header: &[u8], word: &[u8]) -> bool {
+    let mut patterns = trim_ascii(header);
+    if !patterns.ends_with(b")") {
+        return false;
+    }
+    patterns = trim_ascii(&patterns[..patterns.len() - 1]);
+    if patterns.starts_with(b"(") {
+        patterns = trim_ascii(&patterns[1..]);
+    }
+    for pattern in patterns.split(|byte| *byte == b'|') {
+        if case_pattern_match(trim_ascii(pattern), word) {
+            return true;
+        }
+    }
+    false
 }
 
 fn execute_script_lines(
@@ -1316,7 +1438,66 @@ fn execute_script_lines(
             continue;
         }
 
-        if line == b"then" || line == b"else" || line == b"fi" || line == b"do" || line == b"done" {
+        if is_case_start(line) {
+            let Some(word) = parse_case_word(line, env, *last_status) else {
+                let _ = sys::write(FD_STDERR, b"sh: syntax error in case\n");
+                *last_status = 2;
+                return false;
+            };
+            let body_start = index + 1;
+            let Some(esac_index) = find_case_esac(lines, body_start) else {
+                let _ = sys::write(FD_STDERR, b"sh: expected esac\n");
+                *last_status = 2;
+                return false;
+            };
+            let mut arm = body_start;
+            let mut matched = false;
+            while arm < esac_index {
+                let arm_header = trim_ascii(&lines[arm]);
+                if arm_header == b";;" {
+                    arm += 1;
+                    continue;
+                }
+                if !is_case_arm_header(arm_header) {
+                    let _ = sys::write(FD_STDERR, b"sh: expected case pattern\n");
+                    *last_status = 2;
+                    return false;
+                }
+                let arm_body = arm + 1;
+                let arm_end = find_case_arm_end(lines, arm_body, esac_index);
+                if !matched && case_arm_matches(arm_header, &word) {
+                    matched = true;
+                    if arm_body < arm_end {
+                        if !execute_script_lines(
+                            &lines[arm_body..arm_end],
+                            jobs,
+                            next_job_id,
+                            env,
+                            last_status,
+                        ) {
+                            return false;
+                        }
+                    } else {
+                        *last_status = 0;
+                    }
+                }
+                arm = if arm_end < esac_index { arm_end + 1 } else { arm_end };
+            }
+            if !matched {
+                *last_status = 0;
+            }
+            index = esac_index + 1;
+            continue;
+        }
+
+        if line == b"then"
+            || line == b"else"
+            || line == b"fi"
+            || line == b"do"
+            || line == b"done"
+            || line == b";;"
+            || line == b"esac"
+        {
             let _ = sys::write(FD_STDERR, b"sh: unexpected control word\n");
             *last_status = 2;
             return false;
