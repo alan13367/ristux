@@ -755,6 +755,22 @@ case "$SCENARIO" in
       "^c-status-1$"
     )
     ;;
+  shell-args)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shargs"
+      "cd /tmp/shargs"
+      "echo 'echo script-\$0-\$1-\$2-\$#' > args.sh"
+      "sh args.sh one two"
+      "sh -c 'echo cargs-\$0-\$1-\$#' runner alpha"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh args.sh one two"
+      "^script-args.sh-one-two-2$"
+      "TTY canonical line ready: sh -c"
+      "^cargs-runner-alpha-1$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1528,7 +1544,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -1559,6 +1575,7 @@ send_text() {
       ':') printf 'sendkey shift-semicolon\n' ;;
       "'") printf 'sendkey apostrophe\n' ;;
       '"') printf 'sendkey shift-apostrophe\n' ;;
+      '#') printf 'sendkey shift-3\n' ;;
       '.') printf 'sendkey dot\n' ;;
       ',') printf 'sendkey comma\n' ;;
       '-') printf 'sendkey minus\n' ;;

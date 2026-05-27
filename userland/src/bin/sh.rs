@@ -44,6 +44,7 @@ struct EnvVar {
 
 struct ShellEnv {
     vars: Vec<EnvVar>,
+    positionals: Vec<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -73,7 +74,10 @@ struct ListCommand {
 
 impl ShellEnv {
     fn new() -> Self {
-        let mut env = Self { vars: Vec::new() };
+        let mut env = Self {
+            vars: Vec::new(),
+            positionals: Vec::new(),
+        };
         if sys::getuid() == 0 {
             env.set(b"USER", b"root");
             env.set(b"HOME", b"/root");
@@ -128,6 +132,22 @@ impl ShellEnv {
             out.push(entry);
         }
         out
+    }
+
+    fn set_positionals(&mut self, arg0: &[u8], args: &[&[u8]]) {
+        self.positionals.clear();
+        self.positionals.push(arg0.to_vec());
+        for arg in args {
+            self.positionals.push((*arg).to_vec());
+        }
+    }
+
+    fn positional(&self, index: usize) -> Option<&[u8]> {
+        self.positionals.get(index).map(Vec::as_slice)
+    }
+
+    fn positional_count(&self) -> usize {
+        self.positionals.len().saturating_sub(1)
     }
 }
 
@@ -454,6 +474,18 @@ fn push_var_expansion(
     let next = bytes[*index + 1];
     if next == b'?' {
         out.extend_from_slice(last_status.to_string().as_bytes());
+        *index += 1;
+        return;
+    }
+    if next == b'#' {
+        out.extend_from_slice(env.positional_count().to_string().as_bytes());
+        *index += 1;
+        return;
+    }
+    if next.is_ascii_digit() {
+        if let Some(value) = env.positional((next - b'0') as usize) {
+            out.extend_from_slice(value);
+        }
         *index += 1;
         return;
     }
@@ -1038,6 +1070,8 @@ fn main(args: &[&[u8]]) -> i32 {
     let mut jobs: Vec<Job> = Vec::new();
     let mut next_job_id = 1usize;
     let mut env = ShellEnv::new();
+    let default_arg0 = args.first().copied().unwrap_or(b"sh");
+    env.set_positionals(default_arg0, &[]);
     let mut last_status = 0;
     let login_shell = args
         .first()
@@ -1060,9 +1094,17 @@ fn main(args: &[&[u8]]) -> i32 {
                 let _ = sys::write(FD_STDERR, b"sh: -c requires an argument\n");
                 return 2;
             };
+            let arg0 = args.get(index + 2).copied().unwrap_or(b"sh");
+            let rest = if index + 3 < args.len() {
+                &args[index + 3..]
+            } else {
+                &[]
+            };
+            env.set_positionals(arg0, rest);
             return run_line(command, &mut jobs, &mut next_job_id, &mut env, last_status);
         }
         script = Some(arg);
+        env.set_positionals(arg, &args[index + 1..]);
         break;
     }
     if let Some(script) = script {
