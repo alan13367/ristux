@@ -86,6 +86,7 @@ file /bin/udp ../build/userland/udp.elf
 file /bin/uname ../build/userland/uname.elf
 file /bin/uniq ../build/userland/uniq.elf
 file /bin/wc ../build/userland/wc.elf
+file /bin/which ../build/userland/which.elf
 file /bin/xargs ../build/userland/xargs.elf
 file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
@@ -191,6 +192,7 @@ package udp 0.1.0 /bin/udp
 package uname 0.1.0 /bin/uname
 package uniq 0.1.0 /bin/uniq
 package wc 0.1.0 /bin/wc
+package which 0.1.0 /bin/which
 package xargs 0.1.0 /bin/xargs
 package libc-pc 0.1.0 /usr/lib/pkgconfig/libc.pc deps=libc
 package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/true

@@ -774,6 +774,27 @@ case "$SCENARIO" in
       "^  /bin/date$"
     )
     ;;
+  which)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "which sh"
+      "which -a sh"
+      "which /bin/sh"
+      "which definitely_missing"
+      "pkg info which"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: which sh"
+      "^/bin/sh$"
+      "TTY canonical line ready: which -a sh"
+      "^/bin/sh$"
+      "TTY canonical line ready: which /bin/sh"
+      "^/bin/sh$"
+      "TTY canonical line ready: which definitely_missing"
+      "^name: which$"
+      "^  /bin/which$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -826,7 +847,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
