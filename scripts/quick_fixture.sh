@@ -1069,6 +1069,31 @@ case "$SCENARIO" in
       "^env-outer$"
     )
     ;;
+  shell-arith)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/sharith"
+      "cd /tmp/sharith"
+      "echo 'i=2' > arith.sh"
+      "echo 'echo sum-\$((i + 3))' >> arith.sh"
+      "echo 'echo prod-\$(((i + 4) * 2))' >> arith.sh"
+      "echo 'echo div-\$((9 / 2))-rem-\$((9 % 2))' >> arith.sh"
+      "echo 'i=\$((i + 1))' >> arith.sh"
+      "echo 'echo inc-\$i' >> arith.sh"
+      "echo 'echo missing-\$((missing + 7))' >> arith.sh"
+      "echo 'echo quoted-\"\$((i * 5))\"' >> arith.sh"
+      "sh arith.sh"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh arith.sh"
+      "^sum-5$"
+      "^prod-12$"
+      "^div-4-rem-1$"
+      "^inc-3$"
+      "^missing-7$"
+      "^quoted-15$"
+    )
+    ;;
   shell-envp)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1893,7 +1918,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

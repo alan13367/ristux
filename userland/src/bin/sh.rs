@@ -649,6 +649,28 @@ fn find_command_substitution_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+fn find_arithmetic_expansion_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = start;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => {
+                if depth == 0 {
+                    if bytes.get(index + 1) == Some(&b')') {
+                        return Some(index);
+                    }
+                } else {
+                    depth -= 1;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
 fn find_backtick_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut escaped = false;
     let mut index = start;
@@ -751,6 +773,182 @@ fn run_command_substitution(command: &[u8], env: &ShellEnv, last_status: i32) ->
     out
 }
 
+struct ArithmeticParser<'a> {
+    bytes: &'a [u8],
+    index: usize,
+    env: &'a ShellEnv,
+}
+
+impl<'a> ArithmeticParser<'a> {
+    fn new(bytes: &'a [u8], env: &'a ShellEnv) -> Self {
+        Self {
+            bytes,
+            index: 0,
+            env,
+        }
+    }
+
+    fn skip_ws(&mut self) {
+        while self
+            .bytes
+            .get(self.index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            self.index += 1;
+        }
+    }
+
+    fn parse_expression(&mut self) -> Option<i64> {
+        let mut value = self.parse_term()?;
+        loop {
+            self.skip_ws();
+            match self.bytes.get(self.index).copied() {
+                Some(b'+') => {
+                    self.index += 1;
+                    value = value.checked_add(self.parse_term()?)?;
+                }
+                Some(b'-') => {
+                    self.index += 1;
+                    value = value.checked_sub(self.parse_term()?)?;
+                }
+                _ => return Some(value),
+            }
+        }
+    }
+
+    fn parse_term(&mut self) -> Option<i64> {
+        let mut value = self.parse_unary()?;
+        loop {
+            self.skip_ws();
+            match self.bytes.get(self.index).copied() {
+                Some(b'*') => {
+                    self.index += 1;
+                    value = value.checked_mul(self.parse_unary()?)?;
+                }
+                Some(b'/') => {
+                    self.index += 1;
+                    let rhs = self.parse_unary()?;
+                    if rhs == 0 {
+                        return None;
+                    }
+                    value = value.checked_div(rhs)?;
+                }
+                Some(b'%') => {
+                    self.index += 1;
+                    let rhs = self.parse_unary()?;
+                    if rhs == 0 {
+                        return None;
+                    }
+                    value = value.checked_rem(rhs)?;
+                }
+                _ => return Some(value),
+            }
+        }
+    }
+
+    fn parse_unary(&mut self) -> Option<i64> {
+        self.skip_ws();
+        match self.bytes.get(self.index).copied() {
+            Some(b'+') => {
+                self.index += 1;
+                self.parse_unary()
+            }
+            Some(b'-') => {
+                self.index += 1;
+                self.parse_unary()?.checked_neg()
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Option<i64> {
+        self.skip_ws();
+        match self.bytes.get(self.index).copied()? {
+            b'(' => {
+                self.index += 1;
+                let value = self.parse_expression()?;
+                self.skip_ws();
+                if self.bytes.get(self.index) != Some(&b')') {
+                    return None;
+                }
+                self.index += 1;
+                Some(value)
+            }
+            byte if byte.is_ascii_digit() => self.parse_number(),
+            byte if byte == b'_' || byte.is_ascii_alphabetic() => self.parse_variable(),
+            _ => None,
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<i64> {
+        let start = self.index;
+        while self
+            .bytes
+            .get(self.index)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            self.index += 1;
+        }
+        parse_i64(&self.bytes[start..self.index])
+    }
+
+    fn parse_variable(&mut self) -> Option<i64> {
+        let start = self.index;
+        self.index += 1;
+        while self
+            .bytes
+            .get(self.index)
+            .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            self.index += 1;
+        }
+        let Some(value) = self.env.get(&self.bytes[start..self.index]) else {
+            return Some(0);
+        };
+        Some(parse_i64(value).unwrap_or(0))
+    }
+}
+
+fn parse_i64(bytes: &[u8]) -> Option<i64> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut index = 0usize;
+    let mut neg = false;
+    if bytes[index] == b'+' || bytes[index] == b'-' {
+        neg = bytes[index] == b'-';
+        index += 1;
+    }
+    if index >= bytes.len() {
+        return None;
+    }
+    let mut value = 0i64;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as i64)?;
+        index += 1;
+    }
+    if neg {
+        value.checked_neg()
+    } else {
+        Some(value)
+    }
+}
+
+fn eval_arithmetic_expression(bytes: &[u8], env: &ShellEnv) -> Option<i64> {
+    let mut parser = ArithmeticParser::new(bytes, env);
+    let value = parser.parse_expression()?;
+    parser.skip_ws();
+    if parser.index == bytes.len() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 fn push_var_expansion(
     out: &mut Vec<u8>,
     bytes: &[u8],
@@ -764,6 +962,17 @@ fn push_var_expansion(
     }
     let next = bytes[*index + 1];
     if next == b'(' {
+        if bytes.get(*index + 2) == Some(&b'(') {
+            if let Some(end) = find_arithmetic_expansion_end(bytes, *index + 3) {
+                let value =
+                    eval_arithmetic_expression(&bytes[*index + 3..end], env).unwrap_or(0);
+                out.extend_from_slice(value.to_string().as_bytes());
+                *index = end + 1;
+            } else {
+                out.push(b'$');
+            }
+            return;
+        }
         if let Some(end) = find_command_substitution_end(bytes, *index + 2) {
             let expanded = run_command_substitution(&bytes[*index + 2..end], env, last_status);
             out.extend_from_slice(&expanded);
