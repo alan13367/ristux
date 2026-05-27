@@ -1047,11 +1047,25 @@ fn main(args: &[&[u8]]) -> i32 {
     if login_shell {
         run_login_profiles(&mut jobs, &mut next_job_id, &mut env, &mut last_status);
     }
-    if let Some(script) = args
-        .iter()
-        .skip(1)
-        .find(|arg| **arg != b"--login" && **arg != b"-l")
-    {
+    let mut script: Option<&[u8]> = None;
+    let mut index = 1usize;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == b"--login" || arg == b"-l" {
+            index += 1;
+            continue;
+        }
+        if arg == b"-c" {
+            let Some(command) = args.get(index + 1) else {
+                let _ = sys::write(FD_STDERR, b"sh: -c requires an argument\n");
+                return 2;
+            };
+            return run_line(command, &mut jobs, &mut next_job_id, &mut env, last_status);
+        }
+        script = Some(arg);
+        break;
+    }
+    if let Some(script) = script {
         if !run_script_file(script, &mut jobs, &mut next_job_id, &mut env, &mut last_status) {
             let _ = sys::write(FD_STDERR, b"sh: cannot open script\n");
             return 127;
