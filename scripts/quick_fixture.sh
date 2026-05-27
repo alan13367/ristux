@@ -1067,6 +1067,38 @@ case "$SCENARIO" in
       "^/bin/sh$"
     )
     ;;
+  shell-read-shift)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shread"
+      "cd /tmp/shread"
+      "echo 'alpha beta gamma' > input.txt"
+      "echo 'read first rest < input.txt' > read.sh"
+      "echo 'echo read-\$first-\$rest' >> read.sh"
+      "echo 'set -- one two three' >> read.sh"
+      "echo 'echo before-\$#-\$1-\$2-\$3' >> read.sh"
+      "echo 'shift 2' >> read.sh"
+      "echo 'echo after-\$#-\$1' >> read.sh"
+      "echo 'read -r only < input.txt' >> read.sh"
+      "echo 'echo only-\$only' >> read.sh"
+      "echo 'line one' > lines.txt"
+      "echo 'line two' >> lines.txt"
+      "echo 'read line1' > stdin.sh"
+      "echo 'read line2' >> stdin.sh"
+      "echo 'echo stdin-\$line1-\$line2' >> stdin.sh"
+      "sh read.sh"
+      "sh stdin.sh < lines.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh read.sh"
+      "^read-alpha-beta gamma$"
+      "^before-3-one-two-three$"
+      "^after-1-three$"
+      "^only-alpha beta gamma$"
+      "TTY canonical line ready: sh stdin.sh < lines.txt"
+      "^stdin-line one-line two$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1840,7 +1872,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-envp, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

@@ -54,6 +54,7 @@ struct ShellEnv {
     loop_signal: Option<LoopSignal>,
     return_status: Option<i32>,
     functions: Vec<FunctionDef>,
+    stdin_pending: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -95,6 +96,7 @@ impl ShellEnv {
             loop_signal: None,
             return_status: None,
             functions: Vec::new(),
+            stdin_pending: Vec::new(),
         };
         if sys::getuid() == 0 {
             env.set(b"USER", b"root");
@@ -181,6 +183,28 @@ impl ShellEnv {
         for arg in args {
             self.positionals.push((*arg).to_vec());
         }
+    }
+
+    fn replace_positionals(&mut self, args: &[Vec<u8>]) {
+        let arg0 = self
+            .positionals
+            .first()
+            .cloned()
+            .unwrap_or_else(|| b"sh".to_vec());
+        self.positionals.clear();
+        self.positionals.push(arg0);
+        for arg in args {
+            self.positionals.push(arg.clone());
+        }
+    }
+
+    fn shift_positionals(&mut self, count: usize) -> bool {
+        if count > self.positional_count() {
+            return false;
+        }
+        let end = 1 + count;
+        self.positionals.drain(1..end);
+        true
     }
 
     fn positional(&self, index: usize) -> Option<&[u8]> {
@@ -290,6 +314,20 @@ fn parse_status(bytes: &[u8]) -> Option<i32> {
     Some(value & 0xff)
 }
 
+fn parse_usize(bytes: &[u8]) -> Option<usize> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value = 0usize;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as usize)?;
+    }
+    Some(value)
+}
+
 fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
     while bytes.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
         bytes = &bytes[1..];
@@ -300,10 +338,19 @@ fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
     bytes
 }
 
-fn read_line(fd: i32) -> Option<Vec<u8>> {
+fn read_line_buffered(fd: i32, pending: &mut Vec<u8>) -> Option<Vec<u8>> {
     let mut line: Vec<u8> = Vec::new();
     let mut buf = [0u8; 128];
     loop {
+        if let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+            line.extend_from_slice(&pending[..pos]);
+            pending.drain(..=pos);
+            return Some(line);
+        }
+        if !pending.is_empty() {
+            line.extend_from_slice(pending);
+            pending.clear();
+        }
         let n = sys::read(fd, &mut buf);
         if n < 0 {
             return None;
@@ -314,13 +361,7 @@ fn read_line(fd: i32) -> Option<Vec<u8>> {
         if n == 0 {
             return Some(line);
         }
-        let chunk = &buf[..n as usize];
-        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
-            line.extend_from_slice(&chunk[..pos]);
-            return Some(line);
-        } else {
-            line.extend_from_slice(chunk);
-        }
+        pending.extend_from_slice(&buf[..n as usize]);
     }
 }
 
@@ -922,6 +963,32 @@ fn continue_job(job: &Job) {
     }
 }
 
+fn assign_read_fields(env: &mut ShellEnv, names: &[Vec<u8>], line: &[u8]) {
+    if names.len() == 1 {
+        env.set(&names[0], line);
+        return;
+    }
+    let mut index = 0usize;
+    for (name_index, name) in names.iter().enumerate() {
+        while index < line.len() && line[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if name_index + 1 == names.len() {
+            let mut end = line.len();
+            while end > index && line[end - 1].is_ascii_whitespace() {
+                end -= 1;
+            }
+            env.set(name, &line[index..end]);
+            return;
+        }
+        let start = index;
+        while index < line.len() && !line[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        env.set(name, &line[start..index]);
+    }
+}
+
 fn is_builtin_name(name: &[u8]) -> bool {
     matches!(
         name,
@@ -932,6 +999,9 @@ fn is_builtin_name(name: &[u8]) -> bool {
             | b"return"
             | b"unset"
             | b"export"
+            | b"read"
+            | b"shift"
+            | b"set"
             | b"jobs"
             | b"fg"
             | b"bg"
@@ -990,15 +1060,54 @@ fn run_function(
     }
 }
 
-fn builtin(
+fn restore_builtin_redirects(saved_stdin: i32, saved_stdout: i32) {
+    if saved_stdin >= 0 {
+        let _ = sys::dup2(saved_stdin, FD_STDIN);
+        let _ = sys::close(saved_stdin);
+    }
+    if saved_stdout >= 0 {
+        let _ = sys::dup2(saved_stdout, FD_STDOUT);
+        let _ = sys::close(saved_stdout);
+    }
+}
+
+fn apply_builtin_redirects(stage: &Stage) -> Result<(i32, i32), i32> {
+    let mut saved_stdin = -1;
+    let mut saved_stdout = -1;
+    if let Some(ref path) = stage.stdin_path {
+        saved_stdin = sys::dup(FD_STDIN) as i32;
+        let fd = open_redirect(path, false, false);
+        if saved_stdin < 0 || fd < 0 {
+            restore_builtin_redirects(saved_stdin, saved_stdout);
+            let _ = sys::write(FD_STDERR, b"sh: cannot open input\n");
+            return Err(1);
+        }
+        let _ = sys::dup2(fd, FD_STDIN);
+        let _ = sys::close(fd);
+    }
+    if let Some(ref path) = stage.stdout_path {
+        saved_stdout = sys::dup(FD_STDOUT) as i32;
+        let fd = open_redirect(path, true, stage.append_stdout);
+        if saved_stdout < 0 || fd < 0 {
+            restore_builtin_redirects(saved_stdin, saved_stdout);
+            let _ = sys::write(FD_STDERR, b"sh: cannot open output\n");
+            return Err(1);
+        }
+        let _ = sys::dup2(fd, FD_STDOUT);
+        let _ = sys::close(fd);
+    }
+    Ok((saved_stdin, saved_stdout))
+}
+
+fn builtin_command(
     stage: &Stage,
     jobs: &mut Vec<Job>,
     next_job_id: &mut usize,
     env: &mut ShellEnv,
     last_status: i32,
-) -> Option<i32> {
+) -> i32 {
     if stage.argv.is_empty() {
-        return Some(0);
+        return 0;
     }
     let cmd = stage.argv[0].as_slice();
     match cmd {
@@ -1015,37 +1124,37 @@ fn builtin(
             let rc = sys::chdir(path.as_ptr());
             if rc < 0 {
                 let _ = sys::write(FD_STDERR, b"cd: failed\n");
-                Some(1)
+                1
             } else {
-                Some(0)
+                0
             }
         }
         b"." | b"source" => {
             if stage.argv.len() < 2 {
                 let _ = sys::write(FD_STDERR, b"source: missing file\n");
-                return Some(2);
+                return 2;
             }
             let mut status = last_status;
             if run_script_file(&stage.argv[1], jobs, next_job_id, env, &mut status) {
-                Some(status)
+                status
             } else if status != last_status {
-                Some(status)
+                status
             } else {
-                Some(1)
+                1
             }
         }
         b"return" => {
             let status = if let Some(arg) = stage.argv.get(1) {
                 let Some(status) = parse_status(arg) else {
                     let _ = sys::write(FD_STDERR, b"return: bad status\n");
-                    return Some(2);
+                    return 2;
                 };
                 status
             } else {
                 last_status
             };
             env.return_status = Some(status);
-            Some(status)
+            status
         }
         b"unset" => {
             let mut function_mode = false;
@@ -1070,11 +1179,11 @@ fn builtin(
                     env.unset(arg);
                 }
             }
-            Some(status)
+            status
         }
         b"type" => {
             if stage.argv.len() == 1 {
-                return Some(0);
+                return 0;
             }
             let mut status = 0;
             for arg in &stage.argv[1..] {
@@ -1095,7 +1204,7 @@ fn builtin(
                     status = 1;
                 }
             }
-            Some(status)
+            status
         }
         b"export" => {
             if stage.argv.len() == 1 {
@@ -1106,7 +1215,7 @@ fn builtin(
                     let _ = sys::write(FD_STDOUT, &var.value);
                     let _ = sys::write(FD_STDOUT, b"\n");
                 }
-                return Some(0);
+                return 0;
             }
             let mut status = 0;
             for arg in &stage.argv[1..] {
@@ -1115,18 +1224,81 @@ fn builtin(
                     status = 1;
                 }
             }
-            Some(status)
+            status
+        }
+        b"read" => {
+            let mut index = 1usize;
+            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-r") {
+                index += 1;
+            }
+            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"--") {
+                index += 1;
+            }
+            let names: Vec<Vec<u8>> = if index < stage.argv.len() {
+                stage.argv[index..].to_vec()
+            } else {
+                vec![b"REPLY".to_vec()]
+            };
+            if names.iter().any(|name| !valid_name(name)) {
+                let _ = sys::write(FD_STDERR, b"read: bad name\n");
+                return 2;
+            }
+            let line = if stage.stdin_path.is_some() {
+                let mut pending = Vec::new();
+                read_line_buffered(FD_STDIN, &mut pending)
+            } else {
+                read_line_buffered(FD_STDIN, &mut env.stdin_pending)
+            };
+            let Some(line) = line else {
+                return 1;
+            };
+            assign_read_fields(env, &names, &line);
+            0
+        }
+        b"shift" => {
+            let count = if let Some(arg) = stage.argv.get(1) {
+                let Some(count) = parse_usize(arg) else {
+                    let _ = sys::write(FD_STDERR, b"shift: bad count\n");
+                    return 2;
+                };
+                count
+            } else {
+                1
+            };
+            if stage.argv.len() > 2 || !env.shift_positionals(count) {
+                let _ = sys::write(FD_STDERR, b"shift: cannot shift\n");
+                1
+            } else {
+                0
+            }
+        }
+        b"set" => {
+            if stage.argv.get(1).is_some_and(|arg| arg.as_slice() == b"--") {
+                env.replace_positionals(&stage.argv[2..]);
+                0
+            } else if stage.argv.len() == 1 {
+                for var in &env.vars {
+                    let _ = sys::write(FD_STDOUT, &var.name);
+                    let _ = sys::write(FD_STDOUT, b"=");
+                    let _ = sys::write(FD_STDOUT, &var.value);
+                    let _ = sys::write(FD_STDOUT, b"\n");
+                }
+                0
+            } else {
+                env.replace_positionals(&stage.argv[1..]);
+                0
+            }
         }
         b"jobs" => {
             for job in jobs.iter() {
                 print_job(job);
             }
-            Some(0)
+            0
         }
         b"fg" => {
             let Some(mut job) = jobs.pop() else {
                 let _ = sys::write(FD_STDERR, b"fg: no current job\n");
-                return Some(1);
+                return 1;
             };
             let shell_pgrp = sys::getpgrp();
             set_tty_foreground(job.pid);
@@ -1146,7 +1318,7 @@ fn builtin(
                     stopped_status(signal)
                 }
             };
-            Some(status)
+            status
         }
         b"bg" => {
             if let Some(job) = jobs.last_mut() {
@@ -1155,15 +1327,37 @@ fn builtin(
                     job.state = JobState::Running;
                 }
                 print_job(job);
-                Some(0)
+                0
             } else {
                 let _ = sys::write(FD_STDERR, b"bg: no current job\n");
-                Some(1)
+                1
             }
         }
-        b":" => Some(0),
-        _ => None,
+        b":" => 0,
+        _ => 1,
     }
+}
+
+fn builtin(
+    stage: &Stage,
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: i32,
+) -> Option<i32> {
+    if stage.argv.is_empty() {
+        return Some(0);
+    }
+    if !is_builtin_name(&stage.argv[0]) {
+        return None;
+    }
+    let (saved_stdin, saved_stdout) = match apply_builtin_redirects(stage) {
+        Ok(saved) => saved,
+        Err(status) => return Some(status),
+    };
+    let status = builtin_command(stage, jobs, next_job_id, env, last_status);
+    restore_builtin_redirects(saved_stdin, saved_stdout);
+    Some(status)
 }
 
 const O_RDONLY: i32 = 0;
@@ -2178,7 +2372,7 @@ fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
     loop {
         let prompt = env.get(b"PS1").unwrap_or(PS1);
         let _ = sys::write(FD_STDOUT, prompt);
-        match read_line(FD_STDIN) {
+        match read_line_buffered(FD_STDIN, &mut env.stdin_pending) {
             Some(line) => {
                 if line.is_empty() {
                     continue;

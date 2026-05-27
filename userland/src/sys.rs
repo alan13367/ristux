@@ -17,6 +17,7 @@ pub const NR_BRK: usize = 12;
 pub const NR_IOCTL: usize = 16;
 pub const NR_PIPE: usize = 22;
 pub const NR_SCHED_YIELD: usize = 24;
+pub const NR_DUP: usize = 32;
 pub const NR_DUP2: usize = 33;
 pub const NR_GETPID: usize = 39;
 pub const NR_SOCKET: usize = 41;
@@ -256,6 +257,11 @@ pub fn open(path: *const u8, flags: i32, mode: u32) -> isize {
 #[inline]
 pub fn close(fd: i32) -> isize {
     unsafe { syscall1(NR_CLOSE, fd as usize) }
+}
+
+#[inline]
+pub fn dup(fd: i32) -> isize {
+    unsafe { syscall1(NR_DUP, fd as usize) }
 }
 
 #[inline]
