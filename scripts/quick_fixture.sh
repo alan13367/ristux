@@ -223,13 +223,16 @@ case "$SCENARIO" in
       "."
       "w"
       "q"
-      "edit /tmp/editcheck.txt"
+      "vi /tmp/editcheck.txt"
       "p"
       "q"
       "cat /tmp/editcheck.txt"
+      "which vi"
+      "pkg info vi"
     )
     EXPECTS=(
       "TTY canonical line ready: edit /tmp/editcheck.txt"
+      "TTY canonical line ready: vi /tmp/editcheck.txt"
       "^edit: new file$"
       "^edit: wrote 2 line[(]s[)]$"
       "^edit: done$"
@@ -237,6 +240,10 @@ case "$SCENARIO" in
       "^2.beta$"
       "^alpha$"
       "^beta$"
+      "^/bin/vi$"
+      "^name: vi$"
+      "^  edit$"
+      "^  /bin/vi$"
     )
     ;;
   libc)

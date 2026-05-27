@@ -49,6 +49,7 @@ file /bin/diff ../build/userland/diff.elf
 file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
+file /bin/vi ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/env ../build/userland/env.elf
 file /bin/expr ../build/userland/expr.elf
@@ -171,6 +172,7 @@ package diff 0.1.0 /bin/diff
 package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
 package edit 0.1.0 /bin/edit
+package vi 0.1.0 /bin/vi deps=edit
 package echo 0.1.0 /bin/echo
 package env 0.1.0 /bin/env
 package expr 0.1.0 /bin/expr
