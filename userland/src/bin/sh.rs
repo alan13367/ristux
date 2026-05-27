@@ -45,6 +45,7 @@ struct EnvVar {
 struct ShellEnv {
     vars: Vec<EnvVar>,
     positionals: Vec<Vec<u8>>,
+    loop_signal: Option<LoopSignal>,
 }
 
 #[derive(Clone)]
@@ -67,6 +68,12 @@ enum ListOp {
     Or,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LoopSignal {
+    Break,
+    Continue,
+}
+
 struct ListCommand {
     op: ListOp,
     bytes: Vec<u8>,
@@ -77,6 +84,7 @@ impl ShellEnv {
         let mut env = Self {
             vars: Vec::new(),
             positionals: Vec::new(),
+            loop_signal: None,
         };
         if sys::getuid() == 0 {
             env.set(b"USER", b"root");
@@ -1037,6 +1045,13 @@ fn is_case_start(line: &[u8]) -> bool {
             .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
 }
 
+fn is_control_command(line: &[u8], keyword: &[u8]) -> bool {
+    line == keyword
+        || line
+            .strip_prefix(keyword)
+            .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
+}
+
 fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
     line = trim_ascii(line);
     if line.len() < 4 || &line[line.len() - 4..] != b"then" {
@@ -1335,6 +1350,9 @@ fn execute_script_lines(
                     ) {
                         return false;
                     }
+                    if env.loop_signal.is_some() {
+                        return true;
+                    }
                 } else {
                     *last_status = 0;
                 }
@@ -1348,6 +1366,9 @@ fn execute_script_lines(
                         last_status,
                     ) {
                         return false;
+                    }
+                    if env.loop_signal.is_some() {
+                        return true;
                     }
                 } else {
                     *last_status = 0;
@@ -1393,6 +1414,17 @@ fn execute_script_lines(
                 ) {
                     return false;
                 }
+                match env.loop_signal {
+                    Some(LoopSignal::Break) => {
+                        env.loop_signal = None;
+                        break;
+                    }
+                    Some(LoopSignal::Continue) => {
+                        env.loop_signal = None;
+                        continue;
+                    }
+                    None => {}
+                }
             }
             index = done_index + 1;
             continue;
@@ -1429,6 +1461,17 @@ fn execute_script_lines(
                     last_status,
                 ) {
                     return false;
+                }
+                match env.loop_signal {
+                    Some(LoopSignal::Break) => {
+                        env.loop_signal = None;
+                        break;
+                    }
+                    Some(LoopSignal::Continue) => {
+                        env.loop_signal = None;
+                        continue;
+                    }
+                    None => {}
                 }
             }
             if !ran {
@@ -1477,6 +1520,9 @@ fn execute_script_lines(
                         ) {
                             return false;
                         }
+                        if env.loop_signal.is_some() {
+                            return true;
+                        }
                     } else {
                         *last_status = 0;
                     }
@@ -1488,6 +1534,16 @@ fn execute_script_lines(
             }
             index = esac_index + 1;
             continue;
+        }
+
+        if is_control_command(line, b"break") {
+            env.loop_signal = Some(LoopSignal::Break);
+            return true;
+        }
+
+        if is_control_command(line, b"continue") {
+            env.loop_signal = Some(LoopSignal::Continue);
+            return true;
         }
 
         if line == b"then"
@@ -1535,7 +1591,22 @@ fn run_script_file(
         }
         lines.push(trimmed.to_vec());
     }
-    execute_script_lines(&lines, jobs, next_job_id, env, last_status)
+    if !execute_script_lines(&lines, jobs, next_job_id, env, last_status) {
+        return false;
+    }
+    match env.loop_signal.take() {
+        Some(LoopSignal::Break) => {
+            let _ = sys::write(FD_STDERR, b"sh: break outside loop\n");
+            *last_status = 2;
+            false
+        }
+        Some(LoopSignal::Continue) => {
+            let _ = sys::write(FD_STDERR, b"sh: continue outside loop\n");
+            *last_status = 2;
+            false
+        }
+        None => true,
+    }
 }
 
 fn run_profile(

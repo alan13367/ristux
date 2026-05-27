@@ -888,6 +888,40 @@ case "$SCENARIO" in
       "^fallback-case$"
     )
     ;;
+  shell-loop-control)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shloopctl"
+      "cd /tmp/shloopctl"
+      "echo 'for item in one skip stop after; do' > loopctl.sh"
+      "echo 'case \$item in' >> loopctl.sh"
+      "echo 'skip)' >> loopctl.sh"
+      "echo 'continue' >> loopctl.sh"
+      "echo ';;' >> loopctl.sh"
+      "echo 'stop)' >> loopctl.sh"
+      "echo 'break' >> loopctl.sh"
+      "echo ';;' >> loopctl.sh"
+      "echo '*)' >> loopctl.sh"
+      "echo 'echo keep-\$item' >> loopctl.sh"
+      "echo ';;' >> loopctl.sh"
+      "echo 'esac' >> loopctl.sh"
+      "echo 'echo after-case-\$item' >> loopctl.sh"
+      "echo 'done' >> loopctl.sh"
+      "echo 'while true; do' >> loopctl.sh"
+      "echo 'echo while-once' >> loopctl.sh"
+      "echo 'break' >> loopctl.sh"
+      "echo 'done' >> loopctl.sh"
+      "echo 'echo done-loop' >> loopctl.sh"
+      "sh loopctl.sh"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: sh loopctl.sh"
+      "^keep-one$"
+      "^after-case-one$"
+      "^while-once$"
+      "^done-loop$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1661,7 +1695,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
