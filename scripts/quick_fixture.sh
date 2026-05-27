@@ -922,6 +922,35 @@ case "$SCENARIO" in
       "^done-loop$"
     )
     ;;
+  shell-source)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shsource"
+      "cd /tmp/shsource"
+      "mkdir dir"
+      "echo 'VAR=sourced' > env.sh"
+      "echo 'cd /tmp/shsource/dir' >> env.sh"
+      "echo 'echo inside-\$VAR' >> env.sh"
+      ". /tmp/shsource/env.sh"
+      "echo after-dot > after.txt"
+      "cat /tmp/shsource/dir/after.txt"
+      "echo outer-\$VAR"
+      "cd /tmp/shsource"
+      "source /tmp/shsource/env.sh"
+      "echo after-source > sourced-again.txt"
+      "cat /tmp/shsource/dir/sourced-again.txt"
+      "echo again-\$VAR"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: . /tmp/shsource/env.sh"
+      "^inside-sourced$"
+      "^after-dot$"
+      "^outer-sourced$"
+      "TTY canonical line ready: source /tmp/shsource/env.sh"
+      "^after-source$"
+      "^again-sourced$"
+    )
+    ;;
   links)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1695,7 +1724,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

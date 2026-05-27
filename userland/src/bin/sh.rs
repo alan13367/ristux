@@ -687,7 +687,13 @@ fn continue_job(job: &Job) {
     }
 }
 
-fn builtin(stage: &Stage, jobs: &mut Vec<Job>, env: &mut ShellEnv) -> Option<i32> {
+fn builtin(
+    stage: &Stage,
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: i32,
+) -> Option<i32> {
     if stage.argv.is_empty() {
         return Some(0);
     }
@@ -709,6 +715,20 @@ fn builtin(stage: &Stage, jobs: &mut Vec<Job>, env: &mut ShellEnv) -> Option<i32
                 Some(1)
             } else {
                 Some(0)
+            }
+        }
+        b"." | b"source" => {
+            if stage.argv.len() < 2 {
+                let _ = sys::write(FD_STDERR, b"source: missing file\n");
+                return Some(2);
+            }
+            let mut status = last_status;
+            if run_script_file(&stage.argv[1], jobs, next_job_id, env, &mut status) {
+                Some(status)
+            } else if status != last_status {
+                Some(status)
+            } else {
+                Some(1)
             }
         }
         b"export" => {
@@ -897,7 +917,7 @@ fn run_pipeline(
         if stage.argv.is_empty() {
             return 0;
         }
-        if let Some(rc) = builtin(stage, jobs, env) {
+        if let Some(rc) = builtin(stage, jobs, next_job_id, env, last_status) {
             return rc;
         }
     }
