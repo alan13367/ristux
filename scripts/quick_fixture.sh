@@ -333,6 +333,39 @@ case "$SCENARIO" in
       "^  /lib/tcc/include/tccdefs\\.h$"
     )
     ;;
+  tinycc-make)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "mkdir /tmp/tccmake"
+      "cd /tmp/tccmake"
+      "cp /usr/share/testdata/tinycc-project/Makefile Makefile"
+      "cp /usr/share/testdata/tinycc-project/main.c main.c"
+      "cp /usr/share/testdata/tinycc-project/util.c util.c"
+      "cp /usr/share/testdata/tinycc-project/util.h util.h"
+      "make -s"
+      "./app"
+      "test -f main.o"
+      "echo $?"
+      "test -f util.o"
+      "echo $?"
+      "which cc"
+      "pkg info tinycc-build-fixture"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: make -s"
+      "TTY canonical line ready: ./app"
+      "^tinycc make multi-file$"
+      "TTY canonical line ready: test -f main\\.o"
+      "^0$"
+      "TTY canonical line ready: test -f util\\.o"
+      "TTY canonical line ready: which cc"
+      "^/bin/cc$"
+      "^name: tinycc-build-fixture$"
+      "^  tcc$"
+      "^  make$"
+      "^  /usr/share/testdata/tinycc-project/Makefile$"
+    )
+    ;;
   libc-dev)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1207,7 +1240,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, libc, libc-hosted, sse, session, socket, tcp, tar, pkg, ar, pkgconf, make, tinycc, tinycc-make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

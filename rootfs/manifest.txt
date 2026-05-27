@@ -7,6 +7,7 @@ file /bin/ar ../build/userland/ar.elf
 file /bin/awk ../build/userland/awk.elf
 file /bin/basename ../build/userland/basename.elf
 file /bin/cat ../build/userland/cat.elf
+file /bin/cc ../build/userland/tcc.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
@@ -120,11 +121,13 @@ file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
 package-tree tcc 0.9.28rc ../build/ports/tinycc/root/lib/tcc /lib/tcc deps=libc,libc-dev
+package-tree tinycc-build-fixture 0.1.0 testdata/tinycc-project /usr/share/testdata/tinycc-project deps=tcc,make
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
 package awk 0.1.0 /bin/awk
 package basename 0.1.0 /bin/basename
 package cat 0.1.0 /bin/cat
+package tcc 0.9.28rc /bin/cc deps=libc,libc-dev
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow
 package cc_dev 0.1.0 /bin/cc_dev
