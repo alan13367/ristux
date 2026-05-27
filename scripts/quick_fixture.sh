@@ -520,6 +520,34 @@ case "$SCENARIO" in
       "^  /bin/sort$"
     )
     ;;
+  stat)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/statcheck"
+      "cd /tmp/statcheck"
+      "echo alpha > one.txt"
+      "mkdir dir"
+      "stat -c %s one.txt"
+      "stat -c %a one.txt"
+      "stat -c %F one.txt"
+      "stat -c %F dir"
+      "stat -c %n:%s:%a one.txt"
+      "stat one.txt"
+      "pkg info stat"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: stat -c %s one\\.txt"
+      "^6$"
+      "^644$"
+      "^regular file$"
+      "^directory$"
+      "^one\\.txt:6:644$"
+      "^  File: one\\.txt$"
+      "^  Size: 6$"
+      "^name: stat$"
+      "^  /bin/stat$"
+    )
+    ;;
   uniq)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -1126,7 +1154,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

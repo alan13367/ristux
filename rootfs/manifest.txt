@@ -79,6 +79,7 @@ file /bin/sed ../build/userland/sed.elf
 file /bin/seq ../build/userland/seq.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
 file /bin/sort ../build/userland/sort.elf
+file /bin/stat ../build/userland/stat.elf
 file /bin/stty ../build/userland/stty.elf
 file /bin/test ../build/userland/test.elf
 file /bin/[ ../build/userland/test.elf
@@ -203,6 +204,7 @@ package test 0.1.0 /bin/[
 package su 0.1.0 /bin/su
 package sleep 0.1.0 /bin/sleep
 package sort 0.1.0 /bin/sort
+package stat 0.1.0 /bin/stat
 package ssh_banner 0.1.0 /bin/ssh_banner
 package tail 0.1.0 /bin/tail
 package tar 0.1.0 /bin/tar
