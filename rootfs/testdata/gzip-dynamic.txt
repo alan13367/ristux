@@ -1,0 +1,11 @@
+host gzip fixture
+dynamic huffman compatible path
+the quick brown shell script runs through pipes and redirects
+source packages usually arrive as tarballs wrapped in gzip
+ristux should be able to unpack that first boring layer itself
+alpha beta gamma delta epsilon zeta eta theta iota kappa lambda
+alpha beta gamma delta epsilon zeta eta theta iota kappa lambda
+alpha beta gamma delta epsilon zeta eta theta iota kappa lambda
+numbers 000111222333444555666777888999
+numbers 000111222333444555666777888999
+numbers 000111222333444555666777888999

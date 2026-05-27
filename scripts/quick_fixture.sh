@@ -1010,6 +1010,35 @@ case "$SCENARIO" in
       "^  /bin/patch$"
     )
     ;;
+  gzip)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/gzipcheck"
+      "cd /tmp/gzipcheck"
+      "gzip -dc /usr/share/testdata/gzip-dynamic.txt.gz > host.txt"
+      "cat host.txt"
+      "echo alpha > payload.txt"
+      "echo beta >> payload.txt"
+      "gzip -c payload.txt > payload.txt.gz"
+      "gzip -t payload.txt.gz"
+      "gzip -dc payload.txt.gz > decoded.txt"
+      "gunzip -c payload.txt.gz > decoded2.txt"
+      "cmp payload.txt decoded.txt"
+      "cmp payload.txt decoded2.txt"
+      "cat decoded2.txt"
+      "pkg info gzip"
+    )
+    EXPECTS=(
+      "^host gzip fixture$"
+      "^source packages usually arrive as tarballs wrapped in gzip$"
+      "^ristux should be able to unpack that first boring layer itself$"
+      "^alpha$"
+      "^beta$"
+      "^name: gzip$"
+      "^  /bin/gzip$"
+      "^  /bin/gunzip$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -1062,7 +1091,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

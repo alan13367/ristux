@@ -52,6 +52,8 @@ file /bin/expr ../build/userland/expr.elf
 file /bin/false ../build/userland/false.elf
 file /bin/find ../build/userland/find.elf
 file /bin/grep ../build/userland/grep.elf
+file /bin/gzip ../build/userland/gzip.elf
+file /bin/gunzip ../build/userland/gzip.elf
 file /bin/head ../build/userland/head.elf
 file /bin/id ../build/userland/id.elf
 file /bin/install ../build/userland/install.elf
@@ -100,6 +102,7 @@ file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
 file /usr/lib/pkgconfig/libc.pc usr/lib/pkgconfig/libc.pc
 file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
+file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
 file /lib/crt0.o ../build/userland/c/crt0.o
 file /lib/crti.o ../build/userland/c/crti.o
 file /lib/crtn.o ../build/userland/c/crtn.o
@@ -158,6 +161,8 @@ package expr 0.1.0 /bin/expr
 package false 0.1.0 /bin/false
 package find 0.1.0 /bin/find
 package grep 0.1.0 /bin/grep
+package gzip 0.1.0 /bin/gzip
+package gzip 0.1.0 /bin/gunzip
 package head 0.1.0 /bin/head
 package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
