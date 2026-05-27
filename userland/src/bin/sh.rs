@@ -109,6 +109,19 @@ impl ShellEnv {
         env
     }
 
+    fn from_envp(inherited: &[Vec<u8>]) -> Self {
+        let mut env = Self::new();
+        for entry in inherited {
+            let Some(eq) = entry.iter().position(|byte| *byte == b'=') else {
+                continue;
+            };
+            if valid_name(&entry[..eq]) {
+                env.set(&entry[..eq], &entry[eq + 1..]);
+            }
+        }
+        env
+    }
+
     fn get(&self, name: &[u8]) -> Option<&[u8]> {
         self.vars
             .iter()
@@ -237,6 +250,30 @@ fn cstr(s: &[u8]) -> Vec<u8> {
     v.extend_from_slice(s);
     v.push(0);
     v
+}
+
+fn envp_slice(envp: *const *const u8) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    if envp.is_null() {
+        return out;
+    }
+    for index in 0..128usize {
+        unsafe {
+            let p = *envp.add(index);
+            if p.is_null() {
+                break;
+            }
+            let mut len = 0usize;
+            while *p.add(len) != 0 {
+                len += 1;
+                if len > 4096 {
+                    break;
+                }
+            }
+            out.push(core::slice::from_raw_parts(p, len).to_vec());
+        }
+    }
+    out
 }
 
 fn parse_status(bytes: &[u8]) -> Option<i32> {
@@ -2087,13 +2124,13 @@ fn run_login_profiles(
     }
 }
 
-fn main(args: &[&[u8]]) -> i32 {
+fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
     let _ = sys::setpgid(0, 0);
     let shell_pgrp = sys::getpgrp();
     set_tty_foreground(shell_pgrp);
     let mut jobs: Vec<Job> = Vec::new();
     let mut next_job_id = 1usize;
-    let mut env = ShellEnv::new();
+    let mut env = ShellEnv::from_envp(inherited_env);
     let default_arg0 = args.first().copied().unwrap_or(b"sh");
     env.set_positionals(default_arg0, &[]);
     let mut last_status = 0;
@@ -2161,4 +2198,12 @@ fn main(args: &[&[u8]]) -> i32 {
     }
 }
 
-ristux_userland::program_main!(main);
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _start(argc: i64, argv: *const *const u8, envp: *const *const u8) -> ! {
+    let argc = if argc < 0 { 0 } else { argc as usize };
+    let args = ristux_userland::argv_slice(argc, argv);
+    let arg_refs: Vec<&[u8]> = args.iter().map(|arg| *arg).collect();
+    let inherited_env = envp_slice(envp);
+    let status = main(&arg_refs, &inherited_env);
+    sys::exit(status);
+}
