@@ -730,6 +730,28 @@ case "$SCENARIO" in
       "^  /bin/uname$"
     )
     ;;
+  tr)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "echo RISTUX | tr A-Z a-z"
+      "echo aaabbbccc | tr -s abc"
+      "echo a1b2c3 | tr -d 0-9"
+      "echo xyz | tr xyz 123"
+      "pkg info tr"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: echo RISTUX | tr A-Z a-z"
+      "^ristux$"
+      "TTY canonical line ready: echo aaabbbccc | tr -s abc"
+      "^abc$"
+      "TTY canonical line ready: echo a1b2c3 | tr -d 0-9"
+      "^abc$"
+      "TTY canonical line ready: echo xyz | tr xyz 123"
+      "^123$"
+      "^name: tr$"
+      "^  /bin/tr$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -782,7 +804,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
