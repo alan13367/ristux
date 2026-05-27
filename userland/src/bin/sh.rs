@@ -42,10 +42,17 @@ struct EnvVar {
     value: Vec<u8>,
 }
 
+#[derive(Clone)]
+struct FunctionDef {
+    name: Vec<u8>,
+    body: Vec<Vec<u8>>,
+}
+
 struct ShellEnv {
     vars: Vec<EnvVar>,
     positionals: Vec<Vec<u8>>,
     loop_signal: Option<LoopSignal>,
+    functions: Vec<FunctionDef>,
 }
 
 #[derive(Clone)]
@@ -85,6 +92,7 @@ impl ShellEnv {
             vars: Vec::new(),
             positionals: Vec::new(),
             loop_signal: None,
+            functions: Vec::new(),
         };
         if sys::getuid() == 0 {
             env.set(b"USER", b"root");
@@ -156,6 +164,28 @@ impl ShellEnv {
 
     fn positional_count(&self) -> usize {
         self.positionals.len().saturating_sub(1)
+    }
+
+    fn set_function(&mut self, name: &[u8], body: &[Vec<u8>]) {
+        if let Some(function) = self
+            .functions
+            .iter_mut()
+            .find(|function| function.name.as_slice() == name)
+        {
+            function.body = body.to_vec();
+            return;
+        }
+        self.functions.push(FunctionDef {
+            name: name.to_vec(),
+            body: body.to_vec(),
+        });
+    }
+
+    fn function_body(&self, name: &[u8]) -> Option<Vec<Vec<u8>>> {
+        self.functions
+            .iter()
+            .find(|function| function.name.as_slice() == name)
+            .map(|function| function.body.clone())
     }
 }
 
@@ -687,6 +717,30 @@ fn continue_job(job: &Job) {
     }
 }
 
+fn run_function(
+    name: &[u8],
+    args: &[Vec<u8>],
+    jobs: &mut Vec<Job>,
+    next_job_id: &mut usize,
+    env: &mut ShellEnv,
+    last_status: i32,
+) -> Option<i32> {
+    let body = env.function_body(name)?;
+    let saved_positionals = core::mem::take(&mut env.positionals);
+    env.positionals.push(name.to_vec());
+    for arg in args {
+        env.positionals.push(arg.clone());
+    }
+    let mut status = last_status;
+    let ok = execute_script_lines(&body, jobs, next_job_id, env, &mut status);
+    env.positionals = saved_positionals;
+    if ok {
+        Some(status)
+    } else {
+        Some(status.max(1))
+    }
+}
+
 fn builtin(
     stage: &Stage,
     jobs: &mut Vec<Job>,
@@ -917,6 +971,16 @@ fn run_pipeline(
         if stage.argv.is_empty() {
             return 0;
         }
+        if let Some(rc) = run_function(
+            &stage.argv[0],
+            &stage.argv[1..],
+            jobs,
+            next_job_id,
+            env,
+            last_status,
+        ) {
+            return rc;
+        }
         if let Some(rc) = builtin(stage, jobs, next_job_id, env, last_status) {
             return rc;
         }
@@ -1070,6 +1134,46 @@ fn is_control_command(line: &[u8], keyword: &[u8]) -> bool {
         || line
             .strip_prefix(keyword)
             .is_some_and(|rest| rest.first().is_some_and(|byte| byte.is_ascii_whitespace()))
+}
+
+fn parse_function_header(line: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let line = trim_ascii(line);
+    if let Some(paren) = line.windows(2).position(|bytes| bytes == b"()") {
+        let name = trim_ascii(&line[..paren]);
+        if !valid_name(name) {
+            return None;
+        }
+        let rest = trim_ascii(&line[paren + 2..]);
+        return if rest.is_empty() {
+            Some((name.to_vec(), false))
+        } else if rest == b"{" {
+            Some((name.to_vec(), true))
+        } else {
+            None
+        };
+    }
+
+    let rest = line.strip_prefix(b"function")?;
+    if !rest.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+    let rest = trim_ascii(rest);
+    let name_end = rest
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || *byte == b'{')
+        .unwrap_or(rest.len());
+    let name = &rest[..name_end];
+    if !valid_name(name) {
+        return None;
+    }
+    let rest = trim_ascii(&rest[name_end..]);
+    if rest.is_empty() {
+        Some((name.to_vec(), false))
+    } else if rest == b"{" {
+        Some((name.to_vec(), true))
+    } else {
+        None
+    }
 }
 
 fn strip_trailing_then(mut line: &[u8]) -> (&[u8], bool) {
@@ -1261,6 +1365,24 @@ fn find_case_esac(lines: &[Vec<u8>], body_start: usize) -> Option<usize> {
     None
 }
 
+fn find_function_end(lines: &[Vec<u8>], body_start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = body_start;
+    while index < lines.len() {
+        let line = trim_ascii(&lines[index]);
+        if parse_function_header(line).is_some() {
+            depth += 1;
+        } else if line == b"}" {
+            if depth == 0 {
+                return Some(index);
+            }
+            depth -= 1;
+        }
+        index += 1;
+    }
+    None
+}
+
 fn find_case_arm_end(lines: &[Vec<u8>], arm_start: usize, case_end: usize) -> usize {
     let mut depth = 0usize;
     let mut index = arm_start;
@@ -1336,6 +1458,27 @@ fn execute_script_lines(
     let mut index = 0usize;
     while index < lines.len() {
         let line = trim_ascii(&lines[index]);
+        if let Some((name, inline_brace)) = parse_function_header(line) {
+            let mut body_start = index + 1;
+            if !inline_brace {
+                if body_start >= lines.len() || trim_ascii(&lines[body_start]) != b"{" {
+                    let _ = sys::write(FD_STDERR, b"sh: expected function body\n");
+                    *last_status = 2;
+                    return false;
+                }
+                body_start += 1;
+            }
+            let Some(end_index) = find_function_end(lines, body_start) else {
+                let _ = sys::write(FD_STDERR, b"sh: expected }\n");
+                *last_status = 2;
+                return false;
+            };
+            env.set_function(&name, &lines[body_start..end_index]);
+            *last_status = 0;
+            index = end_index + 1;
+            continue;
+        }
+
         if is_if_start(line) {
             let Some((condition, inline_then)) = parse_if_condition(line) else {
                 let _ = sys::write(FD_STDERR, b"sh: syntax error in if\n");
@@ -1573,12 +1716,17 @@ fn execute_script_lines(
             || line == b"done"
             || line == b";;"
             || line == b"esac"
+            || line == b"{"
+            || line == b"}"
         {
             let _ = sys::write(FD_STDERR, b"sh: unexpected control word\n");
             *last_status = 2;
             return false;
         }
         *last_status = run_line(line, jobs, next_job_id, env, *last_status);
+        if env.loop_signal.is_some() {
+            return true;
+        }
         index += 1;
     }
     true
