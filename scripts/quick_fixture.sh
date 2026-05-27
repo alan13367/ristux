@@ -953,6 +953,37 @@ case "$SCENARIO" in
       "^  /bin/diff$"
     )
     ;;
+  awk)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/awkcheck"
+      "cd /tmp/awkcheck"
+      "echo alpha 10 > table.txt"
+      "echo beta 20 >> table.txt"
+      "echo gamma 30 >> table.txt"
+      "awk '{print \$1}' table.txt"
+      "awk '/beta/ {print \$2}' table.txt"
+      "awk 'END {print NR}' table.txt"
+      "echo root:x:0 > passwd.txt"
+      "awk -F : '{print \$1}' passwd.txt"
+      "awk '\$2 > 15 {print \$1}' table.txt"
+      "awk 'BEGIN {print start}' table.txt"
+      "pkg info awk"
+    )
+    EXPECTS=(
+      "^alpha$"
+      "^beta$"
+      "^gamma$"
+      "^20$"
+      "^3$"
+      "^root$"
+      "^beta$"
+      "^gamma$"
+      "^start$"
+      "^name: awk$"
+      "^  /bin/awk$"
+    )
+    ;;
   loopback)
     COMMANDS=("ping 127.0.0.1" "loopback_check")
     EXPECTS=(
@@ -1005,7 +1036,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, passwd, session, socket, tcp, tar, pkg, ar, pkgconf, make, libc-dev, filetools, grep, script-prims, links, wc, head, tail, tee, sort, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, loopback, pty, pty-shell, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -1025,8 +1056,14 @@ send_text() {
       '*') printf 'sendkey shift-8\n' ;;
       '(') printf 'sendkey shift-9\n' ;;
       ')') printf 'sendkey shift-0\n' ;;
+      '[') printf 'sendkey leftbracket\n' ;;
+      ']') printf 'sendkey rightbracket\n' ;;
+      '{') printf 'sendkey shift-leftbracket\n' ;;
+      '}') printf 'sendkey shift-rightbracket\n' ;;
       '/') printf 'sendkey slash\n' ;;
+      \\) printf 'sendkey backslash\n' ;;
       '?') printf 'sendkey shift-slash\n' ;;
+      ';') printf 'sendkey semicolon\n' ;;
       ':') printf 'sendkey shift-semicolon\n' ;;
       "'") printf 'sendkey apostrophe\n' ;;
       '"') printf 'sendkey shift-apostrophe\n' ;;
