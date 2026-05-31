@@ -102,7 +102,9 @@
 #define SYS_SYMLINK 88
 #define SYS_READLINK 89
 #define SYS_CHMOD 90
+#define SYS_FCHMOD 91
 #define SYS_CHOWN 92
+#define SYS_FCHOWN 93
 #define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
 #define SYS_GETRLIMIT 97
@@ -1837,6 +1839,10 @@ int chown(const char *path, uid_t owner, gid_t group) {
     return (int)syscall_ret(syscall3(SYS_CHOWN, (long)path, owner, group));
 }
 
+int fchown(int fd, uid_t owner, gid_t group) {
+    return (int)syscall_ret(syscall3(SYS_FCHOWN, fd, owner, group));
+}
+
 int fchownat(int dirfd, const char *path, uid_t owner, gid_t group, int flags) {
     return (int)syscall_ret(syscall6(SYS_FCHOWNAT, dirfd, (long)path, owner, group, flags, 0));
 }
@@ -1968,6 +1974,10 @@ int mkdirat(int dirfd, const char *path, mode_t mode) {
 
 int chmod(const char *path, mode_t mode) {
     return (int)syscall_ret(syscall2(SYS_CHMOD, (long)path, mode));
+}
+
+int fchmod(int fd, mode_t mode) {
+    return (int)syscall_ret(syscall2(SYS_FCHMOD, fd, mode));
 }
 
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {

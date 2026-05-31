@@ -114,7 +114,9 @@ The current Linux-like syscall surface is:
 | 88 | `symlink` | Creates symbolic links. |
 | 89 | `readlink` | Reads symlink target bytes. |
 | 90 | `chmod` | Updates mode bits. |
+| 91 | `fchmod` | Updates mode bits through an open descriptor. |
 | 92 | `chown` | Updates owner and group. |
+| 93 | `fchown` | Updates owner and group through an open descriptor. |
 | 95 | `umask` | Sets the process mask and returns the previous mask. |
 | 96 | `gettimeofday` | Wall-clock seconds and microseconds. |
 | 97 | `getrlimit` | Reports kernel process limits for `RLIMIT_CORE` and `RLIMIT_NOFILE`. |
@@ -183,7 +185,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `poll`, `select`, `truncate`, `ftruncate`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `mkdirat`, `unlink`,
   `unlinkat`, `rmdir`, `rename`, `renameat`, `access`, `openat`, `fstatat`,
-  `faccessat`, `chmod`, `fchmodat`, `chown`, `fchownat`, `umask`,
+  `faccessat`, `chmod`, `fchmod`, `fchmodat`, `chown`, `fchown`, `fchownat`, `umask`,
   `getdents64`, `link`, `linkat`, `symlink`, `symlinkat`, `readlink`,
   `readlinkat`, `chdir`, `getcwd`, `statfs`, and `fstatfs`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and

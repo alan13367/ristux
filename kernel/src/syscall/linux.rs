@@ -85,7 +85,9 @@ pub const NR_unlink: u64 = 87;
 pub const NR_symlink: u64 = 88;
 pub const NR_readlink: u64 = 89;
 pub const NR_chmod: u64 = 90;
+pub const NR_fchmod: u64 = 91;
 pub const NR_chown: u64 = 92;
+pub const NR_fchown: u64 = 93;
 pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
 pub const NR_getrlimit: u64 = 97;
@@ -322,7 +324,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_symlink => linux_symlink(a0 as usize, a1 as usize),
         NR_readlink => linux_readlink(a0 as usize, a1 as usize, a2 as usize),
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
+        NR_fchmod => linux_fchmod(a0 as usize, a1 as u16),
         NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
+        NR_fchown => linux_fchown(a0 as usize, a1 as u32, a2 as u32),
         NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
         NR_getrlimit => linux_getrlimit(a0 as i32, a1 as usize),
         NR_getrusage => linux_getrusage(a0 as i32, a1 as usize),
@@ -2219,6 +2223,13 @@ fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_fchmod(fd: usize, mode: u16) -> Result<u64, i64> {
+    let path = fs::fd_path(process::user_vfs_fd(fd).ok_or(EBADF)?).map_err(map_vfs_error)?;
+    process::user_chmod(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_fchmodat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
     let path = resolve_at_path(dirfd, path_ptr, 0)?;
     process::user_chmod(&path, mode)
@@ -2228,6 +2239,13 @@ fn linux_fchmodat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
 
 fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_chown(&path, uid, gid)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_fchown(fd: usize, uid: u32, gid: u32) -> Result<u64, i64> {
+    let path = fs::fd_path(process::user_vfs_fd(fd).ok_or(EBADF)?).map_err(map_vfs_error)?;
     process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)

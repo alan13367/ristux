@@ -147,6 +147,20 @@ int main(void) {
         puts("cc_fs: fchownat failed");
         return 1;
     }
+    fd = openat(dirfd, "atdir/moved", O_RDWR, 0);
+    if (fd < 0) {
+        puts("cc_fs: fd metadata open failed");
+        return 1;
+    }
+    if (fchmod(fd, 0644) != 0 ||
+        fchown(fd, 0, 0) != 0 ||
+        fstat(fd, &st) != 0 ||
+        (st.st_mode & 0777) != 0644) {
+        puts("cc_fs: fd metadata syscalls failed");
+        return 1;
+    }
+    close(fd);
+    puts("cc_fs: fd metadata syscalls ok");
     if (unlinkat(dirfd, "hardat", 0) != 0 ||
         unlinkat(dirfd, "symat", 0) != 0 ||
         unlinkat(dirfd, "atdir/moved", 0) != 0 ||
