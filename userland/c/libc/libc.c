@@ -2972,8 +2972,10 @@ char *strerror(int errnum) {
     case ENOSYS: return "Function not implemented";
     case EADDRINUSE: return "Address already in use";
     case ECONNRESET: return "Connection reset by peer";
+    case EISCONN: return "Socket is already connected";
     case ENOTCONN: return "Socket is not connected";
     case ETIMEDOUT: return "Connection timed out";
+    case EALREADY: return "Operation already in progress";
     case EINPROGRESS: return "Operation now in progress";
     default: return "Unknown error";
     }

@@ -34,6 +34,8 @@ pub enum TcpError {
     NotConnected,
     WouldBlock,
     InvalidState,
+    AlreadyConnected,
+    InProgress,
     ConnectionReset,
     TimedOut,
 }
@@ -161,6 +163,12 @@ impl TcpStack {
     ) -> Result<(), TcpError> {
         let (outbound, retransmit) = {
             let socket = self.sockets.get_mut(socket).ok_or(TcpError::InvalidState)?;
+            match socket.state {
+                TcpState::Closed => {}
+                TcpState::SynSent => return Err(TcpError::InProgress),
+                TcpState::Established => return Err(TcpError::AlreadyConnected),
+                _ => return Err(TcpError::InvalidState),
+            }
             socket.remote_ip = remote_ip;
             socket.remote_port = remote_port;
             socket.state = TcpState::SynSent;

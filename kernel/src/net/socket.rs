@@ -29,6 +29,8 @@ pub enum SocketError {
     Invalid,
     WouldBlock,
     AddressInUse,
+    AlreadyConnected,
+    InProgress,
     ConnectionReset,
     TimedOut,
 }
@@ -640,6 +642,8 @@ fn map_tcp_error(err: TcpError) -> SocketError {
     match err {
         TcpError::WouldBlock => SocketError::WouldBlock,
         TcpError::NotConnected | TcpError::InvalidState => SocketError::Invalid,
+        TcpError::AlreadyConnected => SocketError::AlreadyConnected,
+        TcpError::InProgress => SocketError::InProgress,
         TcpError::ConnectionReset => SocketError::ConnectionReset,
         TcpError::TimedOut => SocketError::TimedOut,
     }

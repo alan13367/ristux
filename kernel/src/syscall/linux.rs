@@ -143,9 +143,12 @@ const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
 const EADDRINUSE: i64 = -98;
+const EISCONN: i64 = -106;
 const ECONNRESET: i64 = -104;
 const ENOTCONN: i64 = -107;
 const ETIMEDOUT: i64 = -110;
+const EALREADY: i64 = -114;
+const EINPROGRESS: i64 = -115;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
 const RLIMIT_CORE: i32 = 4;
 const RLIMIT_NOFILE: i32 = 7;
@@ -1421,9 +1424,19 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
 fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
     let (ip, port) = read_sockaddr_in(addr, addrlen)?;
-    crate::net::socket::with_sockets(|table| table.connect(handle, crate::net::Ipv4Addr(ip), port))
-        .map(|_| 0)
-        .map_err(map_socket_error)
+    let nonblocking = crate::net::socket::with_sockets(|table| {
+        table
+            .status_flags(handle)
+            .map(|flags| flags & O_NONBLOCK != 0)
+    })
+    .map_err(map_socket_error)?;
+    match crate::net::socket::with_sockets(|table| {
+        table.connect(handle, crate::net::Ipv4Addr(ip), port)
+    }) {
+        Ok(()) => Ok(0),
+        Err(crate::net::socket::SocketError::WouldBlock) if nonblocking => Err(EINPROGRESS),
+        Err(err) => Err(map_socket_error(err)),
+    }
 }
 
 fn linux_accept(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
@@ -1740,6 +1753,8 @@ fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
         crate::net::socket::SocketError::Invalid => EINVAL,
         crate::net::socket::SocketError::WouldBlock => EAGAIN,
         crate::net::socket::SocketError::AddressInUse => EADDRINUSE,
+        crate::net::socket::SocketError::AlreadyConnected => EISCONN,
+        crate::net::socket::SocketError::InProgress => EALREADY,
         crate::net::socket::SocketError::ConnectionReset => ECONNRESET,
         crate::net::socket::SocketError::TimedOut => ETIMEDOUT,
     }

@@ -24,8 +24,10 @@ extern int errno;
 #define ERANGE 34
 #define EADDRINUSE 98
 #define ECONNRESET 104
+#define EISCONN 106
 #define ENOTCONN 107
 #define ETIMEDOUT 110
+#define EALREADY 114
 #define EINPROGRESS 115
 
 #endif

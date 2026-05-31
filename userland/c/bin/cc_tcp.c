@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
@@ -82,6 +83,12 @@ static int close_fin_roundtrip(void) {
         puts("cc_tcp: connect failed");
         return 1;
     }
+    errno = 0;
+    if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) != -1 ||
+        errno != EISCONN) {
+        puts("cc_tcp: connected connect failed");
+        return 1;
+    }
     int server = accept(listener, NULL, NULL);
     if (server < 0) {
         puts("cc_tcp: accept failed");
@@ -156,11 +163,58 @@ static int reset_on_unused_port(void) {
     return 0;
 }
 
+static int nonblocking_connect_pending(void) {
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(18200);
+    addr.sin_addr.s_addr = htonl(0x0a000263);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        puts("cc_tcp: nonblock socket failed");
+        return 1;
+    }
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        puts("cc_tcp: nonblock fcntl failed");
+        return 1;
+    }
+    errno = 0;
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != -1 ||
+        errno != EINPROGRESS) {
+        puts("cc_tcp: nonblock connect failed");
+        return 1;
+    }
+    errno = 0;
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != -1 ||
+        errno != EALREADY) {
+        puts("cc_tcp: nonblock reconnect failed");
+        return 1;
+    }
+    int error = -1;
+    socklen_t error_len = sizeof(error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &error_len) < 0 ||
+        error != 0) {
+        puts("cc_tcp: nonblock so_error failed");
+        return 1;
+    }
+    if (close(fd) < 0) {
+        puts("cc_tcp: nonblock close failed");
+        return 1;
+    }
+    puts("cc_tcp: nonblock connect ok");
+    return 0;
+}
+
 int main(void) {
     if (close_fin_roundtrip() != 0) {
         return 1;
     }
     if (reset_on_unused_port() != 0) {
+        return 1;
+    }
+    if (nonblocking_connect_pending() != 0) {
         return 1;
     }
     puts("cc_tcp: done");
