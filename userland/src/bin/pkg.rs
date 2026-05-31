@@ -158,7 +158,7 @@ fn print_line(bytes: &[u8]) {
 }
 
 fn print_usage() {
-    let _ = write_all(2, b"usage: pkg list | pkg info NAME | pkg files NAME | pkg deps NAME | pkg hook NAME | pkg run-hook NAME | pkg register NAME VERSION FILELIST [DEP...]\n");
+    let _ = write_all(2, b"usage: pkg list | pkg info NAME | pkg files NAME | pkg deps NAME | pkg hook NAME | pkg run-hook NAME | pkg verify NAME | pkg register NAME VERSION FILELIST [DEP...]\n");
 }
 
 fn list_packages() -> i32 {
@@ -281,6 +281,26 @@ fn append_hex_u64(out: &mut Vec<u8>, value: u64) {
     }
 }
 
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn parse_hex_u64(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty() || bytes.len() > 16 {
+        return None;
+    }
+    let mut value = 0u64;
+    for byte in bytes {
+        value = (value << 4) | hex_value(*byte)? as u64;
+    }
+    Some(value)
+}
+
 fn valid_installed_path(path: &[u8]) -> bool {
     path.starts_with(b"/")
         && !path.contains(&0)
@@ -352,6 +372,102 @@ fn rebuild_package_index(name: &[u8], version: &[u8], files: &[Vec<u8>]) -> Opti
         output.push(b'\n');
     }
     Some(output)
+}
+
+fn collect_index_entries(index: &[u8], name: &[u8]) -> Vec<(Vec<u8>, u64)> {
+    let mut entries = Vec::new();
+    for_lines(index, |line| {
+        if line.is_empty() || line.starts_with(b"#") {
+            return;
+        }
+        let fields = split_fields(line);
+        if fields.len() < 4 || fields[0] != name {
+            return;
+        }
+        let Some(expected) = parse_hex_u64(fields[3]) else {
+            return;
+        };
+        entries.push((fields[2].to_vec(), expected));
+    });
+    entries
+}
+
+fn package_index_entries(name: &[u8]) -> Vec<(Vec<u8>, u64)> {
+    if let Some(index) = read_file(LOCAL_INDEX) {
+        let entries = collect_index_entries(&index, name);
+        if !entries.is_empty() {
+            return entries;
+        }
+    }
+    read_file(BASE_INDEX)
+        .map(|index| collect_index_entries(&index, name))
+        .unwrap_or_default()
+}
+
+fn verify_package(name: &[u8]) -> i32 {
+    if !safe_package_name(name) {
+        let _ = write_all(2, b"pkg: invalid package name\n");
+        return 1;
+    }
+    let entries = package_index_entries(name);
+    let Some(files) = read_db_file(name, b"files") else {
+        let _ = write_all(2, b"pkg: unknown package ");
+        let _ = write_all(2, name);
+        let _ = write_all(2, b"\n");
+        return 1;
+    };
+    if entries.is_empty() {
+        let _ = write_all(2, b"pkg: no index entries for ");
+        let _ = write_all(2, name);
+        let _ = write_all(2, b"\n");
+        return 1;
+    }
+
+    let mut listed = 0usize;
+    let mut ok = true;
+    for_lines(&files, |line| {
+        let path = trim_ascii(line);
+        if path.is_empty() {
+            return;
+        }
+        listed += 1;
+        if !entries
+            .iter()
+            .any(|(entry_path, _)| entry_path.as_slice() == path)
+        {
+            let _ = write_all(2, b"pkg: missing index entry ");
+            let _ = write_all(2, path);
+            let _ = write_all(2, b"\n");
+            ok = false;
+        }
+    });
+    if listed != entries.len() {
+        let _ = write_all(2, b"pkg: file list/index mismatch\n");
+        ok = false;
+    }
+    if !ok {
+        return 1;
+    }
+
+    for (path, expected) in entries {
+        let Some(data) = read_file(&path) else {
+            let _ = write_all(2, b"pkg: missing ");
+            let _ = write_all(2, &path);
+            let _ = write_all(2, b"\n");
+            return 1;
+        };
+        if checksum(&data) != expected {
+            let _ = write_all(2, b"pkg: checksum mismatch ");
+            let _ = write_all(2, &path);
+            let _ = write_all(2, b"\n");
+            return 1;
+        }
+    }
+
+    let _ = write_all(1, b"verified ");
+    let _ = write_all(1, name);
+    let _ = write_all(1, b"\n");
+    0
 }
 
 fn register_package(args: &[&[u8]]) -> i32 {
@@ -477,6 +593,9 @@ fn main(args: &[&[u8]]) -> i32 {
     }
     if args.len() == 3 && args[1] == b"run-hook" {
         return run_hook(args[2]);
+    }
+    if args.len() == 3 && args[1] == b"verify" {
+        return verify_package(args[2]);
     }
     if args.len() >= 5 && args[1] == b"register" {
         return register_package(args);

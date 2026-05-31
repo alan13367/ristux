@@ -81,6 +81,25 @@ case "$SCENARIO" in
       "^cc_ext2: done$"
     )
     ;;
+  pkg-reboot)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "echo persistent package payload > /home/pkg_reboot_payload"
+      "echo /home/pkg_reboot_payload > /home/pkg_reboot.files"
+      "pkg register reboot-pkg 1.0 /home/pkg_reboot.files"
+      "pkg verify reboot-pkg"
+      "pkg info reboot-pkg"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: pkg register reboot-pkg 1.0 /home/pkg_reboot.files"
+      "^registered reboot-pkg 1\\.0$"
+      "TTY canonical line ready: pkg verify reboot-pkg"
+      "^verified reboot-pkg$"
+      "^name: reboot-pkg$"
+      "^version: 1\\.0$"
+      "^  /home/pkg_reboot_payload$"
+    )
+    ;;
   cred)
     COMMANDS=("cc_cred")
     EXPECTS=(
@@ -601,6 +620,7 @@ case "$SCENARIO" in
       "echo /tmp/pkgroot/bin/ristux-hello > /tmp/nativepkg.files"
       "echo /tmp/pkgroot/share/doc/ristux-hello/README.txt >> /tmp/nativepkg.files"
       "pkg register ristux-hello 0.1.0 /tmp/nativepkg.files tcc make"
+      "pkg verify ristux-hello"
       "pkg info ristux-hello"
       "pkg files ristux-hello"
       "pkg info native-build-fixture"
@@ -619,6 +639,7 @@ case "$SCENARIO" in
       "^arg\\[1\\]=installed$"
       "^ristux-hello is a tiny C package used to prove native source rebuilds\\.$"
       "^registered ristux-hello 0\\.1\\.0$"
+      "^verified ristux-hello$"
       "^name: ristux-hello$"
       "^version: 0\\.1\\.0$"
       "^  tcc$"
@@ -2109,7 +2130,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
@@ -2305,6 +2326,91 @@ if [[ "$SCENARIO" == "ext2-reboot" ]]; then
     "TTY canonical line ready: mount" \
     "ext2 on /" \
     "tmpfs on /tmp"
+  echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG $REBOOT_SERIAL_LOG"
+  exit 0
+fi
+
+if [[ "$SCENARIO" == "pkg-reboot" ]]; then
+  REBOOT_SERIAL_LOG="${RISTUX_QUICK_REBOOT_SERIAL_LOG:-/tmp/ristux-quick-pkg-reboot-second.log}"
+  rm -f "$REBOOT_SERIAL_LOG"
+
+  (
+    sleep "$BOOT_WAIT"
+    send_text "root"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep 2
+    for command in "${COMMANDS[@]}"; do
+      send_command "$command"
+    done
+    printf 'quit\n'
+  ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+    -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-monitor.log &
+  QEMU_PID=$!
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+      echo "quick_fixture: timed out after ${TIMEOUT_SECONDS}s" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+    fi
+  ) &
+  WATCHDOG_PID=$!
+  set +e
+  wait "$QEMU_PID"
+  QEMU_STATUS=$?
+  set -e
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  if [[ "$QEMU_STATUS" -ne 0 ]]; then
+    echo "quick_fixture: qemu exited with $QEMU_STATUS; see $SERIAL_LOG" >&2
+    exit "$QEMU_STATUS"
+  fi
+  check_log "$SERIAL_LOG" "${EXPECTS[@]}"
+
+  (
+    sleep "$BOOT_WAIT"
+    send_text "root"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep 2
+    send_command "pkg info reboot-pkg"
+    send_command "pkg files reboot-pkg"
+    send_command "pkg verify reboot-pkg"
+    send_command "cat /home/pkg_reboot_payload"
+    printf 'quit\n'
+  ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+    -serial "file:$REBOOT_SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-pkg-reboot-monitor.log &
+  QEMU_PID=$!
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+      echo "quick_fixture: package reboot check timed out after ${TIMEOUT_SECONDS}s" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+    fi
+  ) &
+  WATCHDOG_PID=$!
+  set +e
+  wait "$QEMU_PID"
+  QEMU_STATUS=$?
+  set -e
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  if [[ "$QEMU_STATUS" -ne 0 ]]; then
+    echo "quick_fixture: package reboot qemu exited with $QEMU_STATUS; see $REBOOT_SERIAL_LOG" >&2
+    exit "$QEMU_STATUS"
+  fi
+  check_log "$REBOOT_SERIAL_LOG" \
+    "Kernel self-test harness passed" \
+    "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." \
+    "TTY canonical line ready: pkg info reboot-pkg" \
+    "^name: reboot-pkg$" \
+    "^version: 1\\.0$" \
+    "TTY canonical line ready: pkg files reboot-pkg" \
+    "^/home/pkg_reboot_payload$" \
+    "TTY canonical line ready: pkg verify reboot-pkg" \
+    "^verified reboot-pkg$" \
+    "TTY canonical line ready: cat /home/pkg_reboot_payload" \
+    "^persistent package payload$"
   echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG $REBOOT_SERIAL_LOG"
   exit 0
 fi
