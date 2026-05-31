@@ -763,11 +763,24 @@ fn linux_read(
 
     if fs::is_kernel_tty_fd(vfs_fd) {
         loop {
-            if let Some(data) = tty::try_read() {
-                let out = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
-                let n = data.len().min(len);
-                out[..n].copy_from_slice(&data[..n]);
-                return Ok(n as u64);
+            match tty::try_read_for_current() {
+                tty::ReadOutcome::Ready(data) => {
+                    let out = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
+                    let n = data.len().min(len);
+                    out[..n].copy_from_slice(&data[..n]);
+                    return Ok(n as u64);
+                }
+                tty::ReadOutcome::WouldBlock => {}
+                tty::ReadOutcome::WaitUntil(deadline_ms) => {
+                    if nonblocking {
+                        return Err(EAGAIN);
+                    }
+                    tty::park_current_until(Some(deadline_ms));
+                    if !crate::syscall::yield_blocked(frame) {
+                        return Err(CONTEXT_SWITCHED);
+                    }
+                    continue;
+                }
             }
             if nonblocking {
                 return Err(EAGAIN);

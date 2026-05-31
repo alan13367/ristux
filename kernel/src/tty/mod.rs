@@ -35,6 +35,18 @@ pub enum TtyMode {
     Raw,
 }
 
+pub enum ReadOutcome {
+    Ready(Vec<u8>),
+    WouldBlock,
+    WaitUntil(u64),
+}
+
+#[derive(Clone, Copy)]
+struct TtyWaiter {
+    pid: Pid,
+    deadline_ms: Option<u64>,
+}
+
 #[derive(Clone, Copy)]
 struct Termios {
     iflag: u32,
@@ -60,7 +72,12 @@ impl Termios {
             iflag: IFLAG_ICRNL,
             oflag: OFLAG_OPOST,
             cflag: CFLAG_CREAD | CFLAG_CS8,
-            lflag: LFLAG_ISIG | LFLAG_ICANON | LFLAG_ECHO | LFLAG_ECHOE | LFLAG_ECHOK | LFLAG_IEXTEN,
+            lflag: LFLAG_ISIG
+                | LFLAG_ICANON
+                | LFLAG_ECHO
+                | LFLAG_ECHOE
+                | LFLAG_ECHOK
+                | LFLAG_IEXTEN,
             line: 0,
             cc,
             ispeed: 38_400,
@@ -107,7 +124,8 @@ pub struct Tty {
     ready: Vec<Vec<u8>>,
     eof: bool,
     /// Processes parked inside `read()` waiting for input.
-    waiters: Vec<Pid>,
+    waiters: Vec<TtyWaiter>,
+    raw_first_byte_ms: Option<u64>,
     foreground_pgrp: Pid,
 }
 
@@ -119,6 +137,7 @@ impl Tty {
             ready: Vec::new(),
             eof: false,
             waiters: Vec::new(),
+            raw_first_byte_ms: None,
             foreground_pgrp: 1,
         }
     }
@@ -150,6 +169,9 @@ impl Tty {
             }
         }
         if !self.canonical_enabled() {
+            if self.line.is_empty() {
+                self.raw_first_byte_ms = Some(crate::time::uptime_millis());
+            }
             self.line.push(byte);
             return None;
         }
@@ -180,14 +202,29 @@ impl Tty {
     }
 
     pub fn read_available(&mut self) -> Option<Vec<u8>> {
+        self.read_available_at(crate::time::uptime_millis(), false)
+    }
+
+    fn read_available_at(&mut self, now_ms: u64, timeout_expired: bool) -> Option<Vec<u8>> {
         if !self.canonical_enabled() {
             let min = self.termios.cc[VMIN] as usize;
+            let time_ds = self.termios.cc[VTIME] as u64;
             if self.line.is_empty() {
-                return if min == 0 { Some(Vec::new()) } else { None };
+                return if min == 0 && (time_ds == 0 || timeout_expired) {
+                    Some(Vec::new())
+                } else {
+                    None
+                };
             }
-            if min != 0 && self.line.len() < min {
+            let interbyte_expired = time_ds != 0
+                && self
+                    .raw_first_byte_ms
+                    .map(|first| now_ms >= first.saturating_add(time_ds.saturating_mul(100)))
+                    .unwrap_or(false);
+            if min != 0 && self.line.len() < min && !interbyte_expired {
                 return None;
             }
+            self.raw_first_byte_ms = None;
             return Some(self.line.drain(..).collect());
         }
         if let Some(line) = self.ready.first().cloned() {
@@ -219,7 +256,11 @@ impl Tty {
 
     fn control_char(&self, index: usize) -> Option<u8> {
         let byte = self.termios.cc.get(index).copied().unwrap_or(0);
-        if byte == 0 { None } else { Some(byte) }
+        if byte == 0 {
+            None
+        } else {
+            Some(byte)
+        }
     }
 
     fn termios(&self) -> Termios {
@@ -228,16 +269,66 @@ impl Tty {
 
     fn set_termios(&mut self, termios: Termios) {
         self.termios = termios;
+        if self.canonical_enabled() || self.line.is_empty() {
+            self.raw_first_byte_ms = None;
+        } else if self.raw_first_byte_ms.is_none() {
+            self.raw_first_byte_ms = Some(crate::time::uptime_millis());
+        }
     }
 
-    fn park(&mut self, pid: Pid) {
-        if !self.waiters.contains(&pid) {
-            self.waiters.push(pid);
+    fn park(&mut self, pid: Pid, deadline_ms: Option<u64>) {
+        if let Some(waiter) = self.waiters.iter_mut().find(|waiter| waiter.pid == pid) {
+            waiter.deadline_ms = deadline_ms;
+        } else {
+            self.waiters.push(TtyWaiter { pid, deadline_ms });
         }
     }
 
     fn drain_waiters(&mut self) -> Vec<Pid> {
         core::mem::take(&mut self.waiters)
+            .into_iter()
+            .map(|waiter| waiter.pid)
+            .collect()
+    }
+
+    fn expired_waiter(&mut self, pid: Pid, now_ms: u64) -> bool {
+        let Some(index) = self.waiters.iter().position(|waiter| {
+            waiter.pid == pid
+                && waiter
+                    .deadline_ms
+                    .is_some_and(|deadline| now_ms >= deadline)
+        }) else {
+            return false;
+        };
+        self.waiters.swap_remove(index);
+        true
+    }
+
+    fn clear_waiter(&mut self, pid: Pid) {
+        if let Some(index) = self.waiters.iter().position(|waiter| waiter.pid == pid) {
+            self.waiters.swap_remove(index);
+        }
+    }
+
+    fn read_deadline_ms(&self, now_ms: u64) -> Option<u64> {
+        if self.canonical_enabled() {
+            return None;
+        }
+        let min = self.termios.cc[VMIN] as usize;
+        let time_ds = self.termios.cc[VTIME] as u64;
+        if time_ds == 0 {
+            return None;
+        }
+        let timeout_ms = time_ds.saturating_mul(100);
+        if self.line.is_empty() {
+            return (min == 0).then_some(now_ms.saturating_add(timeout_ms));
+        }
+        if min != 0 && self.line.len() < min {
+            return self
+                .raw_first_byte_ms
+                .map(|first| first.saturating_add(timeout_ms));
+        }
+        None
     }
 
     fn has_data(&self) -> bool {
@@ -325,15 +416,27 @@ pub fn read(output: &mut [u8]) -> usize {
     count
 }
 
-/// Return the next ready terminal read chunk if available.
-pub fn try_read() -> Option<Vec<u8>> {
+pub fn try_read_for_current() -> ReadOutcome {
+    let now_ms = crate::time::uptime_millis();
+    let pid = crate::process::current_pid();
     let mut guard = TTY.lock();
     let tty = guard.as_mut().expect("TTY used before initialization");
-    let mut line = tty.read_available()?;
-    if tty.canonical_enabled() && !line.ends_with(b"\n") {
-        line.push(b'\n');
+    let timeout_expired = pid
+        .map(|pid| tty.expired_waiter(pid, now_ms))
+        .unwrap_or(false);
+    if let Some(mut line) = tty.read_available_at(now_ms, timeout_expired) {
+        if let Some(pid) = pid {
+            tty.clear_waiter(pid);
+        }
+        if tty.canonical_enabled() && !line.ends_with(b"\n") {
+            line.push(b'\n');
+        }
+        return ReadOutcome::Ready(line);
     }
-    Some(line)
+    match tty.read_deadline_ms(now_ms) {
+        Some(deadline_ms) => ReadOutcome::WaitUntil(deadline_ms),
+        None => ReadOutcome::WouldBlock,
+    }
 }
 
 pub fn termios_bytes() -> [u8; TERMIOS_SIZE] {
@@ -360,23 +463,29 @@ pub fn has_data() -> bool {
 
 /// Park the current process on the TTY wait-queue.
 pub fn park_current() {
+    park_current_until(None);
+}
+
+pub fn park_current_until(deadline_ms: Option<u64>) {
     let Some(pid) = crate::process::current_pid() else {
         return;
     };
     {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
-        tty.park(pid);
+        tty.park(pid, deadline_ms);
     }
-    crate::process::block_current(crate::process::BlockReason::WaitIo);
+    match deadline_ms {
+        Some(deadline_ms) => {
+            crate::process::block_current(crate::process::BlockReason::WaitIoUntil(deadline_ms))
+        }
+        None => crate::process::block_current(crate::process::BlockReason::WaitIo),
+    }
 }
 
 pub fn foreground_pgrp() -> Pid {
     let guard = TTY.lock();
-    guard
-        .as_ref()
-        .map(|tty| tty.foreground_pgrp())
-        .unwrap_or(1)
+    guard.as_ref().map(|tty| tty.foreground_pgrp()).unwrap_or(1)
 }
 
 pub fn set_foreground_pgrp(pgrp: Pid) {

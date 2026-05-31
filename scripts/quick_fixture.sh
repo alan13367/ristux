@@ -245,6 +245,7 @@ case "$SCENARIO" in
       "^cc_tty: tcgetattr ok$"
       "^cc_tty: cfmakeraw ok$"
       "^cc_tty: tcsetattr ok$"
+      "^cc_tty: vtime ok$"
       "^cc_tty: restore ok$"
       "^cc_tty: done$"
       "TTY canonical line ready: stty -a"

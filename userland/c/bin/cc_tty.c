@@ -41,6 +41,21 @@ int main(void) {
     }
     puts("cc_tty: tcsetattr ok");
 
+    struct termios timed = raw;
+    timed.c_cc[VMIN] = 0;
+    timed.c_cc[VTIME] = 1;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &timed) < 0) {
+        puts("cc_tty: timed tcsetattr failed");
+        return 1;
+    }
+    char byte;
+    ssize_t nread = read(STDIN_FILENO, &byte, 1);
+    if (nread != 0) {
+        puts("cc_tty: vtime read failed");
+        return 1;
+    }
+    puts("cc_tty: vtime ok");
+
     if (tcsetattr(STDIN_FILENO, TCSANOW, &original) < 0) {
         puts("cc_tty: restore failed");
         return 1;
