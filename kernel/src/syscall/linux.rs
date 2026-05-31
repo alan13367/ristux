@@ -71,6 +71,7 @@ pub const NR_kill: u64 = 62;
 pub const NR_uname: u64 = 63;
 pub const NR_fcntl: u64 = 72;
 pub const NR_fsync: u64 = 74;
+pub const NR_truncate: u64 = 76;
 pub const NR_ftruncate: u64 = 77;
 pub const NR_getdents: u64 = 78;
 pub const NR_getcwd: u64 = 79;
@@ -278,6 +279,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_uname => linux_uname(a0 as usize),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
         NR_fsync => linux_fsync(a0 as usize),
+        NR_truncate => linux_truncate(a0 as usize, a1 as i64),
         NR_ftruncate => linux_ftruncate(a0 as usize, a1 as i64),
         NR_getdents | NR_getdents64 => linux_getdents64(a0 as usize, a1 as usize, a2 as usize),
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
@@ -837,6 +839,28 @@ fn linux_fsync(fd: usize) -> Result<u64, i64> {
         return Ok(0);
     }
     Err(EBADF)
+}
+
+fn linux_truncate(path_ptr: usize, len: i64) -> Result<u64, i64> {
+    if len < 0 {
+        return Err(EINVAL);
+    }
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let fd = process::user_open_options(
+        &path,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+    )
+    .map_err(map_vfs_error)?;
+    let result = linux_ftruncate(fd, len);
+    let _ = process::user_close(fd);
+    result
 }
 
 fn linux_ftruncate(fd: usize, len: i64) -> Result<u64, i64> {

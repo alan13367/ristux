@@ -87,6 +87,7 @@
 #define SYS_UNAME 63
 #define SYS_FCNTL 72
 #define SYS_FSYNC 74
+#define SYS_TRUNCATE 76
 #define SYS_FTRUNCATE 77
 #define SYS_GETDENTS 78
 #define SYS_GETCWD 79
@@ -342,6 +343,10 @@ int fcntl(int fd, int cmd, ...) {
 
 int fsync(int fd) {
     return (int)syscall_ret(syscall1(SYS_FSYNC, fd));
+}
+
+int truncate(const char *path, off_t length) {
+    return (int)syscall_ret(syscall2(SYS_TRUNCATE, (long)path, length));
 }
 
 int ftruncate(int fd, off_t length) {

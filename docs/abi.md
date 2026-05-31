@@ -102,6 +102,7 @@ The current Linux-like syscall surface is:
 | 62 | `kill` | Sends process signals, including `SIGCONT` to resume stopped jobs. |
 | 63 | `uname` | Writes Linux-compatible fixed-width system identity fields. |
 | 72 | `fcntl` | `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`. |
+| 76 | `truncate` | Path-based file resize with write-permission checks. |
 | 78 | `getdents` | Alias of the `getdents64` implementation. |
 | 79 | `getcwd` | Copies the current working directory. |
 | 80 | `chdir` | Changes current working directory. |
@@ -170,7 +171,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
 - File descriptors: `read`, `write`, `pread`, `pwrite`, `readv`, `writev`,
   `open`, `close`, `lseek`, `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`,
-  `poll`, `select`.
+  `poll`, `select`, `truncate`, `ftruncate`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `mkdirat`, `unlink`,
   `unlinkat`, `rmdir`, `rename`, `renameat`, `access`, `openat`, `fstatat`,
   `faccessat`, `chmod`, `fchmodat`, `chown`, `fchownat`, `umask`,

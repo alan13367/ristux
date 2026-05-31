@@ -31,6 +31,7 @@ int dup(int oldfd);
 int dup2(int oldfd, int newfd);
 int dup3(int oldfd, int newfd, int flags);
 int fsync(int fd);
+int truncate(const char *path, off_t length);
 int ftruncate(int fd, off_t length);
 pid_t fork(void);
 pid_t vfork(void);

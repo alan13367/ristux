@@ -35,6 +35,21 @@ static int check_truncate_and_sync(void) {
         return 1;
     }
     close(fd);
+    if (truncate("/tmp/cc_file_sync.txt", 2) < 0) {
+        puts("cc_file_sync: path truncate failed");
+        return 1;
+    }
+    fd = open("/tmp/cc_file_sync.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_file_sync: path truncate reopen failed");
+        return 1;
+    }
+    n = read(fd, buf, sizeof(buf));
+    close(fd);
+    if (n != 2 || memcmp(buf, "ab", 2) != 0) {
+        puts("cc_file_sync: path truncate readback failed");
+        return 1;
+    }
     puts("cc_file_sync: truncate sync ok");
     return 0;
 }
