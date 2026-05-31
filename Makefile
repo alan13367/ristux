@@ -25,7 +25,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill pwd grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -93,7 +93,6 @@ USER_GZIP_ELF := build/userland/gzip.elf
 USER_XZ_ELF := build/userland/xz.elf
 USER_STAT_ELF := build/userland/stat.elf
 USER_LS_ELF := build/userland/ls.elf
-USER_PWD_OBJ := build/userland/pwd.o
 USER_PWD_ELF := build/userland/pwd.elf
 USER_CHMOD_ELF := build/userland/chmod.elf
 USER_KILL_ELF := build/userland/kill.elf
@@ -254,6 +253,7 @@ $(USER_RM_ELF): $(USERLAND_RS_STAMP)
 $(USER_CHMOD_ELF): $(USERLAND_RS_STAMP)
 $(USER_LS_ELF): $(USERLAND_RS_STAMP)
 $(USER_KILL_ELF): $(USERLAND_RS_STAMP)
+$(USER_PWD_ELF): $(USERLAND_RS_STAMP)
 $(USER_GREP_ELF): $(USERLAND_RS_STAMP)
 $(USER_PRINTF_ELF): $(USERLAND_RS_STAMP)
 $(USER_TEST_ELF): $(USERLAND_RS_STAMP)
@@ -288,13 +288,6 @@ $(USER_PATCH_ELF): $(USERLAND_RS_STAMP)
 $(USER_GZIP_ELF): $(USERLAND_RS_STAMP)
 $(USER_XZ_ELF): $(USERLAND_RS_STAMP)
 $(USER_STAT_ELF): $(USERLAND_RS_STAMP)
-
-$(USER_PWD_OBJ): userland/pwd.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_PWD_ELF): $(USER_PWD_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_PWD_OBJ)
 
 $(USER_STTY_OBJ): userland/c/bin/stty.c $(USER_C_HEADERS)
 	mkdir -p build/userland
