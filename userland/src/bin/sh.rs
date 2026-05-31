@@ -37,6 +37,7 @@ enum ForegroundResult {
     Stopped(u8),
 }
 
+#[derive(Clone)]
 struct EnvVar {
     name: Vec<u8>,
     value: Vec<u8>,
@@ -60,6 +61,7 @@ struct ShellEnv {
 #[derive(Clone)]
 struct Stage {
     argv: Vec<Vec<u8>>,
+    assignments: Vec<EnvVar>,
     redirs: Vec<Redirection>,
 }
 
@@ -98,6 +100,11 @@ enum LoopSignal {
 struct ListCommand {
     op: ListOp,
     bytes: Vec<u8>,
+}
+
+struct EnvBackup {
+    name: Vec<u8>,
+    value: Option<Vec<u8>>,
 }
 
 impl ShellEnv {
@@ -166,19 +173,76 @@ impl ShellEnv {
     }
 
     fn assignment(&mut self, token: &[u8]) -> bool {
-        let Some(eq) = token.iter().position(|&b| b == b'=') else {
+        let Some(assignment) = parse_assignment(token) else {
             return false;
         };
-        if !valid_name(&token[..eq]) {
-            return false;
-        }
-        self.set(&token[..eq], &token[eq + 1..]);
+        self.set(&assignment.name, &assignment.value);
         true
     }
 
     fn entries(&self) -> Vec<Vec<u8>> {
-        let mut out = Vec::with_capacity(self.vars.len());
-        for var in &self.vars {
+        env_entries_from_vars(&self.vars)
+    }
+
+    fn entries_with_assignments(&self, assignments: &[EnvVar]) -> Vec<Vec<u8>> {
+        if assignments.is_empty() {
+            return self.entries();
+        }
+        let mut vars = self.vars.clone();
+        for assignment in assignments {
+            if let Some(var) = vars
+                .iter_mut()
+                .find(|var| var.name.as_slice() == assignment.name.as_slice())
+            {
+                var.value.clear();
+                var.value.extend_from_slice(&assignment.value);
+            } else {
+                vars.push(assignment.clone());
+            }
+        }
+        env_entries_from_vars(&vars)
+    }
+
+    fn assignment_value<'a>(&'a self, assignments: &'a [EnvVar], name: &[u8]) -> Option<&'a [u8]> {
+        assignments
+            .iter()
+            .rev()
+            .find(|assignment| assignment.name.as_slice() == name)
+            .map(|assignment| assignment.value.as_slice())
+            .or_else(|| self.get(name))
+    }
+
+    fn apply_assignments(&mut self, assignments: &[EnvVar]) -> Vec<EnvBackup> {
+        let mut backups = Vec::new();
+        for assignment in assignments {
+            if !backups
+                .iter()
+                .any(|backup: &EnvBackup| backup.name.as_slice() == assignment.name.as_slice())
+            {
+                backups.push(EnvBackup {
+                    name: assignment.name.clone(),
+                    value: self.get(&assignment.name).map(<[u8]>::to_vec),
+                });
+            }
+            self.set(&assignment.name, &assignment.value);
+        }
+        backups
+    }
+
+    fn restore_assignments(&mut self, backups: Vec<EnvBackup>) {
+        for backup in backups.into_iter().rev() {
+            if let Some(value) = backup.value {
+                self.set(&backup.name, &value);
+            } else {
+                self.unset(&backup.name);
+            }
+        }
+    }
+}
+
+fn env_entries_from_vars(vars: &[EnvVar]) -> Vec<Vec<u8>> {
+    let mut out = Vec::with_capacity(vars.len());
+    for var in vars {
             let mut entry = Vec::with_capacity(var.name.len() + var.value.len() + 2);
             entry.extend_from_slice(&var.name);
             entry.push(b'=');
@@ -186,9 +250,10 @@ impl ShellEnv {
             entry.push(0);
             out.push(entry);
         }
-        out
-    }
+    out
+}
 
+impl ShellEnv {
     fn set_positionals(&mut self, arg0: &[u8], args: &[&[u8]]) {
         self.positionals.clear();
         self.positionals.push(arg0.to_vec());
@@ -275,6 +340,7 @@ impl Stage {
     fn new() -> Self {
         Self {
             argv: Vec::new(),
+            assignments: Vec::new(),
             redirs: Vec::new(),
         }
     }
@@ -294,6 +360,17 @@ fn valid_name(name: &[u8]) -> bool {
         return false;
     }
     rest.iter().all(|b| *b == b'_' || b.is_ascii_alphanumeric())
+}
+
+fn parse_assignment(token: &[u8]) -> Option<EnvVar> {
+    let eq = token.iter().position(|byte| *byte == b'=')?;
+    if !valid_name(&token[..eq]) {
+        return None;
+    }
+    Some(EnvVar {
+        name: token[..eq].to_vec(),
+        value: token[eq + 1..].to_vec(),
+    })
 }
 
 fn cstr(s: &[u8]) -> Vec<u8> {
@@ -1290,9 +1367,12 @@ fn parse_stage(segment: &[u8], env: &mut ShellEnv, last_status: i32) -> (Stage, 
                 continue;
             }
         }
-        if stage.argv.is_empty() && env.assignment(tokens[i].bytes.as_slice()) {
-            i += 1;
-            continue;
+        if stage.argv.is_empty() {
+            if let Some(assignment) = parse_assignment(tokens[i].bytes.as_slice()) {
+                stage.assignments.push(assignment);
+                i += 1;
+                continue;
+            }
         }
         let token = LexToken {
             bytes: core::mem::take(&mut tokens[i].bytes),
@@ -1415,7 +1495,11 @@ fn append_path_candidate(out: &mut Vec<u8>, dir: &[u8], name: &[u8]) {
     out.extend_from_slice(name);
 }
 
-fn external_command_path(name: &[u8], env: &ShellEnv) -> Option<Vec<u8>> {
+fn external_command_path_with_assignments(
+    name: &[u8],
+    env: &ShellEnv,
+    assignments: &[EnvVar],
+) -> Option<Vec<u8>> {
     if name.contains(&b'/') {
         let path = cstr(name);
         let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
@@ -1425,7 +1509,7 @@ fn external_command_path(name: &[u8], env: &ShellEnv) -> Option<Vec<u8>> {
         }
         return None;
     }
-    let path_env = env.get(b"PATH").unwrap_or(b"/bin");
+    let path_env = env.assignment_value(assignments, b"PATH").unwrap_or(b"/bin");
     for dir in path_env.split(|byte| *byte == b':') {
         let mut path = Vec::with_capacity(dir.len() + name.len() + 2);
         append_path_candidate(&mut path, dir, name);
@@ -1437,6 +1521,10 @@ fn external_command_path(name: &[u8], env: &ShellEnv) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+fn external_command_path(name: &[u8], env: &ShellEnv) -> Option<Vec<u8>> {
+    external_command_path_with_assignments(name, env, &[])
 }
 
 fn external_command_exists(name: &[u8], env: &ShellEnv) -> bool {
@@ -1894,7 +1982,8 @@ fn spawn_stage(
     let prog = &stage.argv[0];
     let path_c = if prog.contains(&b'/') {
         cstr(prog)
-    } else if let Some(path) = external_command_path(prog, env) {
+    } else if let Some(path) = external_command_path_with_assignments(prog, env, &stage.assignments)
+    {
         cstr(&path)
     } else {
         cstr(prog)
@@ -1906,7 +1995,7 @@ fn spawn_stage(
     }
     let mut argv_ptrs: Vec<*const u8> = owned_args.iter().map(|v| v.as_ptr()).collect();
     argv_ptrs.push(ptr::null());
-    let owned_env = env.entries();
+    let owned_env = env.entries_with_assignments(&stage.assignments);
     let mut env_ptrs: Vec<*const u8> = owned_env.iter().map(|v| v.as_ptr()).collect();
     env_ptrs.push(ptr::null());
 
@@ -1935,8 +2024,12 @@ fn run_pipeline(
     if stages.len() == 1 {
         let (stage, _) = &stages[0];
         if stage.argv.is_empty() {
+            for assignment in &stage.assignments {
+                env.set(&assignment.name, &assignment.value);
+            }
             return 0;
         }
+        let assignment_backups = env.apply_assignments(&stage.assignments);
         if let Some(rc) = run_function(
             &stage.argv[0],
             &stage.argv[1..],
@@ -1945,11 +2038,14 @@ fn run_pipeline(
             env,
             last_status,
         ) {
+            env.restore_assignments(assignment_backups);
             return rc;
         }
         if let Some(rc) = builtin(stage, jobs, next_job_id, env, last_status) {
+            env.restore_assignments(assignment_backups);
             return rc;
         }
+        env.restore_assignments(assignment_backups);
     }
 
     let n = stages.len();

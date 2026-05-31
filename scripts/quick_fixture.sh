@@ -1151,6 +1151,7 @@ case "$SCENARIO" in
       "mkdir /tmp/shpath"
       "cd /tmp/shpath"
       "PATH=/tmp/shpath command -v sh || /bin/echo no-sh"
+      "command -v sh"
       "PATH=/bin command -v sh"
       "PATH=/tmp/shpath:/bin type sh"
       "cp /bin/echo /tmp/shpath/myecho"
@@ -1160,6 +1161,8 @@ case "$SCENARIO" in
     EXPECTS=(
       "TTY canonical line ready: PATH=/tmp/shpath command -v sh"
       "^no-sh$"
+      "TTY canonical line ready: command -v sh"
+      "^/bin/sh$"
       "TTY canonical line ready: PATH=/bin command -v sh"
       "^/bin/sh$"
       "TTY canonical line ready: PATH=/tmp/shpath:/bin type sh"
@@ -1168,6 +1171,41 @@ case "$SCENARIO" in
       "^exec-path-ok$"
       "TTY canonical line ready: PATH=/bin sh -c"
       "^exec-ok$"
+    )
+    ;;
+  shell-assign)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/shassign"
+      "cd /tmp/shassign"
+      "VAR=parent"
+      "VAR=child sh -c 'echo tmp-\$VAR'"
+      "echo after-\$VAR"
+      "ONLY=thing"
+      "echo persist-\$ONLY"
+      "echo 'helper()' > assign.sh"
+      "echo L | tr L '\\173' >> assign.sh"
+      "echo 'echo func-\$VAR' >> assign.sh"
+      "echo R | tr R '\\175' >> assign.sh"
+      ". /tmp/shassign/assign.sh"
+      "VAR=function-temp helper"
+      "echo func-after-\$VAR"
+      "PATH=/tmp/shassign command -v sh || /bin/echo builtin-temp-ok"
+      "command -v sh"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: VAR=child sh -c"
+      "^tmp-child$"
+      "^after-parent$"
+      "TTY canonical line ready: echo persist-\$ONLY"
+      "^persist-thing$"
+      "TTY canonical line ready: VAR=function-temp helper"
+      "^func-function-temp$"
+      "^func-after-parent$"
+      "TTY canonical line ready: PATH=/tmp/shassign command -v sh"
+      "^builtin-temp-ok$"
+      "TTY canonical line ready: command -v sh"
+      "^/bin/sh$"
     )
     ;;
   shell-redir)
@@ -2024,7 +2062,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, ext2-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
