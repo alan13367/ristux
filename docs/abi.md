@@ -134,7 +134,8 @@ Unlisted syscall numbers return `-ENOSYS`.
 The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `getppid`, `setsid`.
+  `getppid`, `setsid`, `getenv`, `putenv`, `setenv`, `unsetenv`, and
+  `clearenv`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `setgroups`, and libc user/group database helpers
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and

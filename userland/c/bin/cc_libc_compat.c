@@ -329,6 +329,19 @@ static int check_process_env_open(void) {
         puts("cc_libc_compat: putenv failed");
         return 1;
     }
+    if (setenv("HOME", "/root", 0) < 0 ||
+        strcmp(getenv("HOME"), "/tmp") != 0 ||
+        setenv("HOME", "/root", 1) < 0 ||
+        strcmp(getenv("HOME"), "/root") != 0 ||
+        setenv("EDITOR", "vi", 1) < 0 ||
+        strcmp(getenv("EDITOR"), "vi") != 0 ||
+        unsetenv("EDITOR") < 0 ||
+        getenv("EDITOR") != NULL ||
+        setenv("BAD=NAME", "x", 1) == 0 ||
+        unsetenv("BAD=NAME") == 0) {
+        puts("cc_libc_compat: setenv failed");
+        return 1;
+    }
 
     int fd = open("/etc/os-release", O_RDONLY);
     if (fd < 0) {

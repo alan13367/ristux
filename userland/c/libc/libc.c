@@ -2233,6 +2233,58 @@ int putenv(char *string) {
     return 0;
 }
 
+int setenv(const char *name, const char *value, int overwrite) {
+    if (name == NULL || name[0] == '\0' || strchr(name, '=') != NULL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!overwrite && getenv(name) != NULL) {
+        return 0;
+    }
+    size_t name_len = strlen(name);
+    size_t value_len = strlen(value);
+    char *entry = malloc(name_len + value_len + 2);
+    if (entry == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(entry, name, name_len);
+    entry[name_len] = '=';
+    memcpy(entry + name_len + 1, value, value_len + 1);
+    return putenv(entry);
+}
+
+int unsetenv(const char *name) {
+    if (name == NULL || name[0] == '\0' || strchr(name, '=') != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (environ != managed_environment) {
+        for (size_t i = 0; i <= LIBC_ENV_MAX; i++) {
+            managed_environment[i] = NULL;
+        }
+        size_t i = 0;
+        while (environ != NULL && environ[i] != NULL && i < LIBC_ENV_MAX) {
+            managed_environment[i] = environ[i];
+            i++;
+        }
+        managed_environment[i] = NULL;
+        environ = managed_environment;
+    }
+
+    size_t name_len = strlen(name);
+    size_t out = 0;
+    for (size_t i = 0; i < LIBC_ENV_MAX && managed_environment[i] != NULL; i++) {
+        if (strncmp(managed_environment[i], name, name_len) == 0 &&
+            managed_environment[i][name_len] == '=') {
+            continue;
+        }
+        managed_environment[out++] = managed_environment[i];
+    }
+    managed_environment[out] = NULL;
+    return 0;
+}
+
 static int digit_value(int ch) {
     if (ch >= '0' && ch <= '9') {
         return ch - '0';

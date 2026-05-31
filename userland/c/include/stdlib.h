@@ -15,6 +15,8 @@ void *calloc(size_t nmemb, size_t size);
 void *realloc(void *ptr, size_t size);
 char *getenv(const char *name);
 int putenv(char *string);
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
 int clearenv(void);
 int atoi(const char *nptr);
 long strtol(const char *nptr, char **endptr, int base);

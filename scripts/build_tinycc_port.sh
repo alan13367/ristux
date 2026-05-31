@@ -15,6 +15,8 @@ if [[ -z "${TINYCC_SRC:-}" ]]; then
     TINYCC_SRC="/tmp/ristux-tinycc-probe"
   elif [[ -d "/tmp/tinycc" ]]; then
     TINYCC_SRC="/tmp/tinycc"
+  elif [[ -f "$BUILD/source/tcc.c" ]]; then
+    TINYCC_SRC="$BUILD/source"
   fi
 fi
 
@@ -28,6 +30,23 @@ RUST_LLD="${RUST_LLD:-$(rustc --print sysroot)/lib/rustlib/$RUST_HOST/bin/rust-l
 CLANG="${CLANG:-clang}"
 SRC_BUILD="$BUILD/source"
 OBJ="$BUILD/tcc.o"
+SOURCE_CACHE=""
+
+if [[ "$(cd "$TINYCC_SRC" && pwd)" == "$(mkdir -p "$SRC_BUILD" && cd "$SRC_BUILD" && pwd)" ]]; then
+  SOURCE_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/ristux-tinycc-src.XXXXXX")"
+  cp "$TINYCC_SRC"/*.c "$SOURCE_CACHE"/
+  cp "$TINYCC_SRC"/*.h "$SOURCE_CACHE"/
+  cp "$TINYCC_SRC"/*.def "$SOURCE_CACHE"/
+  mkdir -p "$SOURCE_CACHE/include"
+  if [[ -d "$TINYCC_SRC/include" ]]; then
+    cp "$TINYCC_SRC"/include/*.h "$SOURCE_CACHE/include"/
+  else
+    cp "$TCC_INCLUDE_OUT"/*.h "$SOURCE_CACHE/include"/
+  fi
+  cp "$TINYCC_SRC"/tcclib.h "$SOURCE_CACHE"/
+  TINYCC_SRC="$SOURCE_CACHE"
+  trap 'rm -rf "$SOURCE_CACHE"' EXIT
+fi
 
 rm -rf "$SRC_BUILD" "$TCC_INCLUDE_OUT"
 mkdir -p "$SRC_BUILD" "$TCC_INCLUDE_OUT" "$(dirname "$TCC_OUT")"
