@@ -77,6 +77,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "TTY canonical line ready: cc_ext2"
       "^cc_ext2: ops ok$"
+      "^cc_ext2: persist setup ok$"
       "^cc_ext2: marker ok$"
       "^cc_ext2: done$"
     )
@@ -2424,10 +2425,7 @@ if [[ "$SCENARIO" == "ext2-reboot" ]]; then
     sleep 0.5
     printf 'sendkey ret\n'
     sleep 2
-    send_text "cat /home/ext2_reboot_marker"
-    sleep 0.5
-    printf 'sendkey ret\n'
-    sleep "$COMMAND_WAIT"
+    send_command "cc_ext2 verify"
     send_text "mount"
     sleep 0.5
     printf 'sendkey ret\n'
@@ -2458,8 +2456,9 @@ if [[ "$SCENARIO" == "ext2-reboot" ]]; then
     "Kernel self-test harness passed" \
     "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." \
     "TTY canonical line ready: alice" \
-    "TTY canonical line ready: cat /home/ext2_reboot_marker" \
-    "^ext2 persisted$" \
+    "TTY canonical line ready: cc_ext2 verify" \
+    "^cc_ext2: reboot persistence ok$" \
+    "^cc_ext2: verify done$" \
     "TTY canonical line ready: mount" \
     "ext2 on /" \
     "tmpfs on /tmp"

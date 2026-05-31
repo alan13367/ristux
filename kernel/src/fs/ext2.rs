@@ -1,4 +1,4 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{format, string::String, vec, vec::Vec};
 
 use crate::{
     drivers::virtio_blk,
@@ -12,9 +12,11 @@ const EXT2_DIRECT_BLOCKS: usize = 12;
 const EXT2_S_IFMT: u16 = 0o170000;
 const EXT2_S_IFREG: u16 = 0o100000;
 const EXT2_S_IFDIR: u16 = 0o040000;
+const EXT2_S_IFLNK: u16 = 0o120000;
 const EXT2_FIRST_NORMAL_INO: u32 = 11;
 const EXT2_FT_REG_FILE: u8 = 1;
 const EXT2_FT_DIR: u8 = 2;
+const EXT2_FT_SYMLINK: u8 = 7;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Ext2Error {
@@ -93,6 +95,21 @@ impl Inode {
             blocks,
         }
     }
+
+    fn empty_symlink(uid: u32, gid: u32) -> Self {
+        let now = current_ext2_time();
+        Self {
+            mode: EXT2_S_IFLNK | 0o777,
+            uid,
+            gid,
+            size: 0,
+            atime: now,
+            ctime: now,
+            mtime: now,
+            links: 1,
+            blocks: [0; EXT2_N_BLOCKS],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -106,6 +123,7 @@ struct DirEntry {
 pub enum Ext2NodeKind {
     File,
     Directory,
+    Symlink,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -210,11 +228,25 @@ impl Ext2Fs {
     }
 
     pub fn metadata(&self, path: &str) -> Result<Ext2Metadata, Ext2Error> {
-        let (_ino, inode) = self.lookup_path(path)?;
+        self.metadata_inner(path, true)
+    }
+
+    pub fn lstat_metadata(&self, path: &str) -> Result<Ext2Metadata, Ext2Error> {
+        self.metadata_inner(path, false)
+    }
+
+    fn metadata_inner(&self, path: &str, follow_symlink: bool) -> Result<Ext2Metadata, Ext2Error> {
+        let (_ino, inode) = if follow_symlink {
+            self.lookup_path(path)?
+        } else {
+            self.lookup_path_no_follow(path)?
+        };
         let kind = if inode.is_dir() {
             Ext2NodeKind::Directory
         } else if inode.is_file() {
             Ext2NodeKind::File
+        } else if inode.is_symlink() {
+            Ext2NodeKind::Symlink
         } else {
             return Err(Ext2Error::Unsupported);
         };
@@ -229,6 +261,51 @@ impl Ext2Fs {
             links: inode.links,
             mtime: u64::from(inode.mtime),
         })
+    }
+
+    pub fn symlink(
+        &mut self,
+        target: &str,
+        link_path: &str,
+        uid: u32,
+        gid: u32,
+    ) -> Result<(), Ext2Error> {
+        if self.lookup_path_no_follow(link_path).is_ok() {
+            return Err(Ext2Error::AlreadyExists);
+        }
+        let (parent_path, name) = split_parent_name(link_path)?;
+        let (parent_ino, parent) = self.lookup_path(&parent_path)?;
+        if !parent.is_dir() {
+            return Err(Ext2Error::NotDirectory);
+        }
+
+        let ino = self.allocate_inode()?;
+        let mut inode = Inode::empty_symlink(uid, gid);
+        if let Err(err) = self.write_inode_data(ino, &mut inode, target.as_bytes()) {
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        if let Err(err) = self.write_inode(ino, &inode) {
+            let _ = self.free_inode_blocks(&inode);
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        if let Err(err) =
+            self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_SYMLINK)
+        {
+            let _ = self.free_inode_blocks(&inode);
+            let _ = self.free_inode(ino);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn readlink(&self, path: &str) -> Result<Vec<u8>, Ext2Error> {
+        let (_ino, inode) = self.lookup_path_no_follow(path)?;
+        if !inode.is_symlink() {
+            return Err(Ext2Error::NotFile);
+        }
+        self.read_inode_data(&inode)
     }
 
     pub fn create_file(
@@ -306,7 +383,7 @@ impl Ext2Fs {
     }
 
     pub fn link(&mut self, old_path: &str, new_path: &str) -> Result<(), Ext2Error> {
-        if self.lookup_path(new_path).is_ok() {
+        if self.lookup_path_no_follow(new_path).is_ok() {
             return Err(Ext2Error::AlreadyExists);
         }
         let (source_ino, mut source) = self.lookup_path(old_path)?;
@@ -325,8 +402,8 @@ impl Ext2Fs {
 
     pub fn unlink(&mut self, path: &str) -> Result<(), Ext2Error> {
         let (parent_path, name) = split_parent_name(path)?;
-        let (_ino, mut inode) = self.lookup_path(path)?;
-        if !inode.is_file() {
+        let (_ino, mut inode) = self.lookup_path_no_follow(path)?;
+        if !inode.is_file() && !inode.is_symlink() {
             return Err(Ext2Error::NotFile);
         }
         let (_parent_ino, parent) = self.lookup_path(&parent_path)?;
@@ -377,16 +454,16 @@ impl Ext2Fs {
         if old_path == "/" || new_path == "/" {
             return Err(Ext2Error::Unsupported);
         }
-        if self.lookup_path(new_path).is_ok() {
-            let (old_ino, _old_inode) = self.lookup_path(old_path)?;
-            let (new_ino, new_inode) = self.lookup_path(new_path)?;
+        if self.lookup_path_no_follow(new_path).is_ok() {
+            let (old_ino, _old_inode) = self.lookup_path_no_follow(old_path)?;
+            let (new_ino, new_inode) = self.lookup_path_no_follow(new_path)?;
             if new_ino == old_ino {
                 let (old_parent_path, old_name) = split_parent_name(old_path)?;
                 let (_old_parent_ino, old_parent) = self.lookup_path(&old_parent_path)?;
                 let _ = self.remove_dir_entry(&old_parent, &old_name)?;
                 return Ok(());
             }
-            if !new_inode.is_file() {
+            if !new_inode.is_file() && !new_inode.is_symlink() {
                 return Err(Ext2Error::NotFile);
             }
             self.unlink(new_path)?;
@@ -394,7 +471,7 @@ impl Ext2Fs {
 
         let (old_parent_path, old_name) = split_parent_name(old_path)?;
         let (new_parent_path, new_name) = split_parent_name(new_path)?;
-        let (old_ino, old_inode) = self.lookup_path(old_path)?;
+        let (old_ino, old_inode) = self.lookup_path_no_follow(old_path)?;
         if old_inode.is_dir() && old_parent_path != new_parent_path {
             return Err(Ext2Error::Unsupported);
         }
@@ -407,6 +484,8 @@ impl Ext2Fs {
             EXT2_FT_DIR
         } else if old_inode.is_file() {
             EXT2_FT_REG_FILE
+        } else if old_inode.is_symlink() {
+            EXT2_FT_SYMLINK
         } else {
             return Err(Ext2Error::Unsupported);
         };
@@ -450,8 +529,17 @@ impl Ext2Fs {
         if !inode.is_file() {
             return Err(Ext2Error::NotFile);
         }
-        self.free_inode_blocks(&inode)?;
+        self.write_inode_data(ino, &mut inode, data)?;
+        self.write_inode(ino, &inode)
+    }
 
+    fn write_inode_data(
+        &mut self,
+        _ino: u32,
+        inode: &mut Inode,
+        data: &[u8],
+    ) -> Result<(), Ext2Error> {
+        self.free_inode_blocks(inode)?;
         let blocks_needed = data.len().div_ceil(self.block_size);
         let pointers_per_block = self.block_size / 4;
         let max_blocks =
@@ -514,7 +602,7 @@ impl Ext2Fs {
         let now = current_ext2_time();
         inode.mtime = now;
         inode.ctime = now;
-        self.write_inode(ino, &inode)
+        Ok(())
     }
 
     pub fn block_size(&self) -> usize {
@@ -533,31 +621,73 @@ impl Ext2Fs {
     }
 
     fn lookup_path(&self, path: &str) -> Result<(u32, Inode), Ext2Error> {
+        self.lookup_path_inner(path, true, 0)
+    }
+
+    fn lookup_path_no_follow(&self, path: &str) -> Result<(u32, Inode), Ext2Error> {
+        self.lookup_path_inner(path, false, 0)
+    }
+
+    fn lookup_path_inner(
+        &self,
+        path: &str,
+        follow_final_symlink: bool,
+        depth: usize,
+    ) -> Result<(u32, Inode), Ext2Error> {
+        if depth >= 8 {
+            return Err(Ext2Error::NotFound);
+        }
+        let normalized = normalize_ext2_path(path)?;
         let mut ino = self.root_ino;
         let mut inode = self.read_inode(ino)?;
-        let trimmed = path.trim_matches('/');
+        let trimmed = normalized.trim_matches('/');
         if trimmed.is_empty() {
             return Ok((ino, inode));
         }
 
-        for component in trimmed.split('/').filter(|part| !part.is_empty()) {
-            if component == "." {
-                continue;
-            }
+        let components = trimmed
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        let mut walked = Vec::new();
+        for (index, component) in components.iter().enumerate() {
             if !inode.is_dir() {
                 return Err(Ext2Error::NotDirectory);
             }
             let entries = self.read_dir_entries(&inode)?;
             let next = entries
                 .iter()
-                .find(|entry| entry.name == component)
+                .find(|entry| entry.name == *component)
                 .map(|entry| entry.ino)
                 .ok_or(Ext2Error::NotFound)?;
             ino = next;
             inode = self.read_inode(ino)?;
+            if inode.is_symlink() && (follow_final_symlink || index + 1 < components.len()) {
+                let target = self.read_symlink_string(&inode)?;
+                let parent = components_to_path(&walked);
+                let mut next_path = if target.starts_with('/') {
+                    String::from(target.as_str())
+                } else {
+                    join_ext2_path(&parent, target.as_str())
+                };
+                let remaining = components_to_path(&components[index + 1..]);
+                if remaining != "/" {
+                    next_path = join_ext2_path(&next_path, remaining.trim_start_matches('/'));
+                }
+                let next_path = normalize_ext2_path(&next_path)?;
+                return self.lookup_path_inner(&next_path, follow_final_symlink, depth + 1);
+            }
+            walked.push(*component);
         }
 
         Ok((ino, inode))
+    }
+
+    fn read_symlink_string(&self, inode: &Inode) -> Result<String, Ext2Error> {
+        let bytes = self.read_inode_data(inode)?;
+        core::str::from_utf8(&bytes)
+            .map(String::from)
+            .map_err(|_| Ext2Error::Unsupported)
     }
 
     fn read_inode(&self, ino: u32) -> Result<Inode, Ext2Error> {
@@ -1027,6 +1157,10 @@ impl Inode {
     fn is_dir(&self) -> bool {
         self.mode & EXT2_S_IFMT == EXT2_S_IFDIR
     }
+
+    fn is_symlink(&self) -> bool {
+        self.mode & EXT2_S_IFMT == EXT2_S_IFLNK
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1117,8 +1251,51 @@ fn current_ext2_time() -> u32 {
     crate::time::filesystem_timestamp().min(u64::from(u32::MAX)) as u32
 }
 
+fn normalize_ext2_path(path: &str) -> Result<String, Ext2Error> {
+    if !path.starts_with('/') {
+        return Err(Ext2Error::NotFound);
+    }
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    Ok(components_to_path(&parts))
+}
+
+fn components_to_path(parts: &[&str]) -> String {
+    if parts.is_empty() {
+        return String::from("/");
+    }
+    let mut out = String::from("/");
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+fn join_ext2_path(base: &str, leaf: &str) -> String {
+    if leaf.is_empty() {
+        return String::from(base);
+    }
+    if base == "/" {
+        format!("/{}", leaf.trim_start_matches('/'))
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), leaf.trim_start_matches('/'))
+    }
+}
+
 fn split_parent_name(path: &str) -> Result<(String, String), Ext2Error> {
-    let trimmed = path.trim_end_matches('/');
+    let normalized = normalize_ext2_path(path)?;
+    let trimmed = normalized.trim_end_matches('/');
     if !trimmed.starts_with('/') || trimmed == "/" {
         return Err(Ext2Error::NotFound);
     }

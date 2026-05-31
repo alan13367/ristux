@@ -1012,6 +1012,26 @@ impl Vfs {
     ) -> Result<(), VfsError> {
         let normalized_link = normalize_path(link_path)?;
         let link_path = normalized_link.as_str();
+        if Self::use_root_ext2(link_path) {
+            let parent_path = parent_path(link_path);
+            if let Some(fs) = self.root_ext2_mut() {
+                if fs.lstat_metadata(link_path).is_ok() {
+                    return Err(VfsError::AlreadyExists);
+                }
+                let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
+                if parent.kind != ext2::Ext2NodeKind::Directory {
+                    return Err(VfsError::NotFile);
+                }
+                if !parent.metadata.can_access(creds, Access::Write)
+                    || !parent.metadata.can_access(creds, Access::Execute)
+                {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs
+                    .symlink(target, link_path, creds.euid, creds.egid)
+                    .map_err(map_ext2_error);
+            }
+        }
         if self.nodes.iter().any(|node| node.path == link_path) {
             return Err(VfsError::AlreadyExists);
         }
@@ -1089,6 +1109,13 @@ impl Vfs {
     fn readlink(&self, path: &str) -> Result<Vec<u8>, VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
+        if Self::use_root_ext2(path) {
+            return self
+                .root_ext2()
+                .ok_or(VfsError::NotFound)?
+                .readlink(path)
+                .map_err(map_ext2_error);
+        }
         let node = self
             .nodes
             .iter()
@@ -1930,7 +1957,12 @@ impl Vfs {
         }
         if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2() {
-                if let Ok(meta) = fs.metadata(path) {
+                let meta = if follow_symlink {
+                    fs.metadata(path)
+                } else {
+                    fs.lstat_metadata(path)
+                };
+                if let Ok(meta) = meta {
                     return Ok(Stat {
                         owner: meta.metadata.owner,
                         group: meta.metadata.group,
@@ -2160,9 +2192,10 @@ impl Vfs {
         let mut entries = Vec::new();
         for name in fs.list_dir(path).map_err(map_ext2_error)? {
             let full = join_path(path, &name);
-            let kind = match fs.metadata(&full).map_err(map_ext2_error)?.kind {
+            let kind = match fs.lstat_metadata(&full).map_err(map_ext2_error)?.kind {
                 ext2::Ext2NodeKind::File => NodeKind::File,
                 ext2::Ext2NodeKind::Directory => NodeKind::Directory,
+                ext2::Ext2NodeKind::Symlink => NodeKind::Symlink,
             };
             entries.push(DirectoryEntry { name, kind });
         }
