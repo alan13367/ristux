@@ -109,7 +109,15 @@ pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
 pub const NR_openat: u64 = 257;
+pub const NR_mkdirat: u64 = 258;
+pub const NR_fchownat: u64 = 260;
 pub const NR_newfstatat: u64 = 262;
+pub const NR_unlinkat: u64 = 263;
+pub const NR_renameat: u64 = 264;
+pub const NR_linkat: u64 = 265;
+pub const NR_symlinkat: u64 = 266;
+pub const NR_readlinkat: u64 = 267;
+pub const NR_fchmodat: u64 = 268;
 pub const NR_faccessat: u64 = 269;
 pub const NR_dup3: u64 = 292;
 pub const NR_pipe2: u64 = 293;
@@ -138,6 +146,8 @@ const RLIMIT_NOFILE: i32 = 7;
 const AT_FDCWD: i32 = -100;
 const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
 const AT_EACCESS: i32 = 0x200;
+const AT_REMOVEDIR: i32 = 0x200;
+const AT_SYMLINK_FOLLOW: i32 = 0x400;
 const AT_EMPTY_PATH: i32 = 0x1000;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
@@ -313,7 +323,15 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
         NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
         NR_openat => linux_openat(a0 as i32, a1 as usize, a2 as i32, a3 as u32),
+        NR_mkdirat => linux_mkdirat(a0 as i32, a1 as usize, a2 as u16),
+        NR_fchownat => linux_fchownat(a0 as i32, a1 as usize, a2 as u32, a3 as u32, a4 as i32),
         NR_newfstatat => linux_newfstatat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
+        NR_unlinkat => linux_unlinkat(a0 as i32, a1 as usize, a2 as i32),
+        NR_renameat => linux_renameat(a0 as i32, a1 as usize, a2 as i32, a3 as usize),
+        NR_linkat => linux_linkat(a0 as i32, a1 as usize, a2 as i32, a3 as usize, a4 as i32),
+        NR_symlinkat => linux_symlinkat(a0 as usize, a1 as i32, a2 as usize),
+        NR_readlinkat => linux_readlinkat(a0 as i32, a1 as usize, a2 as usize, a3 as usize),
+        NR_fchmodat => linux_fchmodat(a0 as i32, a1 as usize, a2 as u16),
         NR_faccessat => linux_faccessat(a0 as i32, a1 as usize, a2 as i32, a3 as i32),
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
@@ -1964,6 +1982,13 @@ fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_mkdirat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
+    process::user_mkdir_mode(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_rmdir(path_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     process::user_rmdir(&path).map(|_| 0).map_err(map_vfs_error)
@@ -1977,8 +2002,28 @@ fn linux_rename(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_renameat(
+    old_dirfd: i32,
+    old_ptr: usize,
+    new_dirfd: i32,
+    new_ptr: usize,
+) -> Result<u64, i64> {
+    let old_path = resolve_at_path(old_dirfd, old_ptr, 0)?;
+    let new_path = resolve_at_path(new_dirfd, new_ptr, 0)?;
+    process::user_rename(&old_path, &new_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    process::user_chmod(&path, mode)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_fchmodat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
     process::user_chmod(&path, mode)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -1991,6 +2036,22 @@ fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_fchownat(
+    dirfd: i32,
+    path_ptr: usize,
+    uid: u32,
+    gid: u32,
+    flags: i32,
+) -> Result<u64, i64> {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, flags)?;
+    process::user_chown(&path, uid, gid)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     process::user_unlink(&path)
@@ -1998,9 +2059,40 @@ fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_unlinkat(dirfd: i32, path_ptr: usize, flags: i32) -> Result<u64, i64> {
+    if flags & !AT_REMOVEDIR != 0 {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
+    if flags & AT_REMOVEDIR != 0 {
+        process::user_rmdir(&path)
+    } else {
+        process::user_unlink(&path)
+    }
+    .map(|_| 0)
+    .map_err(map_vfs_error)
+}
+
 fn linux_link(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
     let old_path = read_user_cstr(old_ptr).ok_or(EFAULT)?;
     let new_path = read_user_cstr(new_ptr).ok_or(EFAULT)?;
+    process::user_link(&old_path, &new_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_linkat(
+    old_dirfd: i32,
+    old_ptr: usize,
+    new_dirfd: i32,
+    new_ptr: usize,
+    flags: i32,
+) -> Result<u64, i64> {
+    if flags & !AT_SYMLINK_FOLLOW != 0 {
+        return Err(EINVAL);
+    }
+    let old_path = resolve_at_path(old_dirfd, old_ptr, 0)?;
+    let new_path = resolve_at_path(new_dirfd, new_ptr, 0)?;
     process::user_link(&old_path, &new_path)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2014,10 +2106,27 @@ fn linux_symlink(target_ptr: usize, link_ptr: usize) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
+fn linux_symlinkat(target_ptr: usize, dirfd: i32, link_ptr: usize) -> Result<u64, i64> {
+    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
+    let link_path = resolve_at_path(dirfd, link_ptr, 0)?;
+    process::user_symlink(&target, &link_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_readlink(path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
-    let target = fs::readlink(&path).map_err(map_vfs_error)?;
+    linux_readlink_path(&path, buf, len)
+}
+
+fn linux_readlinkat(dirfd: i32, path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
+    linux_readlink_path(&path, buf, len)
+}
+
+fn linux_readlink_path(path: &str, buf: usize, len: usize) -> Result<u64, i64> {
+    let target = fs::readlink(path).map_err(map_vfs_error)?;
     let count = target.len().min(len);
     let out = process::write_user_buffer(buf, count).ok_or(EFAULT)?;
     out.copy_from_slice(&target[..count]);

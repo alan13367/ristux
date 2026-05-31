@@ -125,7 +125,15 @@
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
 #define SYS_OPENAT 257
+#define SYS_MKDIRAT 258
+#define SYS_FCHOWNAT 260
 #define SYS_NEWFSTATAT 262
+#define SYS_UNLINKAT 263
+#define SYS_RENAMEAT 264
+#define SYS_LINKAT 265
+#define SYS_SYMLINKAT 266
+#define SYS_READLINKAT 267
+#define SYS_FCHMODAT 268
 #define SYS_FACCESSAT 269
 #define SYS_DUP3 292
 #define SYS_PIPE2 293
@@ -1604,12 +1612,20 @@ int unlink(const char *path) {
     return (int)syscall_ret(syscall1(SYS_UNLINK, (long)path));
 }
 
+int unlinkat(int dirfd, const char *path, int flags) {
+    return (int)syscall_ret(syscall3(SYS_UNLINKAT, dirfd, (long)path, flags));
+}
+
 int rmdir(const char *path) {
     return (int)syscall_ret(syscall1(SYS_RMDIR, (long)path));
 }
 
 int rename(const char *oldpath, const char *newpath) {
     return (int)syscall_ret(syscall2(SYS_RENAME, (long)oldpath, (long)newpath));
+}
+
+int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
+    return (int)syscall_ret(syscall4(SYS_RENAMEAT, olddirfd, (long)oldpath, newdirfd, (long)newpath));
 }
 
 int remove(const char *path) {
@@ -1623,16 +1639,32 @@ int link(const char *oldpath, const char *newpath) {
     return (int)syscall_ret(syscall2(SYS_LINK, (long)oldpath, (long)newpath));
 }
 
+int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags) {
+    return (int)syscall_ret(syscall6(SYS_LINKAT, olddirfd, (long)oldpath, newdirfd, (long)newpath, flags, 0));
+}
+
 int symlink(const char *target, const char *linkpath) {
     return (int)syscall_ret(syscall2(SYS_SYMLINK, (long)target, (long)linkpath));
+}
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+    return (int)syscall_ret(syscall3(SYS_SYMLINKAT, (long)target, newdirfd, (long)linkpath));
 }
 
 ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
     return (ssize_t)syscall_ret(syscall3(SYS_READLINK, (long)path, (long)buf, (long)bufsiz));
 }
 
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall_ret(syscall4(SYS_READLINKAT, dirfd, (long)path, (long)buf, (long)bufsiz));
+}
+
 int chown(const char *path, uid_t owner, gid_t group) {
     return (int)syscall_ret(syscall3(SYS_CHOWN, (long)path, owner, group));
+}
+
+int fchownat(int dirfd, const char *path, uid_t owner, gid_t group, int flags) {
+    return (int)syscall_ret(syscall6(SYS_FCHOWNAT, dirfd, (long)path, owner, group, flags, 0));
 }
 
 char *getcwd(char *buf, size_t size) {
@@ -1748,8 +1780,20 @@ int mkdir(const char *path, mode_t mode) {
     return (int)syscall_ret(syscall2(SYS_MKDIR, (long)path, mode));
 }
 
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+    return (int)syscall_ret(syscall3(SYS_MKDIRAT, dirfd, (long)path, mode));
+}
+
 int chmod(const char *path, mode_t mode) {
     return (int)syscall_ret(syscall2(SYS_CHMOD, (long)path, mode));
+}
+
+int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
+    if (flags != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return (int)syscall_ret(syscall3(SYS_FCHMODAT, dirfd, (long)path, mode));
 }
 
 mode_t umask(mode_t mask) {

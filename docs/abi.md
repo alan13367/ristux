@@ -139,7 +139,15 @@ The current Linux-like syscall surface is:
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
 | 257 | `openat` | `open` semantics relative to `AT_FDCWD` or a directory descriptor. |
+| 258 | `mkdirat` | Directory creation relative to `AT_FDCWD` or a directory descriptor. |
+| 260 | `fchownat` | Ownership updates relative to `AT_FDCWD` or a directory descriptor. |
 | 262 | `newfstatat` | `stat`/`lstat` semantics with `AT_SYMLINK_NOFOLLOW` and directory descriptors. |
+| 263 | `unlinkat` | Removes files or directories with `AT_REMOVEDIR`. |
+| 264 | `renameat` | Rename between `AT_FDCWD` or directory descriptor namespaces. |
+| 265 | `linkat` | Hard link creation between `AT_FDCWD` or directory descriptor namespaces. |
+| 266 | `symlinkat` | Symlink creation relative to `AT_FDCWD` or a directory descriptor. |
+| 267 | `readlinkat` | Reads symlink targets relative to `AT_FDCWD` or a directory descriptor. |
+| 268 | `fchmodat` | Mode updates relative to `AT_FDCWD` or a directory descriptor. |
 | 269 | `faccessat` | `access` semantics relative to `AT_FDCWD` or a directory descriptor. |
 | 292 | `dup3` | Duplicates a descriptor with optional `O_CLOEXEC`. |
 | 293 | `pipe2` | Creates a pipe with optional `O_NONBLOCK` and `O_CLOEXEC`. |
@@ -163,9 +171,11 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - File descriptors: `read`, `write`, `pread`, `pwrite`, `readv`, `writev`,
   `open`, `close`, `lseek`, `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`,
   `poll`, `select`.
-- Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
-  `access`, `openat`, `fstatat`, `faccessat`, `chmod`, `chown`, `umask`,
-  `getdents64`, `link`, `symlink`, `readlink`, `chdir`, `getcwd`.
+- Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `mkdirat`, `unlink`,
+  `unlinkat`, `rmdir`, `rename`, `renameat`, `access`, `openat`, `fstatat`,
+  `faccessat`, `chmod`, `fchmodat`, `chown`, `fchownat`, `umask`,
+  `getdents64`, `link`, `linkat`, `symlink`, `symlinkat`, `readlink`,
+  `readlinkat`, `chdir`, `getcwd`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,

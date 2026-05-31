@@ -110,6 +110,50 @@ int main(void) {
         puts("cc_fs: fstatat at_fdcwd failed");
         return 1;
     }
+    if (mkdirat(dirfd, "atdir", 0755) != 0) {
+        puts("cc_fs: mkdirat failed");
+        return 1;
+    }
+    if (renameat(dirfd, "atfile", dirfd, "atdir/moved") != 0) {
+        puts("cc_fs: renameat failed");
+        return 1;
+    }
+    if (linkat(dirfd, "atdir/moved", dirfd, "hardat", 0) != 0) {
+        puts("cc_fs: linkat failed");
+        return 1;
+    }
+    if (symlinkat("atdir/moved", dirfd, "symat") != 0) {
+        puts("cc_fs: symlinkat failed");
+        return 1;
+    }
+    char linkbuf[32];
+    int link_len = readlinkat(dirfd, "symat", linkbuf, sizeof(linkbuf) - 1);
+    if (link_len != 11) {
+        puts("cc_fs: readlinkat failed");
+        return 1;
+    }
+    linkbuf[link_len] = '\0';
+    if (strcmp(linkbuf, "atdir/moved") != 0) {
+        puts("cc_fs: readlinkat target failed");
+        return 1;
+    }
+    if (fchmodat(dirfd, "atdir/moved", 0600, 0) != 0 ||
+        fstatat(dirfd, "atdir/moved", &st, 0) != 0 ||
+        (st.st_mode & 0777) != 0600) {
+        puts("cc_fs: fchmodat failed");
+        return 1;
+    }
+    if (fchownat(dirfd, "atdir/moved", 0, 0, 0) != 0) {
+        puts("cc_fs: fchownat failed");
+        return 1;
+    }
+    if (unlinkat(dirfd, "hardat", 0) != 0 ||
+        unlinkat(dirfd, "symat", 0) != 0 ||
+        unlinkat(dirfd, "atdir/moved", 0) != 0 ||
+        unlinkat(dirfd, "atdir", AT_REMOVEDIR) != 0) {
+        puts("cc_fs: unlinkat cleanup failed");
+        return 1;
+    }
     close(dirfd);
     puts("cc_fs: at syscalls ok");
 
@@ -166,7 +210,7 @@ int main(void) {
     }
     puts("cc_fs: exclusive create ok");
 
-    if (unlink(masked) != 0 || unlink("/tmp/cc_fs/atfile") != 0 || rmdir(maskdir) != 0) {
+    if (unlink(masked) != 0 || rmdir(maskdir) != 0) {
         puts("cc_fs: cleanup failed");
         return 1;
     }
