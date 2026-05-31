@@ -2911,7 +2911,7 @@ fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.owner,
         meta.group,
         meta.size,
-        meta.mode as u32,
+        linux_stat_mode(meta.kind, meta.mode),
         meta.nlink,
         meta.mtime,
     )
@@ -2926,7 +2926,7 @@ fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.owner,
         meta.group,
         meta.size,
-        meta.mode as u32,
+        linux_stat_mode(meta.kind, meta.mode),
         meta.nlink,
         meta.mtime,
     )
@@ -2948,7 +2948,7 @@ fn linux_newfstatat(dirfd: i32, path_ptr: usize, buf_ptr: usize, flags: i32) -> 
         meta.owner,
         meta.group,
         meta.size,
-        meta.mode as u32,
+        linux_stat_mode(meta.kind, meta.mode),
         meta.nlink,
         meta.mtime,
     )
@@ -2962,10 +2962,25 @@ fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.owner,
         meta.group,
         meta.size,
-        meta.mode as u32,
+        linux_stat_mode(meta.kind, meta.mode),
         meta.nlink,
         meta.mtime,
     )
+}
+
+fn linux_stat_mode(kind: fs::vfs::StatKind, mode: u16) -> u32 {
+    const S_IFREG: u32 = 0o100000;
+    const S_IFDIR: u32 = 0o040000;
+    const S_IFCHR: u32 = 0o020000;
+    const S_IFLNK: u32 = 0o120000;
+
+    let file_type = match kind {
+        fs::vfs::StatKind::File => S_IFREG,
+        fs::vfs::StatKind::Directory => S_IFDIR,
+        fs::vfs::StatKind::Symlink => S_IFLNK,
+        fs::vfs::StatKind::CharDevice => S_IFCHR,
+    };
+    file_type | u32::from(mode & 0o7777)
 }
 
 fn write_linux_stat(

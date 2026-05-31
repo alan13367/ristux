@@ -1864,6 +1864,7 @@ impl Vfs {
                     .map(|text| text.len() as u64)
                     .unwrap_or(node.data.len() as u64);
                 Ok(Stat {
+                    kind: stat_kind_from_node(node.kind),
                     owner: node.metadata.owner,
                     group: node.metadata.group,
                     mode: node.metadata.mode.0,
@@ -1879,6 +1880,7 @@ impl Vfs {
                     .metadata(path)
                     .map_err(map_ext2_error)?;
                 Ok(Stat {
+                    kind: stat_kind_from_ext2(meta.kind),
                     owner: meta.metadata.owner,
                     group: meta.metadata.group,
                     mode: meta.metadata.mode.0,
@@ -1894,6 +1896,7 @@ impl Vfs {
                     .metadata(path)
                     .map_err(map_ext2_error)?;
                 Ok(Stat {
+                    kind: stat_kind_from_ext2(meta.kind),
                     owner: meta.metadata.owner,
                     group: meta.metadata.group,
                     mode: meta.metadata.mode.0,
@@ -1903,6 +1906,7 @@ impl Vfs {
                 })
             }
             OpenHandle::PtyMaster { .. } | OpenHandle::PtySlave { .. } => Ok(Stat {
+                kind: StatKind::CharDevice,
                 owner: 0,
                 group: 0,
                 mode: 0o666,
@@ -2151,6 +2155,11 @@ impl Vfs {
                 .map(|text| text.len() as u64)
                 .unwrap_or(0);
             return Ok(Stat {
+                kind: if kind == NodeKind::Directory {
+                    StatKind::Directory
+                } else {
+                    StatKind::File
+                },
                 owner: 0,
                 group: 0,
                 mode: if kind == NodeKind::Directory {
@@ -2172,6 +2181,7 @@ impl Vfs {
                 };
                 if let Ok(meta) = meta {
                     return Ok(Stat {
+                        kind: stat_kind_from_ext2(meta.kind),
                         owner: meta.metadata.owner,
                         group: meta.metadata.group,
                         mode: meta.metadata.mode.0,
@@ -2190,6 +2200,7 @@ impl Vfs {
         let data_node = canonical_node_index(&self.nodes, node_index);
         let node = &self.nodes[data_node];
         Ok(Stat {
+            kind: stat_kind_from_node(node.kind),
             owner: node.metadata.owner,
             group: node.metadata.group,
             mode: node.metadata.mode.0,
@@ -2495,12 +2506,38 @@ pub fn close(fd: usize) -> Result<(), VfsError> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Stat {
+    pub kind: StatKind,
     pub owner: u32,
     pub group: u32,
     pub mode: u16,
     pub size: u64,
     pub nlink: u64,
     pub mtime: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatKind {
+    File,
+    Directory,
+    Symlink,
+    CharDevice,
+}
+
+fn stat_kind_from_node(kind: NodeKind) -> StatKind {
+    match kind {
+        NodeKind::File => StatKind::File,
+        NodeKind::Directory => StatKind::Directory,
+        NodeKind::Symlink => StatKind::Symlink,
+        NodeKind::Device(_) => StatKind::CharDevice,
+    }
+}
+
+fn stat_kind_from_ext2(kind: ext2::Ext2NodeKind) -> StatKind {
+    match kind {
+        ext2::Ext2NodeKind::File => StatKind::File,
+        ext2::Ext2NodeKind::Directory => StatKind::Directory,
+        ext2::Ext2NodeKind::Symlink => StatKind::Symlink,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

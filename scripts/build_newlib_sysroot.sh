@@ -15,6 +15,7 @@ BUILD_DIR="$BUILD_ROOT/build"
 SYSROOT="$BUILD_ROOT/sysroot"
 LOG_DIR="$BUILD_ROOT/logs"
 PROBE_DIR="$BUILD_ROOT/probe"
+PROBE_SOURCE="${NEWLIB_PROBE_SOURCE:-$ROOT/ports/newlib/ristux/newlib_hello.c}"
 
 mkdir -p "$BUILD_ROOT" "$LOG_DIR"
 rm -rf "$SRC_DIR" "$BUILD_DIR" "$SYSROOT" "$PROBE_DIR"
@@ -136,30 +137,10 @@ mkdir -p "$LIB_DIR"
     -x assembler -c "$ROOT/ports/newlib/ristux/crt0.S" -o "$LIB_DIR/crt0.o"
 cp "$ROOT/ports/newlib/ristux/linker.ld" "$LIB_DIR/ristux.ld"
 
-cat > "$PROBE_DIR/newlib_hello.c" <<'C'
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-
-int main(int argc, char **argv) {
-    printf("newlib hello argc=%d first=%s\n", argc, argv[0]);
-    char *p = malloc(16);
-    if (!p) {
-        return 2;
-    }
-    p[0] = 'o';
-    p[1] = 'k';
-    p[2] = 0;
-    puts(p);
-    free(p);
-    return write(1, "done\n", 5) == 5 ? 0 : 3;
-}
-C
-
 "$CLANG" --target=x86_64-unknown-none-elf \
     -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone \
     -nostdinc -isystem "$RESOURCE_INCLUDE" -isystem "$INCLUDE_DIR" \
-    -c "$PROBE_DIR/newlib_hello.c" -o "$PROBE_DIR/newlib_hello.o"
+    -c "$PROBE_SOURCE" -o "$PROBE_DIR/newlib_hello.o"
 
 "$RUST_LLD" -flavor gnu -T "$LIB_DIR/ristux.ld" \
     -o "$PROBE_DIR/newlib_hello.elf" \
@@ -172,6 +153,11 @@ C
 if nm -u "$PROBE_DIR/newlib_hello.elf" | grep .; then
     echo "newlib probe has unresolved symbols" >&2
     exit 1
+fi
+
+if [[ -n "${NEWLIB_OUTPUT_ELF:-}" ]]; then
+    mkdir -p "$(dirname "$NEWLIB_OUTPUT_ELF")"
+    cp "$PROBE_DIR/newlib_hello.elf" "$NEWLIB_OUTPUT_ELF"
 fi
 
 echo "Newlib sysroot ready: $TARGET_SYSROOT"

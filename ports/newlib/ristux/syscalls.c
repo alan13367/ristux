@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
@@ -48,6 +49,14 @@ struct _reent {
 #define ENOMEM 12
 #define EINVAL 22
 
+#define RISTUX_O_CREAT 0100
+#define RISTUX_O_EXCL 0200
+#define RISTUX_O_TRUNC 01000
+#define RISTUX_O_APPEND 02000
+#define RISTUX_O_NONBLOCK 04000
+#define RISTUX_O_CLOEXEC 02000000
+#define RISTUX_STAT_SIZE 144
+
 static long ristux_syscall0(long n) {
     long ret;
     __asm__ volatile("syscall" : "=a"(ret) : "a"(n) : "rcx", "r11", "memory");
@@ -95,6 +104,71 @@ static long syscall_ret(struct _reent *r, long ret) {
     return ret;
 }
 
+static int translate_open_flags(int flags) {
+    int out = flags & 3;
+    if ((flags & O_CREAT) != 0) {
+        out |= RISTUX_O_CREAT;
+    }
+#ifdef O_EXCL
+    if ((flags & O_EXCL) != 0) {
+        out |= RISTUX_O_EXCL;
+    }
+#endif
+    if ((flags & O_TRUNC) != 0) {
+        out |= RISTUX_O_TRUNC;
+    }
+#ifdef O_APPEND
+    if ((flags & O_APPEND) != 0) {
+        out |= RISTUX_O_APPEND;
+    }
+#endif
+#ifdef O_NONBLOCK
+    if ((flags & O_NONBLOCK) != 0) {
+        out |= RISTUX_O_NONBLOCK;
+    }
+#endif
+#ifdef O_CLOEXEC
+    if ((flags & O_CLOEXEC) != 0) {
+        out |= RISTUX_O_CLOEXEC;
+    }
+#endif
+    return out;
+}
+
+static uint32_t read_le32(const unsigned char *buf) {
+    return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+}
+
+static uint64_t read_le64(const unsigned char *buf) {
+    uint64_t lo = read_le32(buf);
+    uint64_t hi = read_le32(buf + 4);
+    return lo | (hi << 32);
+}
+
+static void zero_bytes(void *ptr, size_t len) {
+    unsigned char *bytes = (unsigned char *)ptr;
+    for (size_t i = 0; i < len; i++) {
+        bytes[i] = 0;
+    }
+}
+
+static void copy_ristux_stat(struct stat *st, const unsigned char raw[RISTUX_STAT_SIZE]) {
+    zero_bytes(st, sizeof(*st));
+    st->st_dev = read_le64(raw + 0);
+    st->st_ino = read_le64(raw + 8);
+    st->st_nlink = read_le64(raw + 16);
+    st->st_mode = read_le32(raw + 24);
+    st->st_uid = read_le32(raw + 28);
+    st->st_gid = read_le32(raw + 32);
+    st->st_rdev = read_le64(raw + 40);
+    st->st_size = read_le64(raw + 48);
+    st->st_blksize = 1024;
+    st->st_blocks = (st->st_size + 511) / 512;
+    st->st_atime = read_le64(raw + 72);
+    st->st_mtime = read_le64(raw + 88);
+    st->st_ctime = read_le64(raw + 104);
+}
+
 int _close_r(struct _reent *r, int fd) {
     return (int)syscall_ret(r, ristux_syscall1(SYS_CLOSE, fd));
 }
@@ -115,7 +189,16 @@ int _fork_r(struct _reent *r) {
 }
 
 int _fstat_r(struct _reent *r, int fd, struct stat *st) {
-    return (int)syscall_ret(r, ristux_syscall2(SYS_FSTAT, fd, (long)st));
+    unsigned char raw[RISTUX_STAT_SIZE];
+    if (st == NULL) {
+        return set_errno(r, -EINVAL);
+    }
+    long ret = syscall_ret(r, ristux_syscall2(SYS_FSTAT, fd, (long)raw));
+    if (ret < 0) {
+        return (int)ret;
+    }
+    copy_ristux_stat(st, raw);
+    return 0;
 }
 
 int _getpid_r(struct _reent *r) {
@@ -148,7 +231,7 @@ off_t _lseek_r(struct _reent *r, int fd, off_t offset, int whence) {
 }
 
 int _open_r(struct _reent *r, const char *path, int flags, int mode) {
-    return (int)syscall_ret(r, ristux_syscall3(SYS_OPEN, (long)path, flags, mode));
+    return (int)syscall_ret(r, ristux_syscall3(SYS_OPEN, (long)path, translate_open_flags(flags), mode));
 }
 
 ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t count) {
@@ -191,7 +274,16 @@ void *_sbrk_r(struct _reent *r, ptrdiff_t increment) {
 }
 
 int _stat_r(struct _reent *r, const char *path, struct stat *st) {
-    return (int)syscall_ret(r, ristux_syscall2(SYS_STAT, (long)path, (long)st));
+    unsigned char raw[RISTUX_STAT_SIZE];
+    if (st == NULL) {
+        return set_errno(r, -EINVAL);
+    }
+    long ret = syscall_ret(r, ristux_syscall2(SYS_STAT, (long)path, (long)raw));
+    if (ret < 0) {
+        return (int)ret;
+    }
+    copy_ristux_stat(st, raw);
+    return 0;
 }
 
 int _chmod_r(struct _reent *r, const char *path, mode_t mode) {

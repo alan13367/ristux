@@ -28,6 +28,7 @@ file /bin/cc_links ../build/userland/cc_links.elf
 file /bin/cc_libc_compat ../build/userland/cc_libc_compat.elf
 file /bin/cc_libc_hosted ../build/userland/cc_libc_hosted.elf
 file /bin/cc_mmap ../build/userland/cc_mmap.elf
+file /bin/cc_newlib_hello ../build/userland/cc_newlib_hello.elf
 file /bin/cc_passwd ../build/userland/cc_passwd.elf
 file /bin/cc_path ../build/userland/cc_path.elf
 file /bin/cc_poll ../build/userland/cc_poll.elf
@@ -157,6 +158,7 @@ package cc_links 0.1.0 /bin/cc_links
 package cc_libc_compat 0.1.0 /bin/cc_libc_compat
 package cc_libc_hosted 0.1.0 /bin/cc_libc_hosted
 package cc_mmap 0.1.0 /bin/cc_mmap
+package cc_newlib_hello 0.1.0 /bin/cc_newlib_hello
 package cc_passwd 0.1.0 /bin/cc_passwd
 package cc_path 0.1.0 /bin/cc_path
 package cc_poll 0.1.0 /bin/cc_poll
