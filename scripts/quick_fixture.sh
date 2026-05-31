@@ -811,17 +811,29 @@ case "$SCENARIO" in
       "cat out/one.txt"
       "mv two.txt moved.txt"
       "cat moved.txt"
+      "mkdir -p nested/one/two"
+      "test -d nested/one/two"
+      "echo $?"
+      "mkdir -m 700 modecheck"
+      "stat -c %a modecheck"
       "pkg info cp"
       "pkg info mv"
+      "pkg info mkdir"
     )
     EXPECTS=(
       "TTY canonical line ready: cp one.txt two.txt"
       "^alpha$"
       "TTY canonical line ready: mv two.txt moved.txt"
+      "TTY canonical line ready: mkdir -p nested/one/two"
+      "^0$"
+      "TTY canonical line ready: stat -c %a modecheck"
+      "^700$"
       "^name: cp$"
       "^  /bin/cp$"
       "^name: mv$"
       "^  /bin/mv$"
+      "^name: mkdir$"
+      "^  /bin/mkdir$"
     )
     ;;
   grep)
