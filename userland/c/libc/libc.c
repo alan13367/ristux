@@ -119,6 +119,8 @@
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
+#define SYS_DUP3 292
+#define SYS_PIPE2 293
 #define SYS_GETRANDOM 318
 
 int errno;
@@ -284,12 +286,20 @@ int pipe(int pipefd[2]) {
     return (int)syscall_ret(syscall1(SYS_PIPE, (long)pipefd));
 }
 
+int pipe2(int pipefd[2], int flags) {
+    return (int)syscall_ret(syscall2(SYS_PIPE2, (long)pipefd, flags));
+}
+
 int dup(int oldfd) {
     return (int)syscall_ret(syscall1(SYS_DUP, oldfd));
 }
 
 int dup2(int oldfd, int newfd) {
     return (int)syscall_ret(syscall2(SYS_DUP2, oldfd, newfd));
+}
+
+int dup3(int oldfd, int newfd, int flags) {
+    return (int)syscall_ret(syscall3(SYS_DUP3, oldfd, newfd, flags));
 }
 
 int fcntl(int fd, int cmd, ...) {

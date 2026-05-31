@@ -229,8 +229,12 @@ impl Process {
     }
 
     fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> usize {
+        self.push_fd_with_all_flags(vfs_fd, status_flags, 0)
+    }
+
+    fn push_fd_with_all_flags(&mut self, vfs_fd: usize, status_flags: u32, fd_flags: u32) -> usize {
         let user_fd = self.lowest_available_fd();
-        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, 0);
+        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags);
         user_fd
     }
 
@@ -873,11 +877,21 @@ pub fn get_parent(pid: Pid) -> Option<Pid> {
 }
 
 pub fn install_pipe_fds(pipefd: usize, read_vfs: usize, write_vfs: usize) -> Result<(), ()> {
+    install_pipe_fds_with_flags(pipefd, read_vfs, write_vfs, 0, 0)
+}
+
+pub fn install_pipe_fds_with_flags(
+    pipefd: usize,
+    read_vfs: usize,
+    write_vfs: usize,
+    status_flags: u32,
+    fd_flags: u32,
+) -> Result<(), ()> {
     let parent = current_pid().ok_or(())?;
     let (user_read, user_write) = with_table(|table| {
         let process = table.get_mut(parent).ok_or(())?;
-        let user_read = process.push_fd(read_vfs);
-        let user_write = process.push_fd(write_vfs);
+        let user_read = process.push_fd_with_all_flags(read_vfs, status_flags, fd_flags);
+        let user_write = process.push_fd_with_all_flags(write_vfs, status_flags, fd_flags);
         Ok((user_read, user_write))
     })?;
     let Some(out) = write_user_buffer(pipefd, 8) else {
@@ -1384,6 +1398,27 @@ pub fn user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::Vfs
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
         let old = p.replace_fd_with_flags(target_fd, dup, status_flags, 0);
+        if let Some(old) = old {
+            fs::close(old)?;
+        }
+        Ok(target_fd)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
+pub fn user_dup3(
+    user_fd: usize,
+    target_fd: usize,
+    fd_flags: u32,
+) -> Result<usize, fs::vfs::VfsError> {
+    with_current(|p| {
+        if user_fd == target_fd {
+            return Err(fs::vfs::VfsError::BadFd);
+        }
+        let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
+        let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
+        let dup = fs::duplicate_fd(vfs_fd)?;
+        let old = p.replace_fd_with_flags(target_fd, dup, status_flags, fd_flags);
         if let Some(old) = old {
             fs::close(old)?;
         }

@@ -43,6 +43,37 @@ int main(int argc, char **argv) {
     close(pipefd[0]);
     close(pipefd[1]);
 
+    int flagged[2];
+    if (pipe2(flagged, O_NONBLOCK | O_CLOEXEC) < 0) {
+        puts("cc_fcntl: pipe2 failed");
+        return 1;
+    }
+    if ((fcntl(flagged[0], F_GETFL) & O_NONBLOCK) == 0 ||
+        (fcntl(flagged[1], F_GETFL) & O_NONBLOCK) == 0 ||
+        (fcntl(flagged[0], F_GETFD) & FD_CLOEXEC) == 0 ||
+        (fcntl(flagged[1], F_GETFD) & FD_CLOEXEC) == 0) {
+        puts("cc_fcntl: pipe2 flags failed");
+        return 1;
+    }
+    if (read(flagged[0], &ch, 1) != -1 || errno != EAGAIN) {
+        puts("cc_fcntl: pipe2 nonblock failed");
+        return 1;
+    }
+    if (dup3(flagged[1], 10, O_CLOEXEC) != 10 ||
+        (fcntl(10, F_GETFD) & FD_CLOEXEC) == 0) {
+        puts("cc_fcntl: dup3 failed");
+        return 1;
+    }
+    errno = 0;
+    if (dup3(10, 10, O_CLOEXEC) != -1 || errno != EINVAL) {
+        puts("cc_fcntl: dup3 same fd failed");
+        return 1;
+    }
+    close(flagged[0]);
+    close(flagged[1]);
+    close(10);
+    puts("cc_fcntl: pipe2 dup3 ok");
+
     int exec_pipe[2];
     if (pipe(exec_pipe) < 0) {
         puts("cc_fcntl: exec pipe failed");

@@ -134,6 +134,8 @@ The current Linux-like syscall surface is:
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
+| 292 | `dup3` | Duplicates a descriptor with optional `O_CLOEXEC`. |
+| 293 | `pipe2` | Creates a pipe with optional `O_NONBLOCK` and `O_CLOEXEC`. |
 | 318 | `getrandom` | Kernel entropy bytes. |
 
 Unlisted syscall numbers return `-ENOSYS`.
@@ -151,7 +153,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
   `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
 - File descriptors: `read`, `write`, `pread`, `pwrite`, `readv`, `writev`,
-  `open`, `close`, `lseek`, `pipe`, `dup`, `dup2`, `fcntl`, `poll`, `select`.
+  `open`, `close`, `lseek`, `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`,
+  `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `link`, `symlink`,
   `readlink`, `chdir`, `getcwd`.

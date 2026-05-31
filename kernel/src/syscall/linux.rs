@@ -104,6 +104,8 @@ pub const NR_rt_sigpending: u64 = 127;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
+pub const NR_dup3: u64 = 292;
+pub const NR_pipe2: u64 = 293;
 pub const NR_getrandom: u64 = 318;
 
 const ESRCH: i64 = -3;
@@ -139,6 +141,7 @@ const TCP_NODELAY: i32 = 1;
 const O_ACCMODE: u32 = 0o3;
 const O_APPEND: u32 = 0o2000;
 const O_NONBLOCK: u32 = 0o4000;
+const O_CLOEXEC: u32 = 0o2000000;
 const SETTABLE_STATUS_FLAGS: u32 = O_APPEND | O_NONBLOCK;
 const PROT_READ: i32 = 0x1;
 const PROT_WRITE: i32 = 0x2;
@@ -186,6 +189,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_poll => linux_poll(frame, a0 as usize, a1 as usize, a2 as i32),
         NR_access => linux_access(a0 as usize, a1 as i32),
         NR_pipe => linux_pipe(a0 as usize),
+        NR_pipe2 => linux_pipe2(a0 as usize, a1 as u32),
         NR_select => linux_select(
             frame,
             a0 as i32,
@@ -197,6 +201,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_sched_yield => linux_sched_yield(frame),
         NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
+        NR_dup3 => linux_dup3(a0 as usize, a1 as usize, a2 as u32),
         NR_nanosleep => linux_nanosleep(a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
@@ -1168,8 +1173,21 @@ fn linux_access(path_ptr: usize, mode: i32) -> Result<u64, i64> {
 }
 
 fn linux_pipe(pipefd: usize) -> Result<u64, i64> {
+    linux_pipe2(pipefd, 0)
+}
+
+fn linux_pipe2(pipefd: usize, flags: u32) -> Result<u64, i64> {
+    if flags & !(O_NONBLOCK | O_CLOEXEC) != 0 {
+        return Err(EINVAL);
+    }
     let (read_fd, write_fd) = fs::create_pipe(4096).map_err(|_| ENOMEM)?;
-    process::install_pipe_fds(pipefd, read_fd, write_fd)
+    let status_flags = flags & O_NONBLOCK;
+    let fd_flags = if flags & O_CLOEXEC != 0 {
+        process::FD_CLOEXEC
+    } else {
+        0
+    };
+    process::install_pipe_fds_with_flags(pipefd, read_fd, write_fd, status_flags, fd_flags)
         .map(|_| 0)
         .map_err(|_| EFAULT)
 }
@@ -1184,6 +1202,20 @@ fn linux_sched_yield(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
 
 fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {
     process::user_dup2(oldfd, newfd)
+        .map(|fd| fd as u64)
+        .map_err(|_| EBADF)
+}
+
+fn linux_dup3(oldfd: usize, newfd: usize, flags: u32) -> Result<u64, i64> {
+    if flags & !O_CLOEXEC != 0 || oldfd == newfd {
+        return Err(EINVAL);
+    }
+    let fd_flags = if flags & O_CLOEXEC != 0 {
+        process::FD_CLOEXEC
+    } else {
+        0
+    };
+    process::user_dup3(oldfd, newfd, fd_flags)
         .map(|fd| fd as u64)
         .map_err(|_| EBADF)
 }
