@@ -139,6 +139,7 @@ The current Linux-like syscall surface is:
 | 119 | `setresgid` | Real/effective/saved gid update. |
 | 120 | `getresgid` | Reads real/effective/saved gid. |
 | 127 | `rt_sigpending` | Reads the current pending signal mask. |
+| 132 | `utime` | Updates file modification time from `struct utimbuf`, or current time for null times. |
 | 137 | `statfs` | Reports filesystem block/inode capacity and availability for a path. |
 | 138 | `fstatfs` | Reports filesystem block/inode capacity and availability for a descriptor. |
 | 160 | `setrlimit` | Updates supported per-process resource limits. |
@@ -148,9 +149,11 @@ The current Linux-like syscall surface is:
 | 202 | `futex` | Basic `FUTEX_WAIT`/`FUTEX_WAKE` compatibility for uncontended pthread-style users. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
+| 235 | `utimes` | Updates file modification time from `struct timeval[2]`, or current time for null times. |
 | 257 | `openat` | `open` semantics relative to `AT_FDCWD` or a directory descriptor. |
 | 258 | `mkdirat` | Directory creation relative to `AT_FDCWD` or a directory descriptor. |
 | 260 | `fchownat` | Ownership updates relative to `AT_FDCWD` or a directory descriptor. |
+| 261 | `futimesat` | Updates file modification time relative to a directory descriptor. |
 | 262 | `newfstatat` | `stat`/`lstat` semantics with `AT_SYMLINK_NOFOLLOW` and directory descriptors. |
 | 263 | `unlinkat` | Removes files or directories with `AT_REMOVEDIR`. |
 | 264 | `renameat` | Rename between `AT_FDCWD` or directory descriptor namespaces. |
@@ -159,6 +162,7 @@ The current Linux-like syscall surface is:
 | 267 | `readlinkat` | Reads symlink targets relative to `AT_FDCWD` or a directory descriptor. |
 | 268 | `fchmodat` | Mode updates relative to `AT_FDCWD` or a directory descriptor. |
 | 269 | `faccessat` | `access` semantics relative to `AT_FDCWD` or a directory descriptor. |
+| 280 | `utimensat` | Updates file modification time from `struct timespec[2]`; supports `UTIME_NOW`, `UTIME_OMIT`, and `AT_EMPTY_PATH`. |
 | 292 | `dup3` | Duplicates a descriptor with optional `O_CLOEXEC`. |
 | 293 | `pipe2` | Creates a pipe with optional `O_NONBLOCK` and `O_CLOEXEC`. |
 | 318 | `getrandom` | Kernel entropy bytes. |
@@ -196,7 +200,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Procfs currently exposes `/proc/version`, `/proc/mounts`, `/proc/meminfo`,
   `/proc/uptime`, `/proc/stat`, `/proc/self/status`, and
   `/proc/<pid>/status`.
-- Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`.
+- Time: `time`, `gettimeofday`, `clock_gettime`, `nanosleep`, `utime`,
+  `utimes`, `futimesat`, `utimensat`, and `futimens`.
 - Entropy: `getrandom`; `/dev/random` and `/dev/urandom` are backed by the
   same kernel ChaCha DRBG, seeded from CPU/time sources and mixed with keyboard
   interrupt timing.

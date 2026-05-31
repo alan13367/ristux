@@ -115,6 +115,7 @@ case "$SCENARIO" in
       "cc_fs: access ok"
       "cc_fs: getdents ok"
       "cc_fs: fd metadata syscalls ok"
+      "cc_fs: timestamps ok"
       "cc_fs: at syscalls ok"
       "cc_fs: umask ok"
       "cc_fs: trunc missing ok"

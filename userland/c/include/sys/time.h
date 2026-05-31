@@ -15,6 +15,8 @@ struct timezone {
 };
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+int utimes(const char *path, const struct timeval times[2]);
+int futimesat(int dirfd, const char *path, const struct timeval times[2]);
 
 #ifndef _RISTUX_FD_SET_DEFINED
 #define _RISTUX_FD_SET_DEFINED

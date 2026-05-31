@@ -110,6 +110,7 @@ pub const NR_getresuid: u64 = 118;
 pub const NR_setresgid: u64 = 119;
 pub const NR_getresgid: u64 = 120;
 pub const NR_rt_sigpending: u64 = 127;
+pub const NR_utime: u64 = 132;
 pub const NR_statfs: u64 = 137;
 pub const NR_fstatfs: u64 = 138;
 pub const NR_setrlimit: u64 = 160;
@@ -119,9 +120,11 @@ pub const NR_time: u64 = 201;
 pub const NR_futex: u64 = 202;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
+pub const NR_utimes: u64 = 235;
 pub const NR_openat: u64 = 257;
 pub const NR_mkdirat: u64 = 258;
 pub const NR_fchownat: u64 = 260;
+pub const NR_futimesat: u64 = 261;
 pub const NR_newfstatat: u64 = 262;
 pub const NR_unlinkat: u64 = 263;
 pub const NR_renameat: u64 = 264;
@@ -130,6 +133,7 @@ pub const NR_symlinkat: u64 = 266;
 pub const NR_readlinkat: u64 = 267;
 pub const NR_fchmodat: u64 = 268;
 pub const NR_faccessat: u64 = 269;
+pub const NR_utimensat: u64 = 280;
 pub const NR_dup3: u64 = 292;
 pub const NR_pipe2: u64 = 293;
 pub const NR_getrandom: u64 = 318;
@@ -357,10 +361,12 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_time => linux_time(a0 as usize),
         NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
+        NR_utimes => linux_utimes(a0 as usize, a1 as usize),
         NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
         NR_openat => linux_openat(a0 as i32, a1 as usize, a2 as i32, a3 as u32),
         NR_mkdirat => linux_mkdirat(a0 as i32, a1 as usize, a2 as u16),
         NR_fchownat => linux_fchownat(a0 as i32, a1 as usize, a2 as u32, a3 as u32, a4 as i32),
+        NR_futimesat => linux_futimesat(a0 as i32, a1 as usize, a2 as usize),
         NR_newfstatat => linux_newfstatat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
         NR_unlinkat => linux_unlinkat(a0 as i32, a1 as usize, a2 as i32),
         NR_renameat => linux_renameat(a0 as i32, a1 as usize, a2 as i32, a3 as usize),
@@ -369,6 +375,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_readlinkat => linux_readlinkat(a0 as i32, a1 as usize, a2 as usize, a3 as usize),
         NR_fchmodat => linux_fchmodat(a0 as i32, a1 as usize, a2 as u16),
         NR_faccessat => linux_faccessat(a0 as i32, a1 as usize, a2 as i32, a3 as i32),
+        NR_utimensat => linux_utimensat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
@@ -379,6 +386,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
         NR_rt_sigprocmask => linux_rt_sigprocmask(a0 as i32, a1 as usize, a2 as usize, a3 as usize),
         NR_rt_sigpending => linux_rt_sigpending(a0 as usize, a1 as usize),
+        NR_utime => linux_utime(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
         NR_sethostname => linux_sethostname(a0 as usize, a1 as usize),
@@ -2510,6 +2518,96 @@ fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
     Ok(0)
 }
 
+fn linux_utime(path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let mtime = if times_ptr == 0 {
+        crate::time::filesystem_timestamp()
+    } else {
+        let bytes = process::read_user(times_ptr, 16).ok_or(EFAULT)?;
+        let modtime = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
+        if modtime < 0 {
+            return Err(EINVAL);
+        }
+        modtime as u64
+    };
+    process::user_set_mtime(&path, mtime)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_utimes(path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let mtime = read_timeval_mtime(times_ptr)?;
+    process::user_set_mtime(&path, mtime)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_futimesat(dirfd: i32, path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
+    let mtime = read_timeval_mtime(times_ptr)?;
+    process::user_set_mtime(&path, mtime)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_utimensat(dirfd: i32, path_ptr: usize, times_ptr: usize, flags: i32) -> Result<u64, i64> {
+    const UTIME_NOW: i64 = 0x3fffffff;
+    const UTIME_OMIT: i64 = 0x3ffffffe;
+
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, flags)?;
+    let mtime = if times_ptr == 0 {
+        Some(crate::time::filesystem_timestamp())
+    } else {
+        let bytes = process::read_user(times_ptr, 32).ok_or(EFAULT)?;
+        let atime_nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
+        validate_timespec_nsec(atime_nsec, UTIME_NOW, UTIME_OMIT)?;
+        let mtime_sec = i64::from_le_bytes(bytes[16..24].try_into().map_err(|_| EFAULT)?);
+        let mtime_nsec = i64::from_le_bytes(bytes[24..32].try_into().map_err(|_| EFAULT)?);
+        validate_timespec_nsec(mtime_nsec, UTIME_NOW, UTIME_OMIT)?;
+        if mtime_nsec == UTIME_OMIT {
+            None
+        } else if mtime_nsec == UTIME_NOW {
+            Some(crate::time::filesystem_timestamp())
+        } else {
+            if mtime_sec < 0 {
+                return Err(EINVAL);
+            }
+            Some(mtime_sec as u64)
+        }
+    };
+    if let Some(mtime) = mtime {
+        process::user_set_mtime(&path, mtime).map_err(map_vfs_error)?;
+    } else {
+        fs::stat(&path).map_err(map_vfs_error)?;
+    }
+    Ok(0)
+}
+
+fn read_timeval_mtime(times_ptr: usize) -> Result<u64, i64> {
+    if times_ptr == 0 {
+        return Ok(crate::time::filesystem_timestamp());
+    }
+    let bytes = process::read_user(times_ptr, 32).ok_or(EFAULT)?;
+    let mtime_sec = i64::from_le_bytes(bytes[16..24].try_into().map_err(|_| EFAULT)?);
+    let mtime_usec = i64::from_le_bytes(bytes[24..32].try_into().map_err(|_| EFAULT)?);
+    if mtime_sec < 0 || !(0..1_000_000).contains(&mtime_usec) {
+        return Err(EINVAL);
+    }
+    Ok(mtime_sec as u64)
+}
+
+fn validate_timespec_nsec(nsec: i64, utime_now: i64, utime_omit: i64) -> Result<(), i64> {
+    if nsec == utime_now || nsec == utime_omit || (0..1_000_000_000).contains(&nsec) {
+        Ok(())
+    } else {
+        Err(EINVAL)
+    }
+}
+
 fn linux_getrandom(buf: usize, len: usize, flags: u32) -> Result<u64, i64> {
     if flags & !(GRND_NONBLOCK | GRND_RANDOM) != 0 {
         return Err(EINVAL);
@@ -2704,6 +2802,7 @@ fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.size,
         meta.mode as u32,
         meta.nlink,
+        meta.mtime,
     )
 }
 
@@ -2718,6 +2817,7 @@ fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.size,
         meta.mode as u32,
         meta.nlink,
+        meta.mtime,
     )
 }
 
@@ -2739,6 +2839,7 @@ fn linux_newfstatat(dirfd: i32, path_ptr: usize, buf_ptr: usize, flags: i32) -> 
         meta.size,
         meta.mode as u32,
         meta.nlink,
+        meta.mtime,
     )
 }
 
@@ -2752,6 +2853,7 @@ fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
         meta.size,
         meta.mode as u32,
         meta.nlink,
+        meta.mtime,
     )
 }
 
@@ -2762,6 +2864,7 @@ fn write_linux_stat(
     size: u64,
     mode: u32,
     nlink: u64,
+    mtime: u64,
 ) -> Result<u64, i64> {
     // struct stat is ~144 bytes on x86_64; we only fill the fields userland
     // typically reads (size, mode), zeroing the rest.
@@ -2775,6 +2878,9 @@ fn write_linux_stat(
     out[28..32].copy_from_slice(&owner.to_le_bytes()); // st_uid
     out[32..36].copy_from_slice(&group.to_le_bytes()); // st_gid
     out[48..56].copy_from_slice(&size.to_le_bytes()); // st_size
+    out[72..80].copy_from_slice(&mtime.to_le_bytes()); // st_atime
+    out[88..96].copy_from_slice(&mtime.to_le_bytes()); // st_mtime
+    out[104..112].copy_from_slice(&mtime.to_le_bytes()); // st_ctime
     Ok(0)
 }
 

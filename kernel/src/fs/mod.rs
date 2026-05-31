@@ -68,11 +68,7 @@ pub fn chmod_as(path: &str, mode: u16, creds: Credentials) -> Result<(), vfs::Vf
     vfs::chmod_as(path, mode, creds)
 }
 
-pub fn mkdir_with_mode_as(
-    path: &str,
-    creds: Credentials,
-    mode: u16,
-) -> Result<(), vfs::VfsError> {
+pub fn mkdir_with_mode_as(path: &str, creds: Credentials, mode: u16) -> Result<(), vfs::VfsError> {
     vfs::mkdir_with_mode_as(path, creds, mode)
 }
 
@@ -102,6 +98,10 @@ pub fn readlink(path: &str) -> Result<alloc::vec::Vec<u8>, vfs::VfsError> {
 
 pub fn chown_as(path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), vfs::VfsError> {
     vfs::chown_as(path, uid, gid, creds)
+}
+
+pub fn set_mtime_as(path: &str, mtime: u64, creds: Credentials) -> Result<(), vfs::VfsError> {
+    vfs::set_mtime_as(path, mtime, creds)
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, vfs::VfsError> {

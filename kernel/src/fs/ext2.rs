@@ -54,17 +54,24 @@ struct Inode {
     uid: u32,
     gid: u32,
     size: u64,
+    atime: u32,
+    ctime: u32,
+    mtime: u32,
     links: u16,
     blocks: [u32; EXT2_N_BLOCKS],
 }
 
 impl Inode {
     fn empty_file(uid: u32, gid: u32, mode: u16) -> Self {
+        let now = current_ext2_time();
         Self {
             mode: EXT2_S_IFREG | (mode & 0o7777),
             uid,
             gid,
             size: 0,
+            atime: now,
+            ctime: now,
+            mtime: now,
             links: 1,
             blocks: [0; EXT2_N_BLOCKS],
         }
@@ -73,11 +80,15 @@ impl Inode {
     fn empty_dir(uid: u32, gid: u32, mode: u16, block: u32) -> Self {
         let mut blocks = [0; EXT2_N_BLOCKS];
         blocks[0] = block;
+        let now = current_ext2_time();
         Self {
             mode: EXT2_S_IFDIR | (mode & 0o7777),
             uid,
             gid,
             size: 1024,
+            atime: now,
+            ctime: now,
+            mtime: now,
             links: 2,
             blocks,
         }
@@ -103,6 +114,7 @@ pub struct Ext2Metadata {
     pub metadata: FileMetadata,
     pub size: u64,
     pub links: u16,
+    pub mtime: u64,
 }
 
 impl Ext2Fs {
@@ -215,6 +227,7 @@ impl Ext2Fs {
             },
             size: inode.size,
             links: inode.links,
+            mtime: u64::from(inode.mtime),
         })
     }
 
@@ -237,8 +250,7 @@ impl Ext2Fs {
         let ino = self.allocate_inode()?;
         let inode = Inode::empty_file(uid, gid, mode);
         self.write_inode(ino, &inode)?;
-        if let Err(err) = self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_REG_FILE)
-        {
+        if let Err(err) = self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_REG_FILE) {
             let _ = self.free_inode(ino);
             return Err(err);
         }
@@ -324,6 +336,7 @@ impl Ext2Fs {
         let removed_ino = self.remove_dir_entry(&parent, &name)?;
         if inode.links > 1 {
             inode.links -= 1;
+            inode.ctime = current_ext2_time();
             self.write_inode(removed_ino, &inode)
         } else {
             self.free_inode_blocks(&inode)?;
@@ -409,6 +422,7 @@ impl Ext2Fs {
     pub fn chmod(&mut self, path: &str, mode: u16) -> Result<(), Ext2Error> {
         let (ino, mut inode) = self.lookup_path(path)?;
         inode.mode = (inode.mode & EXT2_S_IFMT) | (mode & 0o7777);
+        inode.ctime = current_ext2_time();
         self.write_inode(ino, &inode)
     }
 
@@ -420,6 +434,14 @@ impl Ext2Fs {
         if gid != u32::MAX {
             inode.gid = gid;
         }
+        inode.ctime = current_ext2_time();
+        self.write_inode(ino, &inode)
+    }
+
+    pub fn set_mtime(&mut self, path: &str, mtime: u64) -> Result<(), Ext2Error> {
+        let (ino, mut inode) = self.lookup_path(path)?;
+        inode.mtime = mtime.min(u64::from(u32::MAX)) as u32;
+        inode.ctime = current_ext2_time();
         self.write_inode(ino, &inode)
     }
 
@@ -489,6 +511,9 @@ impl Ext2Fs {
             inode.blocks[13] = double_indirect;
         }
         inode.size = data.len() as u64;
+        let now = current_ext2_time();
+        inode.mtime = now;
+        inode.ctime = now;
         self.write_inode(ino, &inode)
     }
 
@@ -572,6 +597,9 @@ impl Ext2Fs {
             uid,
             gid,
             size: size_low | (size_high << 32),
+            atime: le_u32(raw, 8),
+            ctime: le_u32(raw, 12),
+            mtime: le_u32(raw, 16),
             links: le_u16(raw, 26),
             blocks,
         })
@@ -698,9 +726,9 @@ impl Ext2Fs {
             put_u16(raw, 0, inode.mode);
             put_u16(raw, 2, inode.uid as u16);
             put_u32(raw, 4, inode.size as u32);
-            put_u32(raw, 8, 1);
-            put_u32(raw, 12, 1);
-            put_u32(raw, 16, 1);
+            put_u32(raw, 8, inode.atime);
+            put_u32(raw, 12, inode.ctime);
+            put_u32(raw, 16, inode.mtime);
             put_u16(raw, 24, inode.gid as u16);
             put_u16(raw, 26, inode.links);
             put_u32(raw, 28, self.inode_sector_count(inode));
@@ -812,8 +840,7 @@ impl Ext2Fs {
                 put_u16(&mut data, new_offset + 4, new_rec_len as u16);
                 data[new_offset + 6] = name.len() as u8;
                 data[new_offset + 7] = file_type;
-                data[new_offset + 8..new_offset + 8 + name.len()]
-                    .copy_from_slice(name.as_bytes());
+                data[new_offset + 8..new_offset + 8 + name.len()].copy_from_slice(name.as_bytes());
                 write_block_sized(block as u64, self.block_size, &data)?;
                 return Ok(());
             }
@@ -864,12 +891,7 @@ impl Ext2Fs {
         Err(Ext2Error::NotFound)
     }
 
-    fn write_dir_block(
-        &self,
-        block: u32,
-        self_ino: u32,
-        parent_ino: u32,
-    ) -> Result<(), Ext2Error> {
+    fn write_dir_block(&self, block: u32, self_ino: u32, parent_ino: u32) -> Result<(), Ext2Error> {
         let mut data = [0u8; 1024];
         write_dir_record(&mut data, 0, self_ino, 12, ".", EXT2_FT_DIR);
         write_dir_record(
@@ -1024,8 +1046,7 @@ fn read_block_sized(block: u64, block_size: usize, output: &mut [u8]) -> Result<
     let sector = block * (block_size / 512) as u64;
     let mut bounce = [0u8; 1024];
     virtio_blk::read_sectors(sector, 1, &mut bounce[..512]).map_err(|_| Ext2Error::IoError)?;
-    virtio_blk::read_sectors(sector + 1, 1, &mut bounce[512..])
-        .map_err(|_| Ext2Error::IoError)?;
+    virtio_blk::read_sectors(sector + 1, 1, &mut bounce[512..]).map_err(|_| Ext2Error::IoError)?;
     output[..block_size].copy_from_slice(&bounce[..block_size]);
     Ok(())
 }
@@ -1036,8 +1057,7 @@ fn write_block_sized(block: u64, block_size: usize, input: &[u8]) -> Result<(), 
     }
     let sector = block * (block_size / 512) as u64;
     virtio_blk::write_sectors(sector, 1, &input[..512]).map_err(|_| Ext2Error::IoError)?;
-    virtio_blk::write_sectors(sector + 1, 1, &input[512..1024])
-        .map_err(|_| Ext2Error::IoError)?;
+    virtio_blk::write_sectors(sector + 1, 1, &input[512..1024]).map_err(|_| Ext2Error::IoError)?;
     Ok(())
 }
 
@@ -1091,6 +1111,10 @@ fn set_bitmap_bit(buf: &mut [u8], bit: usize, used: bool) {
 
 fn align4(value: usize) -> usize {
     (value + 3) & !3
+}
+
+fn current_ext2_time() -> u32 {
+    crate::time::filesystem_timestamp().min(u64::from(u32::MAX)) as u32
 }
 
 fn split_parent_name(path: &str) -> Result<(String, String), Ext2Error> {

@@ -4,7 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
+#include <utime.h>
 
 static int dir_contains(int fd, const char *needle) {
     char storage[512];
@@ -161,6 +164,45 @@ int main(void) {
     }
     close(fd);
     puts("cc_fs: fd metadata syscalls ok");
+
+    struct timespec ts[2] = {{1111, 0}, {1234, 0}};
+    if (utimensat(AT_FDCWD, "/tmp/cc_fs/atdir/moved", ts, 0) != 0 ||
+        stat("/tmp/cc_fs/atdir/moved", &st) != 0 ||
+        st.st_mtime != 1234) {
+        puts("cc_fs: utimensat failed");
+        return 1;
+    }
+    fd = openat(dirfd, "atdir/moved", O_RDWR, 0);
+    if (fd < 0) {
+        puts("cc_fs: futimens open failed");
+        return 1;
+    }
+    ts[1].tv_sec = 2345;
+    if (futimens(fd, ts) != 0) {
+        puts("cc_fs: futimens failed");
+        return 1;
+    }
+    close(fd);
+    if (stat("/tmp/cc_fs/atdir/moved", &st) != 0 || st.st_mtime != 2345) {
+        puts("cc_fs: futimens stat failed");
+        return 1;
+    }
+    struct utimbuf ub = {3333, 3456};
+    if (utime("/tmp/cc_fs/atdir/moved", &ub) != 0 ||
+        stat("/tmp/cc_fs/atdir/moved", &st) != 0 ||
+        st.st_mtime != 3456) {
+        puts("cc_fs: utime failed");
+        return 1;
+    }
+    struct timeval tv[2] = {{4444, 0}, {4567, 0}};
+    if (utimes("/tmp/cc_fs/atdir/moved", tv) != 0 ||
+        stat("/tmp/cc_fs/atdir/moved", &st) != 0 ||
+        st.st_mtime != 4567) {
+        puts("cc_fs: utimes failed");
+        return 1;
+    }
+    puts("cc_fs: timestamps ok");
+
     if (unlinkat(dirfd, "hardat", 0) != 0 ||
         unlinkat(dirfd, "symat", 0) != 0 ||
         unlinkat(dirfd, "atdir/moved", 0) != 0 ||

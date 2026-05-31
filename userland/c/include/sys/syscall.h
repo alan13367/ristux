@@ -88,6 +88,7 @@
 #define SYS_setresgid 119
 #define SYS_getresgid 120
 #define SYS_rt_sigpending 127
+#define SYS_utime 132
 #define SYS_statfs 137
 #define SYS_fstatfs 138
 #define SYS_setrlimit 160
@@ -97,9 +98,11 @@
 #define SYS_futex 202
 #define SYS_getdents64 217
 #define SYS_clock_gettime 228
+#define SYS_utimes 235
 #define SYS_openat 257
 #define SYS_mkdirat 258
 #define SYS_fchownat 260
+#define SYS_futimesat 261
 #define SYS_newfstatat 262
 #define SYS_unlinkat 263
 #define SYS_renameat 264
@@ -108,6 +111,7 @@
 #define SYS_readlinkat 267
 #define SYS_fchmodat 268
 #define SYS_faccessat 269
+#define SYS_utimensat 280
 #define SYS_dup3 292
 #define SYS_pipe2 293
 #define SYS_getrandom 318

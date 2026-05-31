@@ -1,6 +1,7 @@
 #ifndef _RISTUX_SYS_STAT_H
 #define _RISTUX_SYS_STAT_H
 
+#include <time.h>
 #include <sys/types.h>
 
 struct stat {
@@ -42,6 +43,9 @@ struct stat {
 #define S_IXOTH 0001
 #define S_IRWXO 0007
 
+#define UTIME_NOW 0x3fffffff
+#define UTIME_OMIT 0x3ffffffe
+
 int stat(const char *path, struct stat *buf);
 int fstat(int fd, struct stat *buf);
 int lstat(const char *path, struct stat *buf);
@@ -51,6 +55,8 @@ int mkdirat(int dirfd, const char *path, mode_t mode);
 int chmod(const char *path, mode_t mode);
 int fchmod(int fd, mode_t mode);
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags);
+int futimens(int fd, const struct timespec times[2]);
+int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
 mode_t umask(mode_t mask);
 
 #endif

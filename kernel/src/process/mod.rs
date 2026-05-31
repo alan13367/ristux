@@ -1509,6 +1509,14 @@ pub fn user_chmod(path: &str, mode: u16) -> Result<(), fs::vfs::VfsError> {
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
+pub fn user_set_mtime(path: &str, mtime: u64) -> Result<(), fs::vfs::VfsError> {
+    with_current(|p| {
+        let path = resolve_process_path(p, path)?;
+        fs::set_mtime_as(&path, mtime, p.credentials)
+    })
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+}
+
 pub fn user_access(
     path: &str,
     read: bool,

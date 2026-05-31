@@ -271,7 +271,12 @@ impl PtyState {
     }
 
     fn write_slave(&mut self, input: &[u8]) -> Result<usize, VfsError> {
-        write_queue(&mut self.slave_to_master, self.capacity, self.masters, input)
+        write_queue(
+            &mut self.slave_to_master,
+            self.capacity,
+            self.masters,
+            input,
+        )
     }
 }
 
@@ -446,18 +451,17 @@ impl Vfs {
                 name_max: 255,
             });
         }
-        let (fs_type, block_size, blocks, files) =
-            if path == "/tmp" || path.starts_with("/tmp/") {
-                (TMPFS_MAGIC, 1024, 1024, 1024)
-            } else if path == "/proc" || path.starts_with("/proc/") {
-                (PROC_SUPER_MAGIC, 1024, 0, 0)
-            } else if path == "/dev" || path.starts_with("/dev/") {
-                (DEVFS_MAGIC, 1024, 0, 0)
-            } else if path == "/initrd" || path.starts_with("/initrd/") {
-                (INITRD_MAGIC, 1024, 0, 0)
-            } else {
-                return Err(VfsError::NotFound);
-            };
+        let (fs_type, block_size, blocks, files) = if path == "/tmp" || path.starts_with("/tmp/") {
+            (TMPFS_MAGIC, 1024, 1024, 1024)
+        } else if path == "/proc" || path.starts_with("/proc/") {
+            (PROC_SUPER_MAGIC, 1024, 0, 0)
+        } else if path == "/dev" || path.starts_with("/dev/") {
+            (DEVFS_MAGIC, 1024, 0, 0)
+        } else if path == "/initrd" || path.starts_with("/initrd/") {
+            (INITRD_MAGIC, 1024, 0, 0)
+        } else {
+            return Err(VfsError::NotFound);
+        };
         Ok(FsStat {
             fs_type,
             block_size,
@@ -717,7 +721,11 @@ impl Vfs {
         if self.nodes[node].kind == NodeKind::Directory && rights.write {
             return Err(VfsError::NotFile);
         }
-        if rights.read && !self.nodes[metadata_node].metadata.can_access(creds, Access::Read) {
+        if rights.read
+            && !self.nodes[metadata_node]
+                .metadata
+                .can_access(creds, Access::Read)
+        {
             crate::println!(
                 "VFS permission denied: uid {} cannot read {}.",
                 creds.euid,
@@ -725,7 +733,11 @@ impl Vfs {
             );
             return Err(VfsError::PermissionDenied);
         }
-        if rights.write && !self.nodes[metadata_node].metadata.can_access(creds, Access::Write) {
+        if rights.write
+            && !self.nodes[metadata_node]
+                .metadata
+                .can_access(creds, Access::Write)
+        {
             crate::println!(
                 "VFS permission denied: uid {} cannot write {}.",
                 creds.euid,
@@ -932,7 +944,12 @@ impl Vfs {
         Ok(())
     }
 
-    fn rename_as(&mut self, old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    fn rename_as(
+        &mut self,
+        old_path: &str,
+        new_path: &str,
+        creds: Credentials,
+    ) -> Result<(), VfsError> {
         let normalized_old = normalize_path(old_path)?;
         let normalized_new = normalize_path(new_path)?;
         let old_path = normalized_old.as_str();
@@ -987,7 +1004,12 @@ impl Vfs {
         Ok(())
     }
 
-    fn symlink_as(&mut self, target: &str, link_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    fn symlink_as(
+        &mut self,
+        target: &str,
+        link_path: &str,
+        creds: Credentials,
+    ) -> Result<(), VfsError> {
         let normalized_link = normalize_path(link_path)?;
         let link_path = normalized_link.as_str();
         if self.nodes.iter().any(|node| node.path == link_path) {
@@ -1009,7 +1031,12 @@ impl Vfs {
         Ok(())
     }
 
-    fn link_as(&mut self, old_path: &str, new_path: &str, creds: Credentials) -> Result<(), VfsError> {
+    fn link_as(
+        &mut self,
+        old_path: &str,
+        new_path: &str,
+        creds: Credentials,
+    ) -> Result<(), VfsError> {
         let resolved_old = self.resolve_symlink_path(old_path)?;
         let normalized_new = normalize_path(new_path)?;
         let old_path = resolved_old.as_str();
@@ -1073,7 +1100,13 @@ impl Vfs {
         Ok(node.data.clone())
     }
 
-    fn chown_as(&mut self, path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
+    fn chown_as(
+        &mut self,
+        path: &str,
+        uid: u32,
+        gid: u32,
+        creds: Credentials,
+    ) -> Result<(), VfsError> {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
         if Self::use_root_ext2(path) {
@@ -1178,9 +1211,8 @@ impl Vfs {
             let remaining = data.len().saturating_sub(offset);
             let count = remaining.min(output.len());
             output[..count].copy_from_slice(&data[offset..offset + count]);
-            if let Some(Some(OpenHandle::Ext2File {
-                offset: cursor, ..
-            })) = self.open_files.get_mut(fd)
+            if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =
+                self.open_files.get_mut(fd)
             {
                 *cursor += count;
             }
@@ -1321,9 +1353,8 @@ impl Vfs {
                 .ok_or(VfsError::NotFound)?
                 .write_file(&path, &data)
                 .map_err(map_ext2_error)?;
-            if let Some(Some(OpenHandle::Ext2File {
-                offset: cursor, ..
-            })) = self.open_files.get_mut(fd)
+            if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =
+                self.open_files.get_mut(fd)
             {
                 *cursor = end;
             }
@@ -1489,16 +1520,12 @@ impl Vfs {
                 .get_mut(*pipe)
                 .ok_or(VfsError::BadFd)?
                 .add_writer(),
-            OpenHandle::PtyMaster { pty, .. } => self
-                .ptys
-                .get_mut(*pty)
-                .ok_or(VfsError::BadFd)?
-                .add_master(),
-            OpenHandle::PtySlave { pty, .. } => self
-                .ptys
-                .get_mut(*pty)
-                .ok_or(VfsError::BadFd)?
-                .add_slave(),
+            OpenHandle::PtyMaster { pty, .. } => {
+                self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?.add_master()
+            }
+            OpenHandle::PtySlave { pty, .. } => {
+                self.ptys.get_mut(*pty).ok_or(VfsError::BadFd)?.add_slave()
+            }
             OpenHandle::Node { .. } | OpenHandle::Ext2File { .. } | OpenHandle::Ext2Dir { .. } => {}
         }
         Ok(())
@@ -1555,9 +1582,8 @@ impl Vfs {
             if new_offset < 0 {
                 return Err(VfsError::BadFd);
             }
-            if let Some(Some(OpenHandle::Ext2File {
-                offset: cursor, ..
-            })) = self.open_files.get_mut(fd)
+            if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =
+                self.open_files.get_mut(fd)
             {
                 *cursor = new_offset as usize;
             }
@@ -1588,9 +1614,8 @@ impl Vfs {
             if new_offset < 0 {
                 return Err(VfsError::BadFd);
             }
-            if let Some(Some(OpenHandle::Ext2Dir {
-                offset: cursor, ..
-            })) = self.open_files.get_mut(fd)
+            if let Some(Some(OpenHandle::Ext2Dir { offset: cursor, .. })) =
+                self.open_files.get_mut(fd)
             {
                 *cursor = new_offset as usize;
             }
@@ -1672,7 +1697,7 @@ impl Vfs {
                     mode: meta.metadata.mode.0,
                     size: meta.size,
                     nlink: u64::from(meta.links),
-                    mtime: crate::time::filesystem_timestamp(),
+                    mtime: meta.mtime,
                 })
             }
             OpenHandle::Ext2Dir { path, .. } => {
@@ -1687,7 +1712,7 @@ impl Vfs {
                     mode: meta.metadata.mode.0,
                     size: meta.size,
                     nlink: u64::from(meta.links),
-                    mtime: crate::time::filesystem_timestamp(),
+                    mtime: meta.mtime,
                 })
             }
             OpenHandle::PtyMaster { .. } | OpenHandle::PtySlave { .. } => Ok(Stat {
@@ -1912,7 +1937,7 @@ impl Vfs {
                         mode: meta.metadata.mode.0,
                         size: meta.size,
                         nlink: u64::from(meta.links),
-                        mtime: crate::time::filesystem_timestamp(),
+                        mtime: meta.mtime,
                     });
                 }
             }
@@ -2012,11 +2037,45 @@ impl Vfs {
 
     fn timestamps(&self, path: &str) -> Option<FileTimestamps> {
         let path = normalize_path(path).ok()?;
+        if Self::use_root_ext2(path.as_str()) {
+            let meta = self.root_ext2()?.metadata(path.as_str()).ok()?;
+            return Some(FileTimestamps {
+                created_at: meta.mtime,
+                modified_at: meta.mtime,
+            });
+        }
         let node = self
             .nodes
             .iter()
             .position(|node| node.path == path.as_str())?;
         Some(self.nodes[canonical_node_index(&self.nodes, node)].timestamps)
+    }
+
+    fn set_mtime_as(&mut self, path: &str, mtime: u64, creds: Credentials) -> Result<(), VfsError> {
+        let resolved = self.resolve_symlink_path(path)?;
+        if Self::use_root_ext2(resolved.as_str()) {
+            if let Some(fs) = self.root_ext2_mut() {
+                let meta = fs.metadata(resolved.as_str()).map_err(map_ext2_error)?;
+                if !creds.is_superuser() && creds.euid != meta.metadata.owner {
+                    return Err(VfsError::PermissionDenied);
+                }
+                return fs
+                    .set_mtime(resolved.as_str(), mtime)
+                    .map_err(map_ext2_error);
+            }
+        }
+        let node = self
+            .nodes
+            .iter()
+            .position(|node| node.path == resolved)
+            .ok_or(VfsError::NotFound)?;
+        let node = canonical_node_index(&self.nodes, node);
+        let node = &mut self.nodes[node];
+        if !creds.is_superuser() && creds.euid != node.metadata.owner {
+            return Err(VfsError::PermissionDenied);
+        }
+        node.timestamps.modified_at = mtime;
+        Ok(())
     }
 
     fn directory_entries(&self, fd: usize) -> Result<(Vec<DirectoryEntry>, usize), VfsError> {
@@ -2033,7 +2092,9 @@ impl Vfs {
                 }
                 Ok((self.node_directory_entries(&node.path), *offset))
             }
-            OpenHandle::Ext2Dir { path, offset } => Ok((self.ext2_directory_entries(path)?, *offset)),
+            OpenHandle::Ext2Dir { path, offset } => {
+                Ok((self.ext2_directory_entries(path)?, *offset))
+            }
             _ => Err(VfsError::NotFile),
         }
     }
@@ -2309,6 +2370,10 @@ pub fn readlink(path: &str) -> Result<Vec<u8>, VfsError> {
 
 pub fn chown_as(path: &str, uid: u32, gid: u32, creds: Credentials) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.chown_as(path, uid, gid, creds))
+}
+
+pub fn set_mtime_as(path: &str, mtime: u64, creds: Credentials) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_mtime_as(path, mtime, creds))
 }
 
 pub fn can_access(path: &str, creds: Credentials, access: Access) -> Result<bool, VfsError> {

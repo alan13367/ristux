@@ -40,6 +40,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <utime.h>
 
 #define SYS_READ 0
 #define SYS_WRITE 1
@@ -127,6 +128,7 @@
 #define SYS_SETRESGID 119
 #define SYS_GETRESGID 120
 #define SYS_RT_SIGPENDING 127
+#define SYS_UTIME 132
 #define SYS_STATFS 137
 #define SYS_FSTATFS 138
 #define SYS_SETRLIMIT 160
@@ -136,9 +138,11 @@
 #define SYS_FUTEX 202
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
+#define SYS_UTIMES 235
 #define SYS_OPENAT 257
 #define SYS_MKDIRAT 258
 #define SYS_FCHOWNAT 260
+#define SYS_FUTIMESAT 261
 #define SYS_NEWFSTATAT 262
 #define SYS_UNLINKAT 263
 #define SYS_RENAMEAT 264
@@ -147,6 +151,7 @@
 #define SYS_READLINKAT 267
 #define SYS_FCHMODAT 268
 #define SYS_FACCESSAT 269
+#define SYS_UTIMENSAT 280
 #define SYS_DUP3 292
 #define SYS_PIPE2 293
 #define SYS_GETRANDOM 318
@@ -2125,6 +2130,26 @@ int gettimeofday(struct timeval *tv, struct timezone *tz) {
 
 int clock_gettime(int clockid, struct timespec *tp) {
     return (int)syscall_ret(syscall2(SYS_CLOCK_GETTIME, clockid, (long)tp));
+}
+
+int utime(const char *path, const struct utimbuf *times) {
+    return (int)syscall_ret(syscall2(SYS_UTIME, (long)path, (long)times));
+}
+
+int utimes(const char *path, const struct timeval times[2]) {
+    return (int)syscall_ret(syscall2(SYS_UTIMES, (long)path, (long)times));
+}
+
+int futimesat(int dirfd, const char *path, const struct timeval times[2]) {
+    return (int)syscall_ret(syscall3(SYS_FUTIMESAT, dirfd, (long)path, (long)times));
+}
+
+int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags) {
+    return (int)syscall_ret(syscall4(SYS_UTIMENSAT, dirfd, (long)path, (long)times, flags));
+}
+
+int futimens(int fd, const struct timespec times[2]) {
+    return utimensat(fd, "", times, AT_EMPTY_PATH);
 }
 
 clock_t clock(void) {
