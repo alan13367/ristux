@@ -391,6 +391,14 @@ impl Process {
     }
 
     fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, elf::ElfError> {
+        let mut checked_segments = 0;
+        let checked_entry = elf::for_each_load_segment(data, |_| {
+            checked_segments += 1;
+        })?;
+        if checked_segments == 0 {
+            return Err(elf::ElfError::Unsupported);
+        }
+
         self.flush_and_close_shared_mappings();
         let old = core::mem::replace(
             &mut self.address_space,
@@ -399,7 +407,7 @@ impl Process {
         old.destroy();
         self.address_space.activate();
         let mut segments = 0;
-        let entry = elf::for_each_load_segment(data, |segment| {
+        let _entry = elf::for_each_load_segment(data, |segment| {
             map_elf_segment(&mut self.address_space, segment);
             segments += 1;
         })?;
@@ -409,8 +417,8 @@ impl Process {
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
         self.name = String::from(path);
-        self.entry = entry;
-        Ok(entry)
+        self.entry = checked_entry;
+        Ok(checked_entry)
     }
 
     fn setup_stack(&mut self, args: &[&str]) {
@@ -929,49 +937,131 @@ pub struct ExecInfo {
     pub envp_ptr: usize,
 }
 
+const MAX_SHEBANG_DEPTH: usize = 4;
+
+fn trim_ascii_bytes(mut bytes: &[u8]) -> &[u8] {
+    while bytes
+        .first()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        bytes = &bytes[1..];
+    }
+    while bytes
+        .last()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t' | b'\r'))
+    {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
+}
+
+fn parse_shebang(path: &str, data: &[u8], args: &[&str]) -> Option<(String, Vec<String>)> {
+    if !data.starts_with(b"#!") {
+        return None;
+    }
+    let end = data[2..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|offset| offset + 2)
+        .unwrap_or(data.len());
+    let line = trim_ascii_bytes(&data[2..end]);
+    if line.is_empty() {
+        return None;
+    }
+    let split = line
+        .iter()
+        .position(|byte| matches!(*byte, b' ' | b'\t'))
+        .unwrap_or(line.len());
+    let interpreter = trim_ascii_bytes(&line[..split]);
+    if interpreter.is_empty() {
+        return None;
+    }
+    let interpreter = core::str::from_utf8(interpreter).ok()?;
+    let mut script_args = Vec::new();
+    script_args.push(String::from(interpreter));
+    if split < line.len() {
+        let optional = trim_ascii_bytes(&line[split..]);
+        if !optional.is_empty() {
+            script_args.push(String::from(core::str::from_utf8(optional).ok()?));
+        }
+    }
+    script_args.push(String::from(path));
+    for arg in args.iter().skip(1) {
+        script_args.push(String::from(*arg));
+    }
+    Some((String::from(interpreter), script_args))
+}
+
+fn exec_for_user_inner(
+    table: &mut ProcessTable,
+    pid: Pid,
+    path: &str,
+    args: &[&str],
+    env: &[&str],
+    depth: usize,
+) -> Option<ExecInfo> {
+    if depth > MAX_SHEBANG_DEPTH {
+        return None;
+    }
+    let metadata = fs::stat(path).ok()?;
+    let data = fs::read_file(path)?;
+    let index = table.processes.iter().position(|p| p.pid == pid)?;
+    let credentials = table.processes[index].credentials;
+    let file = FileMetadata::new(metadata.owner, metadata.group, metadata.mode);
+    if !file.can_access(credentials, Access::Execute) {
+        return None;
+    }
+
+    if let Some((interpreter, script_args)) = parse_shebang(path, &data, args) {
+        let interpreter = if interpreter.starts_with('/') {
+            interpreter
+        } else {
+            resolve_process_path(&table.processes[index], &interpreter).ok()?
+        };
+        let script_arg_refs: Vec<&str> = script_args.iter().map(|arg| arg.as_str()).collect();
+        return exec_for_user_inner(table, pid, &interpreter, &script_arg_refs, env, depth + 1);
+    }
+
+    if data.get(0..4) != Some(b"\x7fELF") {
+        return None;
+    }
+
+    let close_on_exec = table.processes[index].close_on_exec_fds();
+    for fd in close_on_exec {
+        let _ = fs::close(fd);
+    }
+    let close_on_exec_sockets = table.processes[index].close_on_exec_socket_handles();
+    for handle in close_on_exec_sockets {
+        let _ = crate::net::socket::with_sockets(|socket_table| socket_table.close(handle));
+    }
+    // Preserve fds across exec except descriptors marked FD_CLOEXEC.
+    if table.processes[index].load_elf(path, &data).is_err() {
+        return None;
+    }
+    table.processes[index].setup_stack_with_env(args, env);
+    if metadata.mode & 0o4000 != 0 {
+        table.processes[index].credentials.euid = metadata.owner;
+    }
+    if metadata.mode & 0o2000 != 0 {
+        table.processes[index].credentials.egid = metadata.group;
+    }
+    table.processes[index].state = ProcessState::Running;
+    let p = &table.processes[index];
+    Some(ExecInfo {
+        entry: p.entry,
+        stack_top: p.stack_top,
+        argc: p.argc,
+        argv_ptr: p.argv_ptr,
+        envp_ptr: p.envp_ptr,
+    })
+}
+
 /// Execve invoked from a running user process. Replaces the address space of
 /// `pid` with the program at `path`, preserves the existing file descriptors,
 /// and returns the entry/stack info so the syscall dispatcher can patch the
 /// outgoing iretq frame.
 pub fn exec_for_user(pid: Pid, path: &str, args: &[&str], env: &[&str]) -> Option<ExecInfo> {
-    with_table(|table| {
-        let metadata = fs::stat(path).ok()?;
-        let data = fs::read_file(path)?;
-        let index = table.processes.iter().position(|p| p.pid == pid)?;
-        let credentials = table.processes[index].credentials;
-        let file = FileMetadata::new(metadata.owner, metadata.group, metadata.mode);
-        if !file.can_access(credentials, Access::Execute) {
-            return None;
-        }
-        let close_on_exec = table.processes[index].close_on_exec_fds();
-        for fd in close_on_exec {
-            let _ = fs::close(fd);
-        }
-        let close_on_exec_sockets = table.processes[index].close_on_exec_socket_handles();
-        for handle in close_on_exec_sockets {
-            let _ = crate::net::socket::with_sockets(|socket_table| socket_table.close(handle));
-        }
-        // Preserve fds across exec except descriptors marked FD_CLOEXEC.
-        if table.processes[index].load_elf(path, &data).is_err() {
-            return None;
-        }
-        table.processes[index].setup_stack_with_env(args, env);
-        if metadata.mode & 0o4000 != 0 {
-            table.processes[index].credentials.euid = metadata.owner;
-        }
-        if metadata.mode & 0o2000 != 0 {
-            table.processes[index].credentials.egid = metadata.group;
-        }
-        table.processes[index].state = ProcessState::Running;
-        let p = &table.processes[index];
-        Some(ExecInfo {
-            entry: p.entry,
-            stack_top: p.stack_top,
-            argc: p.argc,
-            argv_ptr: p.argv_ptr,
-            envp_ptr: p.envp_ptr,
-        })
-    })
+    with_table(|table| exec_for_user_inner(table, pid, path, args, env, 0))
 }
 
 pub fn get_parent(pid: Pid) -> Option<Pid> {

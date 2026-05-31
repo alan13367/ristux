@@ -898,6 +898,11 @@ case "$SCENARIO" in
       "echo 'cmp out/a.txt out/b.txt' >> run.sh"
       "echo 'echo script-done' >> run.sh"
       "sh run.sh"
+      "echo '#!/bin/sh' > exec.sh"
+      "echo 'echo shebang-\$1-\$2' >> exec.sh"
+      "echo 'echo shell-\$0' >> exec.sh"
+      "chmod +x exec.sh"
+      "./exec.sh alpha beta"
     )
     EXPECTS=(
       "TTY canonical line ready: sh run.sh"
@@ -905,6 +910,9 @@ case "$SCENARIO" in
       "^alpha$"
       "^1$"
       "^script-done$"
+      "TTY canonical line ready: ./exec\\.sh alpha beta"
+      "^shebang-alpha-beta$"
+      "^shell-/tmp/shscript/exec\\.sh$"
     )
     ;;
   shell-list)

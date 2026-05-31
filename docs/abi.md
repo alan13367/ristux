@@ -97,7 +97,7 @@ The current Linux-like syscall surface is:
 | 51 | `getsockname` | Socket local address. |
 | 52 | `getpeername` | Socket peer address. |
 | 57 | `fork` | Copy-on-write user address-space clone. |
-| 59 | `execve` | Replaces image and preserves descriptors. |
+| 59 | `execve` | Replaces image, preserves descriptors, and supports `#!` interpreter scripts. |
 | 60 | `exit` | Terminates the current process. |
 | 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15 and stopped children as `WIFSTOPPED` when `WUNTRACED` is set. |
 | 62 | `kill` | Sends process signals, including `SIGCONT` to resume stopped jobs. |
