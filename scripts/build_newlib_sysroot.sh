@@ -83,7 +83,7 @@ if "x86_64-*-ristux*)" not in text:
         raise SystemExit("could not find configure.host sys_dir insertion point")
     text = text.replace(needle, early_block + needle, 1)
 
-late_block = """  x86_64-*-ristux*)\n\tsyscall_dir=syscalls\n\tdefault_newlib_io_long_long=\"yes\"\n\tnewlib_cflags=\"${newlib_cflags} -DHAVE_FCNTL -DHAVE_RENAME -DHAVE_NANOSLEEP\"\n\t;;\n"""
+late_block = """  x86_64-*-ristux*)\n\tposix_dir=posix\n\tsyscall_dir=syscalls\n\tdefault_newlib_io_long_long=\"yes\"\n\tnewlib_cflags=\"${newlib_cflags} -DHAVE_FCNTL -DHAVE_RENAME -DHAVE_NANOSLEEP\"\n\t;;\n"""
 if "x86_64-*-ristux*)\n\tsyscall_dir=syscalls" not in text:
     needle = "  *-*-rtems*)\n"
     if needle not in text:
@@ -91,6 +91,71 @@ if "x86_64-*-ristux*)\n\tsyscall_dir=syscalls" not in text:
     text = text.replace(needle, late_block + needle, 1)
 
 configure_host.write_text(text)
+
+dirent_header = src / "newlib" / "libc" / "include" / "sys" / "dirent.h"
+dirent_header.write_text(r"""#ifndef _SYS_DIRENT_H_
+#define _SYS_DIRENT_H_
+
+#include <stdint.h>
+#include <sys/types.h>
+
+typedef struct _dirdesc {
+    int dd_fd;
+    long dd_loc;
+    long dd_size;
+    char *dd_buf;
+    int dd_len;
+    long dd_seek;
+} DIR;
+
+#define __dirfd(dp) ((dp)->dd_fd)
+
+#define DT_UNKNOWN 0
+#define DT_CHR 2
+#define DT_DIR 4
+#define DT_REG 8
+#define DT_LNK 10
+
+struct dirent {
+    uint64_t d_ino;
+    int64_t d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[];
+} __attribute__((packed));
+
+#define d_fileno d_ino
+
+#endif /* _SYS_DIRENT_H_ */
+""")
+
+stat_header = src / "newlib" / "libc" / "include" / "sys" / "stat.h"
+stat_text = stat_header.read_text()
+needle = "int\tstat (const char *__restrict __path, struct stat *__restrict __sbuf );\n"
+ristux_lstat = "int\tlstat (const char *__restrict __path, struct stat *__restrict __buf );\n"
+if "Ristux exposes lstat through the Linux-compatible syscall ABI." not in stat_text:
+    stat_text = stat_text.replace(
+        needle,
+        needle + "/* Ristux exposes lstat through the Linux-compatible syscall ABI. */\n" + ristux_lstat,
+        1,
+    )
+    stat_header.write_text(stat_text)
+
+features_header = src / "newlib" / "libc" / "include" / "sys" / "features.h"
+features_text = features_header.read_text()
+features_marker = "/* Ristux POSIX option macros. */"
+if features_marker not in features_text:
+    features_text += f"""
+
+{features_marker}
+#ifndef _POSIX_TIMERS
+#define _POSIX_TIMERS 200809L
+#endif
+#ifndef _POSIX_CLOCK_SELECTION
+#define _POSIX_CLOCK_SELECTION 200809L
+#endif
+"""
+    features_header.write_text(features_text)
 PY
 
 RUST_SYSROOT="$(cd "$ROOT" && "$RUSTC" --print sysroot)"
@@ -112,6 +177,7 @@ fi
         --disable-multilib \
         --disable-nls \
         --disable-newlib-io-float \
+        --enable-newlib-elix-level=2 \
         --enable-newlib-reent-small \
         CC_FOR_TARGET="$CLANG --target=x86_64-unknown-none-elf -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone" \
         AR_FOR_TARGET="$LLVM_AR" \

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -35,6 +36,23 @@ static int read_exact(int fd, const char *expected) {
     return strcmp(buf, expected) == 0;
 }
 
+static int directory_contains(const char *path, const char *needle) {
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
+        return 0;
+    }
+    int found = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, needle) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    closedir(dir);
+    return found;
+}
+
 int main(void) {
     puts("cc_newlib_posix: start");
 
@@ -54,6 +72,17 @@ int main(void) {
         return 1;
     }
     if (expect(access(".", R_OK | W_OK | X_OK) == 0, "access")) {
+        return 1;
+    }
+    int dir_item = open("dir_item", O_CREAT | O_TRUNC | O_RDWR, 0600);
+    if (expect(dir_item >= 0, "dir item create")) {
+        return 1;
+    }
+    close(dir_item);
+    if (expect(directory_contains(".", "dir_item"), "readdir")) {
+        return 1;
+    }
+    if (expect(unlink("dir_item") == 0, "dir item unlink")) {
         return 1;
     }
 

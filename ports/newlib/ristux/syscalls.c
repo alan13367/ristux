@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
@@ -30,6 +31,7 @@ typedef int ristux_clockid_t;
 #define SYS_CLOSE 3
 #define SYS_STAT 4
 #define SYS_FSTAT 5
+#define SYS_LSTAT 6
 #define SYS_LSEEK 8
 #define SYS_BRK 12
 #define SYS_RT_SIGACTION 13
@@ -46,6 +48,8 @@ typedef int ristux_clockid_t;
 #define SYS_EXIT 60
 #define SYS_WAIT4 61
 #define SYS_KILL 62
+#define SYS_FCNTL 72
+#define SYS_GETDENTS64 217
 #define SYS_GETCWD 79
 #define SYS_CHDIR 80
 #define SYS_RENAME 82
@@ -441,6 +445,32 @@ int dup2(int oldfd, int newfd) {
     return public_syscall_ret(ristux_syscall2(SYS_DUP2, oldfd, newfd));
 }
 
+int fcntl(int fd, int cmd, ...) {
+    int arg = 0;
+#if defined(F_GETFD) && defined(F_GETFL)
+    if (cmd != F_GETFD && cmd != F_GETFL) {
+        va_list ap;
+        va_start(ap, cmd);
+        arg = va_arg(ap, int);
+        va_end(ap);
+    }
+#else
+    va_list ap;
+    va_start(ap, cmd);
+    arg = va_arg(ap, int);
+    va_end(ap);
+#endif
+    return public_syscall_ret(ristux_syscall3(SYS_FCNTL, fd, cmd, arg));
+}
+
+int getdents(int fd, void *dirp, int count) {
+    return public_syscall_ret(ristux_syscall3(SYS_GETDENTS64, fd, (long)dirp, count));
+}
+
+int getdents64(int fd, void *dirp, int count) {
+    return getdents(fd, dirp, count);
+}
+
 char *getcwd(char *buf, size_t size) {
     if (buf == NULL || size == 0) {
         (void)set_errno(NULL, -EINVAL);
@@ -639,6 +669,32 @@ int _stat_r(struct _reent *r, const char *path, struct stat *st) {
         return set_errno(r, -EINVAL);
     }
     long ret = syscall_ret(r, ristux_syscall2(SYS_STAT, (long)path, (long)raw));
+    if (ret < 0) {
+        return (int)ret;
+    }
+    copy_ristux_stat(st, raw);
+    return 0;
+}
+
+int lstat(const char *path, struct stat *st) {
+    unsigned char raw[RISTUX_STAT_SIZE];
+    if (st == NULL) {
+        return set_errno(NULL, -EINVAL);
+    }
+    long ret = syscall_ret(NULL, ristux_syscall2(SYS_LSTAT, (long)path, (long)raw));
+    if (ret < 0) {
+        return (int)ret;
+    }
+    copy_ristux_stat(st, raw);
+    return 0;
+}
+
+int _lstat_r(struct _reent *r, const char *path, struct stat *st) {
+    unsigned char raw[RISTUX_STAT_SIZE];
+    if (st == NULL) {
+        return set_errno(r, -EINVAL);
+    }
+    long ret = syscall_ret(r, ristux_syscall2(SYS_LSTAT, (long)path, (long)raw));
     if (ret < 0) {
         return (int)ret;
     }
