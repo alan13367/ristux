@@ -1351,6 +1351,10 @@ pub fn clear_timed_wait(key: u64) {
     });
 }
 
+pub fn has_timed_wait(key: u64) -> bool {
+    with_current_read(|p| matches!(p.timed_wait, Some(wait) if wait.key == key)).unwrap_or(false)
+}
+
 pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
         let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;

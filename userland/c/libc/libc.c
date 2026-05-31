@@ -122,7 +122,9 @@
 #define SYS_GETRESGID 120
 #define SYS_RT_SIGPENDING 127
 #define SYS_SETRLIMIT 160
+#define SYS_GETTID 186
 #define SYS_TIME 201
+#define SYS_FUTEX 202
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
 #define SYS_OPENAT 257
@@ -208,6 +210,19 @@ static long syscall_ret(long ret) {
         return -1;
     }
     return ret;
+}
+
+long syscall(long number, ...) {
+    va_list ap;
+    va_start(ap, number);
+    long a = va_arg(ap, long);
+    long b = va_arg(ap, long);
+    long c = va_arg(ap, long);
+    long d = va_arg(ap, long);
+    long e = va_arg(ap, long);
+    long f = va_arg(ap, long);
+    va_end(ap);
+    return syscall_ret(syscall6(number, a, b, c, d, e, f));
 }
 
 void __ristux_start(long argc, char **argv, char **envp) {
@@ -1009,6 +1024,10 @@ pid_t waitpid(pid_t pid, int *status, int options) {
 
 pid_t getpid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_GETPID));
+}
+
+pid_t gettid(void) {
+    return (pid_t)syscall_ret(syscall0(SYS_GETTID));
 }
 
 pid_t getppid(void) {

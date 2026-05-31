@@ -39,6 +39,7 @@ int execve(const char *path, char *const argv[], char *const envp[]);
 int execv(const char *path, char *const argv[]);
 int execvp(const char *file, char *const argv[]);
 pid_t getpid(void);
+pid_t gettid(void);
 pid_t getppid(void);
 pid_t getpgrp(void);
 int setpgid(pid_t pid, pid_t pgid);
@@ -79,6 +80,7 @@ int brk(void *addr);
 void *sbrk(long increment);
 int daemon(int nochdir, int noclose);
 unsigned int sleep(unsigned int seconds);
+long syscall(long number, ...);
 void _exit(int status) __attribute__((noreturn));
 
 #endif

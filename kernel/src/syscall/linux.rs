@@ -106,7 +106,9 @@ pub const NR_setresgid: u64 = 119;
 pub const NR_getresgid: u64 = 120;
 pub const NR_rt_sigpending: u64 = 127;
 pub const NR_setrlimit: u64 = 160;
+pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
+pub const NR_futex: u64 = 202;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
 pub const NR_openat: u64 = 257;
@@ -183,6 +185,9 @@ const MSG_DONTWAIT: i32 = 0x40;
 const GRND_NONBLOCK: u32 = 0x0001;
 const GRND_RANDOM: u32 = 0x0002;
 const IOV_MAX: usize = 1024;
+const FUTEX_WAIT: i32 = 0;
+const FUTEX_WAKE: i32 = 1;
+const FUTEX_CMD_MASK: i32 = 0x7f;
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -349,6 +354,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_rt_sigpending => linux_rt_sigpending(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
+        NR_gettid => Ok(process::current_pid().unwrap_or(0)),
+        NR_futex => linux_futex(frame, a0 as usize, a1 as i32, a2 as i32, a3 as usize),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
             Err(ENOSYS)
@@ -1035,6 +1042,83 @@ fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> 
         return Err(CONTEXT_SWITCHED);
     }
     Ok(())
+}
+
+fn linux_futex(
+    frame: &mut SyscallInterruptFrame,
+    uaddr: usize,
+    op: i32,
+    val: i32,
+    timeout: usize,
+) -> Result<u64, i64> {
+    if uaddr & 0x3 != 0 {
+        return Err(EINVAL);
+    }
+    match op & FUTEX_CMD_MASK {
+        FUTEX_WAIT => linux_futex_wait(frame, uaddr, val as u32, timeout),
+        FUTEX_WAKE => {
+            if val < 0 {
+                return Err(EINVAL);
+            }
+            if val > 0 {
+                process::wake_io_waiters();
+            }
+            Ok(val as u64)
+        }
+        _ => Err(ENOSYS),
+    }
+}
+
+fn linux_futex_wait(
+    frame: &mut SyscallInterruptFrame,
+    uaddr: usize,
+    expected: u32,
+    timeout: usize,
+) -> Result<u64, i64> {
+    let key = timed_wait_key(NR_futex, uaddr, expected as usize, 0);
+    loop {
+        let current = read_user_u32(uaddr)?;
+        if current != expected {
+            if process::has_timed_wait(key) {
+                process::clear_timed_wait(key);
+                return Ok(0);
+            }
+            return Err(EAGAIN);
+        }
+
+        let now_ms = crate::time::uptime_millis();
+        let deadline_ms = if timeout == 0 {
+            let _ = process::timed_wait_deadline(key, u64::MAX / 4, now_ms).ok_or(ESRCH)?;
+            None
+        } else {
+            let timeout_ms = read_timespec_millis(timeout)?;
+            Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+        };
+        if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
+            process::clear_timed_wait(key);
+            return Err(ETIMEDOUT);
+        }
+        block_for_io(frame, deadline_ms)?;
+    }
+}
+
+fn read_user_u32(addr: usize) -> Result<u32, i64> {
+    let bytes = process::read_user(addr, 4).ok_or(EFAULT)?;
+    Ok(u32::from_le_bytes(
+        bytes[0..4].try_into().map_err(|_| EFAULT)?,
+    ))
+}
+
+fn read_timespec_millis(addr: usize) -> Result<u64, i64> {
+    let bytes = process::read_user(addr, 16).ok_or(EFAULT)?;
+    let sec = i64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EFAULT)?);
+    let nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
+    if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+        return Err(EINVAL);
+    }
+    let sec_ms = (sec as u64).saturating_mul(1000);
+    let nsec_ms = ((nsec as u64).saturating_add(999_999)) / 1_000_000;
+    Ok(sec_ms.saturating_add(nsec_ms))
 }
 
 const SELECT_FD_SETSIZE: usize = 1024;

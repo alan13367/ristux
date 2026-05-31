@@ -136,7 +136,9 @@ The current Linux-like syscall surface is:
 | 120 | `getresgid` | Reads real/effective/saved gid. |
 | 127 | `rt_sigpending` | Reads the current pending signal mask. |
 | 160 | `setrlimit` | Updates supported per-process resource limits. |
+| 186 | `gettid` | Returns the current scheduler thread id; equal to pid until thread groups exist. |
 | 201 | `time` | Seconds since Unix epoch. |
+| 202 | `futex` | Basic `FUTEX_WAIT`/`FUTEX_WAKE` compatibility for uncontended pthread-style users. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
 | 257 | `openat` | `open` semantics relative to `AT_FDCWD` or a directory descriptor. |
@@ -161,8 +163,8 @@ Unlisted syscall numbers return `-ENOSYS`.
 The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `getppid`, `setsid`, `uname`, `getenv`, `putenv`, `setenv`, `unsetenv`,
-  `clearenv`, `getrlimit`, and `setrlimit`.
+  `gettid`, `getppid`, `setsid`, `uname`, `getenv`, `putenv`, `setenv`,
+  `unsetenv`, `clearenv`, `getrlimit`, `setrlimit`, and generic `syscall`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
   `setgroups`, and libc
@@ -208,8 +210,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   expansion, `~` expansion through `HOME`, login profile sourcing from
   `/etc/profile` and `$HOME/.profile`, and `export NAME=value` environment
   propagation.
-- Editor: `/bin/edit` is a tiny line editor with append, insert, delete, print,
-  write, and quit commands for basic file editing from the console or a PTY.
+- Editor: `/bin/edit` and `/bin/vi` provide a small vi-like line editor with
+  append, insert, open-line, delete-line, print, write, forced quit, and
+  write-and-quit commands for basic file editing from the console or a PTY.
 - Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
   and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
   client and listener through the normal `socket`/`bind`/`listen`/`connect`/
@@ -228,6 +231,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
   `printf`, `vprintf`.
+- Threading primitives: `gettid` and Linux-style futex constants are exposed;
+  the kernel implements `FUTEX_WAIT` mismatch/timeout behavior and
+  `FUTEX_WAKE` wakeups as a first pthread-portability layer. Full clone-based
+  thread groups are not part of the ABI yet.
 
 The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
 are reused and adjacent free blocks are coalesced, but heap pages are not yet
