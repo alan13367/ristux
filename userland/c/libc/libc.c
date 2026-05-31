@@ -55,6 +55,8 @@
 #define SYS_RT_SIGPROCMASK 14
 #define SYS_RT_SIGRETURN 15
 #define SYS_IOCTL 16
+#define SYS_PREAD64 17
+#define SYS_PWRITE64 18
 #define SYS_READV 19
 #define SYS_WRITEV 20
 #define SYS_ACCESS 21
@@ -237,6 +239,14 @@ ssize_t read(int fd, void *buf, size_t len) {
 
 ssize_t write(int fd, const void *buf, size_t len) {
     return (ssize_t)syscall_ret(syscall3(SYS_WRITE, fd, (long)buf, (long)len));
+}
+
+ssize_t pread(int fd, void *buf, size_t len, off_t offset) {
+    return (ssize_t)syscall_ret(syscall4(SYS_PREAD64, fd, (long)buf, (long)len, offset));
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t len, off_t offset) {
+    return (ssize_t)syscall_ret(syscall4(SYS_PWRITE64, fd, (long)buf, (long)len, offset));
 }
 
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {

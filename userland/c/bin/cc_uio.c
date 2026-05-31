@@ -49,8 +49,22 @@ static int check_file_writev(void) {
         puts("cc_uio: file readv failed");
         return 1;
     }
+    if (pwrite(fd, "XY", 2, 2) != 2) {
+        puts("cc_uio: file pwrite failed");
+        return 1;
+    }
+    char positioned[5];
+    if (pread(fd, positioned, sizeof(positioned), 0) != (ssize_t)sizeof(positioned) ||
+        memcmp(positioned, "veXYo", sizeof(positioned)) != 0) {
+        puts("cc_uio: file pread failed");
+        return 1;
+    }
+    if (lseek(fd, 0, SEEK_CUR) != 7) {
+        puts("cc_uio: positioned io offset failed");
+        return 1;
+    }
     close(fd);
-    puts("cc_uio: file readwritev ok");
+    puts("cc_uio: file positioned io ok");
     return 0;
 }
 

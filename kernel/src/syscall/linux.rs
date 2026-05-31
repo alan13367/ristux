@@ -39,6 +39,8 @@ pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigprocmask: u64 = 14;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
+pub const NR_pread64: u64 = 17;
+pub const NR_pwrite64: u64 = 18;
 pub const NR_readv: u64 = 19;
 pub const NR_writev: u64 = 20;
 pub const NR_access: u64 = 21;
@@ -175,6 +177,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let result: Result<u64, i64> = match nr {
         NR_write => linux_write(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
+        NR_pread64 => linux_pread64(frame, a0 as usize, a1 as usize, a2 as usize, a3 as i64),
+        NR_pwrite64 => linux_pwrite64(frame, a0 as usize, a1 as usize, a2 as usize, a3 as i64),
         NR_readv => linux_readv(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_writev => linux_writev(a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
@@ -491,6 +495,24 @@ fn linux_write(
     linux_write_bytes(fd, bytes).map(|written| written as u64)
 }
 
+fn linux_pwrite64(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    buf: usize,
+    len: usize,
+    offset: i64,
+) -> Result<u64, i64> {
+    if offset < 0 {
+        return Err(EINVAL);
+    }
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let original = fs::lseek(vfs_fd, 0, 1).map_err(map_vfs_error)?;
+    fs::lseek(vfs_fd, offset as isize, 0).map_err(map_vfs_error)?;
+    let result = linux_write(frame, fd, buf, len);
+    let _ = fs::lseek(vfs_fd, original as isize, 0);
+    result
+}
+
 fn linux_write_bytes(fd: usize, bytes: &[u8]) -> Result<usize, i64> {
     if let Some(vfs_fd) = process::user_vfs_fd(fd) {
         return match fs::write(vfs_fd, bytes) {
@@ -672,6 +694,24 @@ fn linux_read(
             Err(_) => return Err(EBADF),
         }
     }
+}
+
+fn linux_pread64(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    buf: usize,
+    len: usize,
+    offset: i64,
+) -> Result<u64, i64> {
+    if offset < 0 {
+        return Err(EINVAL);
+    }
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let original = fs::lseek(vfs_fd, 0, 1).map_err(map_vfs_error)?;
+    fs::lseek(vfs_fd, offset as isize, 0).map_err(map_vfs_error)?;
+    let result = linux_read(frame, fd, buf, len);
+    let _ = fs::lseek(vfs_fd, original as isize, 0);
+    result
 }
 
 fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
