@@ -8,12 +8,25 @@ DISK_IMAGE="${DISK_IMAGE:-build/disk.img}"
 SERIAL_LOG="${RISTUX_SERIAL_LOG:-/tmp/ristux-smoke-serial.log}"
 REBOOT_SERIAL_LOG="${RISTUX_REBOOT_SERIAL_LOG:-/tmp/ristux-smoke-reboot-serial.log}"
 QEMU_FLAGS="${QEMU_FLAGS:-}"
+REBUILD="${RISTUX_SMOKE_REBUILD:-1}"
+SLEEP_SCALE="${RISTUX_SMOKE_SLEEP_SCALE:-1}"
 if [[ -z "$QEMU_FLAGS" ]]; then
   QEMU_FLAGS="-m 256M -smp 4"
 fi
 
 rm -f "$SERIAL_LOG" "$REBOOT_SERIAL_LOG"
-make iso
+if [[ "$REBUILD" != "0" ]]; then
+  make iso
+fi
+
+sleep() {
+  local duration="$1"
+  if [[ "$SLEEP_SCALE" != "1" ]]; then
+    duration="$(awk -v duration="$duration" -v scale="$SLEEP_SCALE" \
+      'BEGIN { value = duration * scale; if (value < 0.001) value = 0.001; printf "%.3f", value }')"
+  fi
+  command sleep "$duration"
+}
 
 QEMU_ARGS=(-cdrom "$ISO_IMAGE")
 QEMU_ARGS+=($QEMU_FLAGS)
@@ -567,9 +580,9 @@ grep -q "cc_tcp: fin close ok" "$SERIAL_LOG"
 grep -q "cc_tcp: rst error ok" "$SERIAL_LOG"
 grep -q "cc_tcp: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_uio" "$SERIAL_LOG"
-grep -q "cc_uio: file writev ok" "$SERIAL_LOG"
-grep -q "cc_uio: pipe writev ok" "$SERIAL_LOG"
-grep -q "cc_uio: socket readwrite ok" "$SERIAL_LOG"
+grep -q "cc_uio: file positioned io ok" "$SERIAL_LOG"
+grep -q "cc_uio: pipe readwritev ok" "$SERIAL_LOG"
+grep -q "cc_uio: socket readwritev ok" "$SERIAL_LOG"
 grep -q "cc_uio: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_stack" "$SERIAL_LOG"
 grep -q "cc_stack: growth ok" "$SERIAL_LOG"
