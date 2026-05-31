@@ -1008,6 +1008,7 @@ pub fn install_pipe_fds_with_flags(
 
 pub fn exit(pid: Pid, status: i32) {
     let wake = with_table(|table| table.exit(pid, status));
+    wake_io_waiters();
     for pid in wake {
         scheduler::wake_blocked(pid);
     }
@@ -1433,13 +1434,12 @@ pub fn user_vfs_fd(user_fd: usize) -> Option<usize> {
 }
 
 pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
-    with_current(|p| {
-        let Some(vfs_fd) = p.remove_fd(user_fd) else {
-            return Err(fs::vfs::VfsError::BadFd);
-        };
-        fs::close(vfs_fd)
-    })
-    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
+    let vfs_fd = with_current(|p| p.remove_fd(user_fd))
+        .flatten()
+        .ok_or(fs::vfs::VfsError::BadFd)?;
+    let result = fs::close(vfs_fd);
+    wake_io_waiters();
+    result
 }
 
 pub fn install_socket_handle(handle: usize) -> Result<(), ()> {

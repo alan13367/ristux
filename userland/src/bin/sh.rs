@@ -49,6 +49,7 @@ struct FunctionDef {
     body: Vec<Vec<u8>>,
 }
 
+#[derive(Clone)]
 struct ShellEnv {
     vars: Vec<EnvVar>,
     positionals: Vec<Vec<u8>>,
@@ -868,17 +869,13 @@ fn run_command_substitution(command: &[u8], env: &ShellEnv, last_status: i32) ->
         sys::dup2(fds[1], FD_STDOUT);
         sys::close(fds[1]);
 
-        let path = cstr(b"/bin/sh");
-        let arg0 = cstr(b"sh");
-        let arg1 = cstr(b"-c");
         let command = expand_substitution_command(command, env, last_status);
-        let arg2 = cstr(&command);
-        let argv = [arg0.as_ptr(), arg1.as_ptr(), arg2.as_ptr(), ptr::null()];
-        let owned_env = env.entries();
-        let mut env_ptrs: Vec<*const u8> = owned_env.iter().map(|entry| entry.as_ptr()).collect();
-        env_ptrs.push(ptr::null());
-        let _ = sys::execve(path.as_ptr(), argv.as_ptr(), env_ptrs.as_ptr());
-        sys::exit(127);
+        let mut sub_env = env.clone();
+        sub_env.stdin_pending.clear();
+        let mut jobs = Vec::new();
+        let mut next_job_id = 1usize;
+        let status = run_line(&command, &mut jobs, &mut next_job_id, &mut sub_env, last_status);
+        sys::exit(status);
     }
     sys::close(fds[1]);
     if pid < 0 {
