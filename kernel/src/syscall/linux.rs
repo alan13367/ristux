@@ -1497,6 +1497,16 @@ fn linux_accept(
             .map(|flags| flags & O_NONBLOCK != 0)
     })
     .map_err(map_socket_error)?;
+    let timeout_ms = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
+        .map_err(map_socket_error)?;
+    let wait_key =
+        timeout_ms.map(|timeout_ms| timed_wait_key(NR_accept, fd, handle, timeout_ms as usize));
+    let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
+        let now_ms = crate::time::uptime_millis();
+        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+    } else {
+        None
+    };
     loop {
         match crate::net::socket::with_sockets(|table| {
             let accepted = table.accept(handle)?;
@@ -1504,6 +1514,9 @@ fn linux_accept(
             Ok((accepted, peer))
         }) {
             Ok((accepted, peer)) => {
+                if let Some(key) = wait_key {
+                    process::clear_timed_wait(key);
+                }
                 if process::install_socket_handle(accepted).is_err() {
                     let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
                     return Err(EMFILE);
@@ -1521,7 +1534,13 @@ fn linux_accept(
                 if nonblocking {
                     return Err(EAGAIN);
                 }
-                block_for_io(frame, None)?;
+                if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
+                    if let Some(key) = wait_key {
+                        process::clear_timed_wait(key);
+                    }
+                    return Err(EAGAIN);
+                }
+                block_for_io(frame, deadline_ms)?;
             }
             Err(err) => return Err(map_socket_error(err)),
         }

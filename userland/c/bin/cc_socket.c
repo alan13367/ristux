@@ -154,7 +154,24 @@ int main(void) {
         return 1;
     }
 
-    if (close(tcp) < 0 || close(duplicate) < 0 || close(client) < 0 || close(server) < 0) {
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in accept_addr;
+    loopback_addr(&accept_addr, 19100);
+    if (listener < 0 ||
+        setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
+        bind(listener, (struct sockaddr *)&accept_addr, sizeof(accept_addr)) < 0 ||
+        listen(listener, 1) < 0) {
+        puts("cc_socket: accept timeout setup failed");
+        return 1;
+    }
+    errno = 0;
+    if (accept(listener, NULL, NULL) != -1 || errno != EAGAIN) {
+        puts("cc_socket: accept timeout failed");
+        return 1;
+    }
+
+    if (close(listener) < 0 || close(tcp) < 0 || close(duplicate) < 0 ||
+        close(client) < 0 || close(server) < 0) {
         puts("cc_socket: close failed");
         return 1;
     }
