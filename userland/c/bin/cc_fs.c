@@ -65,6 +65,54 @@ int main(void) {
     }
     puts("cc_fs: getdents ok");
 
+    int dirfd = open(dir, O_RDONLY, 0);
+    if (dirfd < 0) {
+        puts("cc_fs: openat dir failed");
+        return 1;
+    }
+    fd = openat(dirfd, "atfile", O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (fd < 0) {
+        puts("cc_fs: openat create failed");
+        return 1;
+    }
+    if (write(fd, "at-ok", 5) != 5) {
+        puts("cc_fs: openat write failed");
+        return 1;
+    }
+    close(fd);
+
+    struct stat st;
+    if (fstatat(dirfd, "atfile", &st, 0) != 0 || st.st_size != 5) {
+        puts("cc_fs: fstatat failed");
+        return 1;
+    }
+    if (faccessat(dirfd, "atfile", R_OK | W_OK, 0) != 0) {
+        puts("cc_fs: faccessat failed");
+        return 1;
+    }
+    int notdir = open(path, O_RDONLY, 0);
+    if (notdir < 0) {
+        puts("cc_fs: notdir open failed");
+        return 1;
+    }
+    errno = 0;
+    int bad_at = openat(notdir, "child", O_RDONLY, 0);
+    if (bad_at >= 0 || errno != ENOTDIR) {
+        if (bad_at >= 0) {
+            close(bad_at);
+        }
+        puts("cc_fs: openat notdir failed");
+        return 1;
+    }
+    close(notdir);
+    if (fstatat(AT_FDCWD, "/tmp/cc_fs/atfile", &st, AT_SYMLINK_NOFOLLOW) != 0 ||
+        st.st_size != 5) {
+        puts("cc_fs: fstatat at_fdcwd failed");
+        return 1;
+    }
+    close(dirfd);
+    puts("cc_fs: at syscalls ok");
+
     mode_t old_mask = umask(0027);
     fd = open(masked, O_CREAT | O_TRUNC | O_WRONLY, 0666);
     if (fd < 0) {
@@ -73,7 +121,6 @@ int main(void) {
     }
     close(fd);
 
-    struct stat st;
     if (stat(masked, &st) != 0 || (st.st_mode & 0777) != 0640) {
         puts("cc_fs: umask file mode failed");
         return 1;
@@ -119,7 +166,7 @@ int main(void) {
     }
     puts("cc_fs: exclusive create ok");
 
-    if (unlink(masked) != 0 || rmdir(maskdir) != 0) {
+    if (unlink(masked) != 0 || unlink("/tmp/cc_fs/atfile") != 0 || rmdir(maskdir) != 0) {
         puts("cc_fs: cleanup failed");
         return 1;
     }

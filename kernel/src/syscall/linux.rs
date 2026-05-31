@@ -108,6 +108,9 @@ pub const NR_setrlimit: u64 = 160;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
+pub const NR_openat: u64 = 257;
+pub const NR_newfstatat: u64 = 262;
+pub const NR_faccessat: u64 = 269;
 pub const NR_dup3: u64 = 292;
 pub const NR_pipe2: u64 = 293;
 pub const NR_getrandom: u64 = 318;
@@ -122,6 +125,7 @@ const ENOENT: i64 = -2;
 const EAGAIN: i64 = -11;
 const EACCES: i64 = -13;
 const EEXIST: i64 = -17;
+const ENOTDIR: i64 = -20;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
@@ -131,6 +135,10 @@ const ETIMEDOUT: i64 = -110;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
 const RLIMIT_CORE: i32 = 4;
 const RLIMIT_NOFILE: i32 = 7;
+const AT_FDCWD: i32 = -100;
+const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+const AT_EACCESS: i32 = 0x200;
+const AT_EMPTY_PATH: i32 = 0x1000;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
@@ -304,6 +312,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
         NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
+        NR_openat => linux_openat(a0 as i32, a1 as usize, a2 as i32, a3 as u32),
+        NR_newfstatat => linux_newfstatat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
+        NR_faccessat => linux_faccessat(a0 as i32, a1 as usize, a2 as i32, a3 as i32),
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
@@ -730,13 +741,22 @@ fn linux_pread64(
 }
 
 fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    linux_open_path(&path, flags, mode)
+}
+
+fn linux_openat(dirfd: i32, path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    let path = resolve_at_path(dirfd, path_ptr, 0)?;
+    linux_open_path(&path, flags, mode)
+}
+
+fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
     const O_WRONLY: i32 = 1;
     const O_RDWR: i32 = 2;
     const O_CREAT: i32 = 0o100;
     const O_EXCL: i32 = 0o200;
     const O_TRUNC: i32 = 0o1000;
 
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     let access = flags & 0b11;
     let write = access == O_WRONLY || access == O_RDWR;
     let read = access != O_WRONLY;
@@ -1170,14 +1190,26 @@ fn linux_close(fd: usize) -> Result<u64, i64> {
 }
 
 fn linux_access(path_ptr: usize, mode: i32) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    linux_access_path(&path, mode)
+}
+
+fn linux_faccessat(dirfd: i32, path_ptr: usize, mode: i32, flags: i32) -> Result<u64, i64> {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EACCESS | AT_EMPTY_PATH) != 0 {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, flags)?;
+    linux_access_path(&path, mode)
+}
+
+fn linux_access_path(path: &str, mode: i32) -> Result<u64, i64> {
     const R_OK: i32 = 4;
     const W_OK: i32 = 2;
     const X_OK: i32 = 1;
     if mode & !(R_OK | W_OK | X_OK) != 0 {
         return Err(EINVAL);
     }
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    process::user_access(&path, mode & R_OK != 0, mode & W_OK != 0, mode & X_OK != 0)
+    process::user_access(path, mode & R_OK != 0, mode & W_OK != 0, mode & X_OK != 0)
         .map(|_| 0)
         .map_err(map_vfs_error)
 }
@@ -2371,6 +2403,27 @@ fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
     )
 }
 
+fn linux_newfstatat(dirfd: i32, path_ptr: usize, buf_ptr: usize, flags: i32) -> Result<u64, i64> {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, flags)?;
+    let meta = if flags & AT_SYMLINK_NOFOLLOW != 0 {
+        fs::lstat(&path)
+    } else {
+        fs::stat(&path)
+    }
+    .map_err(map_vfs_error)?;
+    write_linux_stat(
+        buf_ptr,
+        meta.owner,
+        meta.group,
+        meta.size,
+        meta.mode as u32,
+        meta.nlink,
+    )
+}
+
 fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let meta = fs::fstat(vfs_fd).map_err(|_| EBADF)?;
@@ -2506,6 +2559,39 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
         offset += 1;
     }
     String::from_utf8(buf).ok()
+}
+
+fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::string::String, i64> {
+    use alloc::format;
+
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    if path.is_empty() {
+        if flags & AT_EMPTY_PATH == 0 {
+            return Err(ENOENT);
+        }
+        if dirfd == AT_FDCWD {
+            return process::user_cwd().ok_or(ENOENT);
+        }
+        let vfs_fd = process::user_vfs_fd(dirfd as usize).ok_or(EBADF)?;
+        return fs::fd_path(vfs_fd).map_err(map_vfs_error);
+    }
+    if path.starts_with('/') || dirfd == AT_FDCWD {
+        return Ok(path);
+    }
+    if dirfd < 0 {
+        return Err(EBADF);
+    }
+    let vfs_fd = process::user_vfs_fd(dirfd as usize).ok_or(EBADF)?;
+    fs::directory_entries(vfs_fd).map_err(|err| match err {
+        fs::vfs::VfsError::NotFile => ENOTDIR,
+        other => map_vfs_error(other),
+    })?;
+    let base = fs::fd_path(vfs_fd).map_err(map_vfs_error)?;
+    Ok(if base == "/" {
+        format!("/{}", path)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), path)
+    })
 }
 
 fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {

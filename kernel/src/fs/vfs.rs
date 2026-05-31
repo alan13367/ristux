@@ -1656,6 +1656,28 @@ impl Vfs {
         }
     }
 
+    fn fd_path(&self, fd: usize) -> Result<String, VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|h| h.as_ref())
+            .ok_or(VfsError::BadFd)?;
+        match handle {
+            OpenHandle::Node { node, .. } => self
+                .nodes
+                .get(*node)
+                .map(|node| node.path.clone())
+                .ok_or(VfsError::BadFd),
+            OpenHandle::Ext2File { path, .. } | OpenHandle::Ext2Dir { path, .. } => {
+                Ok(path.clone())
+            }
+            OpenHandle::PtyMaster { .. }
+            | OpenHandle::PtySlave { .. }
+            | OpenHandle::PipeRead { .. }
+            | OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
+        }
+    }
+
     fn poll(&self, fd: usize) -> Result<PollReady, VfsError> {
         let handle = self
             .open_files
@@ -2145,6 +2167,10 @@ pub fn lstat(path: &str) -> Result<Stat, VfsError> {
 
 pub fn fstat(fd: usize) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.fstat(fd))
+}
+
+pub fn fd_path(fd: usize) -> Result<String, VfsError> {
+    with_vfs(|vfs| vfs.fd_path(fd))
 }
 
 pub fn poll(fd: usize) -> Result<PollReady, VfsError> {

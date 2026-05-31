@@ -124,6 +124,9 @@
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
+#define SYS_OPENAT 257
+#define SYS_NEWFSTATAT 262
+#define SYS_FACCESSAT 269
 #define SYS_DUP3 292
 #define SYS_PIPE2 293
 #define SYS_GETRANDOM 318
@@ -273,6 +276,17 @@ int open(const char *path, int flags, ...) {
         va_end(ap);
     }
     return (int)syscall_ret(syscall3(SYS_OPEN, (long)path, flags, mode));
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+    unsigned int mode = 0;
+    if (flags & O_CREAT) {
+        va_list ap;
+        va_start(ap, flags);
+        mode = va_arg(ap, unsigned int);
+        va_end(ap);
+    }
+    return (int)syscall_ret(syscall4(SYS_OPENAT, dirfd, (long)path, flags, mode));
 }
 
 int posix_openpt(int flags) {
@@ -1582,6 +1596,10 @@ int access(const char *path, int mode) {
     return (int)syscall_ret(syscall2(SYS_ACCESS, (long)path, mode));
 }
 
+int faccessat(int dirfd, const char *path, int mode, int flags) {
+    return (int)syscall_ret(syscall4(SYS_FACCESSAT, dirfd, (long)path, mode, flags));
+}
+
 int unlink(const char *path) {
     return (int)syscall_ret(syscall1(SYS_UNLINK, (long)path));
 }
@@ -1720,6 +1738,10 @@ int fstat(int fd, struct stat *buf) {
 
 int lstat(const char *path, struct stat *buf) {
     return (int)syscall_ret(syscall2(SYS_LSTAT, (long)path, (long)buf));
+}
+
+int fstatat(int dirfd, const char *path, struct stat *buf, int flags) {
+    return (int)syscall_ret(syscall4(SYS_NEWFSTATAT, dirfd, (long)path, (long)buf, flags));
 }
 
 int mkdir(const char *path, mode_t mode) {

@@ -138,6 +138,9 @@ The current Linux-like syscall surface is:
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
+| 257 | `openat` | `open` semantics relative to `AT_FDCWD` or a directory descriptor. |
+| 262 | `newfstatat` | `stat`/`lstat` semantics with `AT_SYMLINK_NOFOLLOW` and directory descriptors. |
+| 269 | `faccessat` | `access` semantics relative to `AT_FDCWD` or a directory descriptor. |
 | 292 | `dup3` | Duplicates a descriptor with optional `O_CLOEXEC`. |
 | 293 | `pipe2` | Creates a pipe with optional `O_NONBLOCK` and `O_CLOEXEC`. |
 | 318 | `getrandom` | Kernel entropy bytes. |
@@ -161,8 +164,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `open`, `close`, `lseek`, `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`,
   `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
-  `access`, `chmod`, `chown`, `umask`, `getdents64`, `link`, `symlink`,
-  `readlink`, `chdir`, `getcwd`.
+  `access`, `openat`, `fstatat`, `faccessat`, `chmod`, `chown`, `umask`,
+  `getdents64`, `link`, `symlink`, `readlink`, `chdir`, `getcwd`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,

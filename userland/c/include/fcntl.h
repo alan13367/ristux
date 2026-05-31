@@ -11,6 +11,11 @@
 #define O_NONBLOCK 04000
 #define O_CLOEXEC 02000000
 
+#define AT_FDCWD -100
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_EACCESS 0x200
+#define AT_EMPTY_PATH 0x1000
+
 #define F_GETFD 1
 #define F_SETFD 2
 #define F_GETFL 3
@@ -19,6 +24,7 @@
 #define FD_CLOEXEC 1
 
 int open(const char *path, int flags, ...);
+int openat(int dirfd, const char *path, int flags, ...);
 int fcntl(int fd, int cmd, ...);
 int posix_openpt(int flags);
 
