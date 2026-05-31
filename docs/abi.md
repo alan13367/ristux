@@ -313,8 +313,8 @@ These are explicit non-guarantees of the current ABI:
   reads, and file-backed `MAP_SHARED` writeback via `msync` or unmap. Demand
   paging is not part of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
-- The boot rootfs still uses the in-tree libc, while `ports/newlib/ristux`
-  provides the Newlib target startup and reentrant syscall layer for the
-  upstream libc foundation path.
+- The boot rootfs still uses the in-tree libc. `make newlib-sysroot` builds an
+  upstream Newlib sysroot under `build/ports/newlib/sysroot` and links a static
+  Newlib probe against the Ristux startup and reentrant syscall layer.
 - Socket coverage is enough for the current TCP/UDP fixtures, not a complete
   POSIX networking ABI.
