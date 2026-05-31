@@ -2038,10 +2038,10 @@ impl Vfs {
             push_unique_entry(&mut entries, "self", NodeKind::Directory);
             push_unique_entry(&mut entries, "stat", NodeKind::File);
             push_unique_entry(&mut entries, "uptime", NodeKind::File);
-            if let Some(pid) = crate::process::current_pid() {
+            for pid in crate::process::list_process_ids() {
                 push_unique_entry(&mut entries, &format!("{}", pid), NodeKind::Directory);
             }
-        } else if proc_process_dir_pid(path).is_some() {
+        } else if proc_existing_process_dir_pid(path).is_some() {
             push_unique_entry(&mut entries, "status", NodeKind::File);
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -2384,6 +2384,11 @@ fn proc_process_dir_pid(path: &str) -> Option<u64> {
         return crate::process::current_pid();
     }
     pid_text.parse().ok()
+}
+
+fn proc_existing_process_dir_pid(path: &str) -> Option<u64> {
+    let pid = proc_process_dir_pid(path)?;
+    crate::process::get_process_info(pid).map(|_| pid)
 }
 
 fn proc_virtual_kind(path: &str) -> Option<NodeKind> {

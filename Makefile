@@ -25,7 +25,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make cp mv grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname tr date which cmp dd seq expr yes diff awk patch gzip stat chown uptime free
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make cp mv grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname tr date which cmp dd seq expr yes diff awk patch gzip stat chown uptime free ps
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf

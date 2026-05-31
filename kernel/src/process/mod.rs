@@ -2165,3 +2165,7 @@ pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, 
         Some((p.name.clone(), p.state, p.parent, p.exit_status))
     })
 }
+
+pub fn list_process_ids() -> Vec<Pid> {
+    with_table(|table| table.processes.iter().map(|p| p.pid).collect())
+}
