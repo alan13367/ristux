@@ -1520,6 +1520,34 @@ case "$SCENARIO" in
       "^  /bin/stat$"
     )
     ;;
+  chown)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/chowncheck"
+      "cd /tmp/chowncheck"
+      "echo alpha > one.txt"
+      "chown 1000:100 one.txt"
+      "stat -c %u:%g one.txt"
+      "chown :200 one.txt"
+      "stat -c %u:%g one.txt"
+      "mkdir tree"
+      "echo beta > tree/two.txt"
+      "chown -R 7:8 tree"
+      "stat -c %u:%g tree"
+      "stat -c %u:%g tree/two.txt"
+      "pkg info chown"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: chown 1000:100 one\\.txt"
+      "^1000:100$"
+      "TTY canonical line ready: chown :200 one\\.txt"
+      "^1000:200$"
+      "TTY canonical line ready: chown -R 7:8 tree"
+      "^7:8$"
+      "^name: chown$"
+      "^  /bin/chown$"
+    )
+    ;;
   uniq)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -2130,7 +2158,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
