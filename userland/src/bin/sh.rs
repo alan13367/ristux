@@ -1362,20 +1362,21 @@ fn is_builtin_name(name: &[u8]) -> bool {
             | b"jobs"
             | b"fg"
             | b"bg"
+            | b"command"
             | b":"
             | b"type"
     )
 }
 
-fn external_command_exists(name: &[u8]) -> bool {
+fn external_command_path(name: &[u8]) -> Option<Vec<u8>> {
     if name.contains(&b'/') {
         let path = cstr(name);
         let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
         if fd >= 0 {
             let _ = sys::close(fd as i32);
-            return true;
+            return Some(name.to_vec());
         }
-        return false;
+        return None;
     }
     let mut path = Vec::with_capacity(b"/bin/".len() + name.len() + 1);
     path.extend_from_slice(b"/bin/");
@@ -1384,10 +1385,29 @@ fn external_command_exists(name: &[u8]) -> bool {
     let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
     if fd >= 0 {
         let _ = sys::close(fd as i32);
-        true
+        path.pop();
+        Some(path)
     } else {
-        false
+        None
     }
+}
+
+fn external_command_exists(name: &[u8]) -> bool {
+    external_command_path(name).is_some()
+}
+
+fn print_command_resolution(name: &[u8], env: &ShellEnv) -> bool {
+    if env.function_body(name).is_some() || is_builtin_name(name) {
+        let _ = sys::write(FD_STDOUT, name);
+        let _ = sys::write(FD_STDOUT, b"\n");
+        return true;
+    }
+    if let Some(path) = external_command_path(name) {
+        let _ = sys::write(FD_STDOUT, &path);
+        let _ = sys::write(FD_STDOUT, b"\n");
+        return true;
+    }
+    false
 }
 
 fn run_function(
@@ -1562,6 +1582,27 @@ fn builtin_command(
                 }
             }
             status
+        }
+        b"command" => {
+            let mut index = 1usize;
+            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-p") {
+                index += 1;
+            }
+            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"--") {
+                index += 1;
+            }
+            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-v") {
+                index += 1;
+                let mut status = 0;
+                for arg in &stage.argv[index..] {
+                    if !print_command_resolution(arg, env) {
+                        status = 1;
+                    }
+                }
+                return status;
+            }
+            let _ = sys::write(FD_STDERR, b"command: only -v is supported\n");
+            2
         }
         b"export" => {
             if stage.argv.len() == 1 {
