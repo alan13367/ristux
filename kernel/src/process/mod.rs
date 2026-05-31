@@ -1058,6 +1058,13 @@ pub fn set_signal_handler(pid: Pid, signal: usize, handler: usize) -> Option<usi
     })
 }
 
+pub fn get_signal_handler(pid: Pid, signal: usize) -> Option<usize> {
+    with_table(|table| {
+        let process = table.get(pid)?;
+        process.signal_handlers.get(signal).copied()
+    })
+}
+
 pub fn signal_handler(pid: Pid, signal: usize) -> Option<usize> {
     with_table(|table| {
         let process = table.get(pid)?;

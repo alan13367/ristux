@@ -2197,7 +2197,7 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
     let old = if let Some(handler) = new_handler {
         process::set_signal_handler(pid, signum, handler).ok_or(EINVAL)?
     } else {
-        process::set_signal_handler(pid, signum, 0).ok_or(EINVAL)?
+        process::get_signal_handler(pid, signum).ok_or(EINVAL)?
     };
     if oldact != 0 {
         let out =

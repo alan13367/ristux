@@ -43,6 +43,17 @@ int main(void) {
         puts("cc_signal: raise failed");
         return 1;
     }
+    struct sigaction queried;
+    if (sigaction(SIGUSR1, NULL, &queried) < 0 ||
+        queried.sa_handler != on_usr1) {
+        puts("cc_signal: query failed");
+        return 1;
+    }
+    saw_usr1 = 0;
+    if (raise(SIGUSR1) != 0 || !saw_usr1) {
+        puts("cc_signal: query preserved failed");
+        return 1;
+    }
     saw_usr1 = 0;
     sigset_t blocked;
     sigset_t oldmask;
