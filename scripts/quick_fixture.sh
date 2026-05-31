@@ -2286,11 +2286,13 @@ case "$SCENARIO" in
     )
     ;;
   dropbear)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-8}"
-    COMMANDS=("dropbear -F -E -R -p 127.0.0.1:2222")
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=("pkg info dropbear")
     EXPECTS=(
-      "TTY canonical line ready: dropbear -F -E -R -p 127.0.0.1:2222"
+      "init: started dropbear on 0.0.0.0:2222"
       "Not backgrounding"
+      "^name: dropbear$"
+      "^  /bin/dropbear$"
     )
     ;;
   dropbear-banner)
@@ -2304,13 +2306,12 @@ case "$SCENARIO" in
   dropbear-session)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
     COMMANDS=(
-      "dropbear -F -E -R -B -p 127.0.0.1:2222 &"
       "dbclient -y -y -t -p 2222 -l root 127.0.0.1"
       "echo ssh_session_check"
       "exit"
     )
     EXPECTS=(
-      "TTY canonical line ready: dropbear -F -E -R -B -p 127.0.0.1:2222 &"
+      "init: started dropbear on 0.0.0.0:2222"
       "TTY canonical line ready: dbclient -y -y -t -p 2222 -l root 127.0.0.1"
       "^ssh_session_check$"
     )

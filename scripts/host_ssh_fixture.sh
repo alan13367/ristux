@@ -88,8 +88,6 @@ fi
   send_text "root"
   sleep 0.5
   printf 'sendkey ret\n'
-  sleep 2
-  send_command "dropbear -F -E -R -B -p 0.0.0.0:2222 &"
   sleep "$HOST_WAIT"
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
@@ -105,9 +103,9 @@ QEMU_PID=$!
 ) &
 WATCHDOG_PID=$!
 
-if ! wait_for_log "TTY canonical line ready: dropbear -F -E -R -B -p 0.0.0.0:2222" 35; then
+if ! wait_for_log "init: started dropbear on 0.0.0.0:2222" 35; then
   kill "$QEMU_PID" 2>/dev/null || true
-  echo "host_ssh_fixture: dropbear did not start; see $SERIAL_LOG" >&2
+  echo "host_ssh_fixture: dropbear service did not start; see $SERIAL_LOG" >&2
   exit 1
 fi
 

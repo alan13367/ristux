@@ -8,7 +8,44 @@ use alloc::vec;
 use core::ptr;
 use ristux_userland::sys;
 
+fn spawn_dropbear() -> isize {
+    let pid = sys::fork();
+    if pid < 0 {
+        let _ = sys::write(2, b"init: dropbear fork failed\n");
+        return -1;
+    }
+
+    if pid == 0 {
+        let path = b"/bin/dropbear\0";
+        let argv0 = b"dropbear\0";
+        let arg_f = b"-F\0";
+        let arg_e = b"-E\0";
+        let arg_r = b"-R\0";
+        let arg_b = b"-B\0";
+        let arg_p = b"-p\0";
+        let bind = b"0.0.0.0:2222\0";
+        let argv: [*const u8; 8] = [
+            argv0.as_ptr(),
+            arg_f.as_ptr(),
+            arg_e.as_ptr(),
+            arg_r.as_ptr(),
+            arg_b.as_ptr(),
+            arg_p.as_ptr(),
+            bind.as_ptr(),
+            ptr::null(),
+        ];
+        let envp: [*const u8; 1] = [ptr::null()];
+        let _ = sys::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
+        let _ = sys::write(2, b"init: execve /bin/dropbear failed\n");
+        sys::exit(127);
+    }
+
+    let _ = sys::write(1, b"init: started dropbear on 0.0.0.0:2222\n");
+    pid
+}
+
 fn main(_args: &[&[u8]]) -> i32 {
+    let mut dropbear_pid = spawn_dropbear();
     let _ = sys::write(1, b"init: spawning /bin/login\n");
 
     loop {
@@ -32,6 +69,11 @@ fn main(_args: &[&[u8]]) -> i32 {
             let waited = sys::wait4(-1, &mut status as *mut i32, 0, 0);
             if waited < 0 {
                 break;
+            }
+            if waited == dropbear_pid {
+                let _ = sys::write(1, b"init: dropbear exited; restarting\n");
+                dropbear_pid = spawn_dropbear();
+                continue;
             }
             if waited as isize == pid as isize {
                 break;
