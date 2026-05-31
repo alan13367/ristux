@@ -5,6 +5,10 @@
 #include <sys/types.h>
 
 extern char **environ;
+extern char *optarg;
+extern int opterr;
+extern int optind;
+extern int optopt;
 
 #define F_OK 0
 #define X_OK 1
@@ -82,6 +86,7 @@ int brk(void *addr);
 void *sbrk(long increment);
 int daemon(int nochdir, int noclose);
 unsigned int sleep(unsigned int seconds);
+int getopt(int argc, char *const argv[], const char *optstring);
 long syscall(long number, ...);
 void _exit(int status) __attribute__((noreturn));
 

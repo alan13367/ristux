@@ -148,11 +148,16 @@
 
 int errno;
 int h_errno;
+char *optarg;
+int opterr = 1;
+int optind = 1;
+int optopt;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
 #define LIBC_ENV_MAX 64
 static char *managed_environment[LIBC_ENV_MAX + 1];
+static const char *getopt_next;
 
 struct FILE {
     int fd;
@@ -374,6 +379,99 @@ int ftruncate(int fd, off_t length) {
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     return (int)syscall_ret(syscall3(SYS_POLL, (long)fds, (long)nfds, timeout));
+}
+
+static void getopt_write_error(const char *program, const char *message, int option) {
+    if (program == NULL || *program == '\0') {
+        program = "program";
+    }
+    write(2, program, strlen(program));
+    write(2, ": ", 2);
+    write(2, message, strlen(message));
+    char opt = (char)option;
+    write(2, &opt, 1);
+    write(2, "\n", 1);
+}
+
+int getopt(int argc, char *const argv[], const char *optstring) {
+    if (optind <= 0) {
+        optind = 1;
+        getopt_next = NULL;
+    }
+    optarg = NULL;
+
+    if (argv == NULL || optstring == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (getopt_next == NULL || *getopt_next == '\0') {
+        if (optind >= argc || argv[optind] == NULL) {
+            return -1;
+        }
+        const char *arg = argv[optind];
+        if (arg[0] != '-' || arg[1] == '\0') {
+            return -1;
+        }
+        if (strcmp(arg, "--") == 0) {
+            optind++;
+            return -1;
+        }
+        getopt_next = arg + 1;
+    }
+
+    int option = (unsigned char)*getopt_next++;
+    optopt = option;
+    const char *spec = strchr(optstring, option);
+    int leading_colon = optstring[0] == ':';
+
+    if (option == ':' || spec == NULL) {
+        if (*getopt_next == '\0') {
+            optind++;
+            getopt_next = NULL;
+        }
+        if (opterr && !leading_colon) {
+            getopt_write_error(argv[0], "illegal option -- ", option);
+        }
+        return '?';
+    }
+
+    if (spec[1] != ':') {
+        if (*getopt_next == '\0') {
+            optind++;
+            getopt_next = NULL;
+        }
+        return option;
+    }
+
+    if (*getopt_next != '\0') {
+        optarg = (char *)getopt_next;
+        optind++;
+        getopt_next = NULL;
+        return option;
+    }
+
+    if (spec[2] == ':') {
+        optarg = NULL;
+        optind++;
+        getopt_next = NULL;
+        return option;
+    }
+
+    if (optind + 1 < argc && argv[optind + 1] != NULL) {
+        optind++;
+        optarg = argv[optind];
+        optind++;
+        getopt_next = NULL;
+        return option;
+    }
+
+    optind++;
+    getopt_next = NULL;
+    if (opterr && !leading_colon) {
+        getopt_write_error(argv[0], "option requires an argument -- ", option);
+    }
+    return leading_colon ? ':' : '?';
 }
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {

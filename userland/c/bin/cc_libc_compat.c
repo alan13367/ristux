@@ -166,6 +166,49 @@ static int check_path(void) {
     return 0;
 }
 
+static int check_getopt(void) {
+    char *argv1[] = { "prog", "-ab", "-c", "value", "plain", NULL };
+    optind = 1;
+    opterr = 0;
+    int a = getopt(5, argv1, "abc:");
+    int b = getopt(5, argv1, "abc:");
+    int c = getopt(5, argv1, "abc:");
+    char *c_arg = optarg;
+    int done = getopt(5, argv1, "abc:");
+    if (a != 'a' || b != 'b' || c != 'c' ||
+        c_arg == NULL || strcmp(c_arg, "value") != 0 ||
+        done != -1 || optind != 4) {
+        puts("cc_libc_compat: getopt clustered failed");
+        return 1;
+    }
+
+    char *argv2[] = { "prog", "-x", NULL };
+    optind = 1;
+    optarg = NULL;
+    if (getopt(2, argv2, "a") != '?' || optopt != 'x') {
+        puts("cc_libc_compat: getopt unknown failed");
+        return 1;
+    }
+
+    char *argv3[] = { "prog", "-c", NULL };
+    optind = 1;
+    optarg = NULL;
+    if (getopt(2, argv3, ":c:") != ':' || optopt != 'c') {
+        puts("cc_libc_compat: getopt missing arg failed");
+        return 1;
+    }
+
+    char *argv4[] = { "prog", "--", "-a", NULL };
+    optind = 1;
+    if (getopt(3, argv4, "a") != -1 || optind != 2) {
+        puts("cc_libc_compat: getopt double dash failed");
+        return 1;
+    }
+
+    puts("cc_libc_compat: getopt ok");
+    return 0;
+}
+
 static int check_resource_syslog(void) {
     struct rlimit lim;
     if (getrlimit(RLIMIT_CORE, &lim) < 0 || lim.rlim_cur != 0 || lim.rlim_max != 0 ||
@@ -460,6 +503,7 @@ int main(void) {
         check_malloc_free() != 0 ||
         check_format() != 0 ||
         check_path() != 0 ||
+        check_getopt() != 0 ||
         check_resource_syslog() != 0 ||
         check_uname() != 0 ||
         check_time_format() != 0 ||

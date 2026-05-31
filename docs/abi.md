@@ -168,7 +168,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
   `gettid`, `getppid`, `setsid`, `uname`, `gethostname`, `sethostname`,
   `getenv`, `putenv`, `setenv`,
-  `unsetenv`, `clearenv`, `getrlimit`, `setrlimit`, and generic `syscall`.
+  `unsetenv`, `clearenv`, `getopt`, `getrlimit`, `setrlimit`, and generic
+  `syscall`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
   `setgroups`, and libc

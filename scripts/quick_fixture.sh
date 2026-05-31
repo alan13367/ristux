@@ -306,6 +306,7 @@ case "$SCENARIO" in
       "cc_libc_compat: malloc free ok"
       "cc_libc_compat: format ok"
       "cc_libc_compat: path ok"
+      "cc_libc_compat: getopt ok"
       "cc_libc_compat: resource syslog ok"
       "cc_libc_compat: uname ok"
       "cc_libc_compat: time format ok"
