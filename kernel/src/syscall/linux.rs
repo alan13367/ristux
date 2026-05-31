@@ -3043,6 +3043,18 @@ fn write_linux_statfs(buf_ptr: usize, stats: fs::FsStat) -> Result<u64, i64> {
 }
 
 fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
+    if sig == 0 {
+        let exists = if pid < 0 {
+            !process::pids_in_pgrp((-pid) as u64).is_empty()
+        } else if pid == 0 {
+            process::current_pgrp()
+                .map(|pgrp| !process::pids_in_pgrp(pgrp).is_empty())
+                .unwrap_or(false)
+        } else {
+            process::get_process_info(pid as u64).is_some()
+        };
+        return if exists { Ok(0) } else { Err(ESRCH) };
+    }
     let signal = crate::signal::Signal::from_number(sig).ok_or(EINVAL)?;
     let delivered = if pid < 0 {
         crate::signal::send_pgrp((-pid) as u64, signal)

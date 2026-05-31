@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
@@ -27,8 +28,11 @@ struct _reent {
 #define SYS_FSTAT 5
 #define SYS_LSEEK 8
 #define SYS_BRK 12
+#define SYS_RT_SIGPROCMASK 14
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
+#define SYS_DUP 32
+#define SYS_DUP2 33
 #define SYS_NANOSLEEP 35
 #define SYS_GETPID 39
 #define SYS_FORK 57
@@ -36,13 +40,18 @@ struct _reent {
 #define SYS_EXIT 60
 #define SYS_WAIT4 61
 #define SYS_KILL 62
+#define SYS_GETCWD 79
+#define SYS_CHDIR 80
 #define SYS_RENAME 82
+#define SYS_MKDIR 83
+#define SYS_RMDIR 84
 #define SYS_LINK 86
 #define SYS_UNLINK 87
 #define SYS_CHMOD 90
 #define SYS_CHOWN 92
 #define SYS_GETTIMEOFDAY 96
 #define SYS_TIMES 100
+#define SYS_RT_SIGPENDING 127
 
 #define WNOHANG 1
 #define ECHILD 10
@@ -102,6 +111,10 @@ static long syscall_ret(struct _reent *r, long ret) {
         return set_errno(r, ret);
     }
     return ret;
+}
+
+static int public_syscall_ret(long ret) {
+    return (int)syscall_ret(NULL, ret);
 }
 
 static int translate_open_flags(int flags) {
@@ -226,12 +239,92 @@ int _kill_r(struct _reent *r, int pid, int sig) {
     return (int)syscall_ret(r, ristux_syscall2(SYS_KILL, pid, sig));
 }
 
+int _kill(pid_t pid, int sig) {
+    return public_syscall_ret(ristux_syscall2(SYS_KILL, pid, sig));
+}
+
 off_t _lseek_r(struct _reent *r, int fd, off_t offset, int whence) {
     return (off_t)syscall_ret(r, ristux_syscall3(SYS_LSEEK, fd, offset, whence));
 }
 
 int _open_r(struct _reent *r, const char *path, int flags, int mode) {
     return (int)syscall_ret(r, ristux_syscall3(SYS_OPEN, (long)path, translate_open_flags(flags), mode));
+}
+
+int access(const char *path, int mode) {
+    return public_syscall_ret(ristux_syscall2(SYS_ACCESS, (long)path, mode));
+}
+
+int chdir(const char *path) {
+    return public_syscall_ret(ristux_syscall1(SYS_CHDIR, (long)path));
+}
+
+int dup(int oldfd) {
+    return public_syscall_ret(ristux_syscall1(SYS_DUP, oldfd));
+}
+
+int dup2(int oldfd, int newfd) {
+    return public_syscall_ret(ristux_syscall2(SYS_DUP2, oldfd, newfd));
+}
+
+char *getcwd(char *buf, size_t size) {
+    if (buf == NULL || size == 0) {
+        (void)set_errno(NULL, -EINVAL);
+        return NULL;
+    }
+    long ret = syscall_ret(NULL, ristux_syscall2(SYS_GETCWD, (long)buf, (long)size));
+    if (ret < 0) {
+        return NULL;
+    }
+    return (char *)buf;
+}
+
+int pipe(int pipefd[2]) {
+    return public_syscall_ret(ristux_syscall1(SYS_PIPE, (long)pipefd));
+}
+
+int _mkdir(const char *path, mode_t mode) {
+    return public_syscall_ret(ristux_syscall2(SYS_MKDIR, (long)path, mode));
+}
+
+int mkdir(const char *path, mode_t mode) {
+    return _mkdir(path, mode);
+}
+
+int rmdir(const char *path) {
+    return public_syscall_ret(ristux_syscall1(SYS_RMDIR, (long)path));
+}
+
+static int translate_sigprocmask_how(int how) {
+    const int newlib_sig_setmask = 0;
+    const int newlib_sig_block = 1;
+    const int newlib_sig_unblock = 2;
+    const int ristux_sig_block = 0;
+    const int ristux_sig_unblock = 1;
+    const int ristux_sig_setmask = 2;
+
+    switch (how) {
+    case newlib_sig_setmask:
+        return ristux_sig_setmask;
+    case newlib_sig_block:
+        return ristux_sig_block;
+    case newlib_sig_unblock:
+        return ristux_sig_unblock;
+    default:
+        return -1;
+    }
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    int ristux_how = translate_sigprocmask_how(how);
+    if (ristux_how < 0) {
+        return set_errno(NULL, -EINVAL);
+    }
+    return public_syscall_ret(ristux_syscall4(SYS_RT_SIGPROCMASK, ristux_how, (long)set, (long)oldset, sizeof(sigset_t)));
+}
+
+int sigpending(sigset_t *set) {
+    return public_syscall_ret(ristux_syscall2(SYS_RT_SIGPENDING, (long)set, sizeof(sigset_t)));
 }
 
 ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t count) {

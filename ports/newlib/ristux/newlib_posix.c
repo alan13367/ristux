@@ -1,0 +1,117 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int expect(int condition, const char *message) {
+    if (!condition) {
+        printf("cc_newlib_posix: %s failed errno=%d\n", message, errno);
+        return 1;
+    }
+    return 0;
+}
+
+static int read_exact(int fd, const char *expected) {
+    char buf[32];
+    memset(buf, 0, sizeof(buf));
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    if (n < 0) {
+        return 0;
+    }
+    return strcmp(buf, expected) == 0;
+}
+
+int main(void) {
+    puts("cc_newlib_posix: start");
+
+    if (mkdir("/tmp/newlib_posix", 0700) < 0 && errno != EEXIST) {
+        printf("cc_newlib_posix: mkdir failed errno=%d\n", errno);
+        return 1;
+    }
+    if (expect(chdir("/tmp/newlib_posix") == 0, "chdir")) {
+        return 1;
+    }
+
+    char cwd[128];
+    if (expect(getcwd(cwd, sizeof(cwd)) == cwd, "getcwd")) {
+        return 1;
+    }
+    if (expect(strcmp(cwd, "/tmp/newlib_posix") == 0, "cwd match")) {
+        return 1;
+    }
+    if (expect(access(".", R_OK | W_OK | X_OK) == 0, "access")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: cwd dirs ok");
+
+    int fds[2];
+    if (expect(pipe(fds) == 0, "pipe")) {
+        return 1;
+    }
+    int write_dup = dup(fds[1]);
+    if (expect(write_dup >= 0, "dup")) {
+        return 1;
+    }
+    if (expect(write(write_dup, "pipe ok", 7) == 7, "pipe write")) {
+        return 1;
+    }
+    close(write_dup);
+    close(fds[1]);
+    if (expect(read_exact(fds[0], "pipe ok"), "pipe read")) {
+        return 1;
+    }
+    close(fds[0]);
+
+    if (expect(pipe(fds) == 0, "pipe2")) {
+        return 1;
+    }
+    if (expect(dup2(fds[1], 12) == 12, "dup2")) {
+        return 1;
+    }
+    if (expect(write(12, "dup2 ok", 7) == 7, "dup2 write")) {
+        return 1;
+    }
+    close(12);
+    close(fds[1]);
+    if (expect(read_exact(fds[0], "dup2 ok"), "dup2 read")) {
+        return 1;
+    }
+    close(fds[0]);
+    puts("cc_newlib_posix: pipes ok");
+
+    sigset_t set;
+    sigset_t oldset;
+    sigset_t pending;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    if (expect(sigprocmask(SIG_BLOCK, &set, &oldset) == 0, "sig block")) {
+        return 1;
+    }
+    if (expect(sigpending(&pending) == 0, "sigpending")) {
+        return 1;
+    }
+    if (expect(!sigismember(&pending, SIGUSR1), "pending clear")) {
+        return 1;
+    }
+    if (expect(sigprocmask(SIG_SETMASK, &oldset, NULL) == 0, "sig restore")) {
+        return 1;
+    }
+    if (expect(kill(getpid(), 0) == 0, "kill self 0")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: signals ok");
+
+    if (expect(chdir("/tmp") == 0, "chdir tmp")) {
+        return 1;
+    }
+    if (expect(rmdir("/tmp/newlib_posix") == 0, "rmdir")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: done");
+    return 0;
+}

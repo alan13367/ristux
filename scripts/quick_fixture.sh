@@ -350,7 +350,9 @@ case "$SCENARIO" in
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
       "cc_newlib_hello"
+      "cc_newlib_posix"
       "pkg info cc_newlib_hello"
+      "pkg info cc_newlib_posix"
     )
     EXPECTS=(
       "TTY canonical line ready: cc_newlib_hello"
@@ -360,8 +362,15 @@ case "$SCENARIO" in
       "^cc_newlib_hello: time ok$"
       "^cc_newlib_hello: write ok$"
       "^cc_newlib_hello: done$"
+      "TTY canonical line ready: cc_newlib_posix"
+      "^cc_newlib_posix: cwd dirs ok$"
+      "^cc_newlib_posix: pipes ok$"
+      "^cc_newlib_posix: signals ok$"
+      "^cc_newlib_posix: done$"
       "^name: cc_newlib_hello$"
       "^  /bin/cc_newlib_hello$"
+      "^name: cc_newlib_posix$"
+      "^  /bin/cc_newlib_posix$"
     )
     ;;
   sse)
