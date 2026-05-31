@@ -233,6 +233,11 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Editor: `/bin/edit` and `/bin/vi` provide a small vi-like line editor with
   append, insert, open-line, delete-line, print, write, forced quit, and
   write-and-quit commands for basic file editing from the console or a PTY.
+- Build tools: `/bin/cc` and `/bin/tcc` are TinyCC, with `/bin/as`,
+  `/bin/ld`, and `/bin/cpp` compatibility frontends that delegate to TinyCC for
+  static in-system builds. `/bin/as` prepends `-c`, `/bin/cpp` prepends `-E`,
+  and `/bin/ld` forwards linker-style arguments to TinyCC, which covers the
+  current single-file, multi-file, and package build fixtures.
 - Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
   and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
   client and listener through the normal `socket`/`bind`/`listen`/`connect`/

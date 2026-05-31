@@ -647,6 +647,50 @@ case "$SCENARIO" in
       "^  /usr/share/testdata/tinycc-project/Makefile$"
     )
     ;;
+  toolchain)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "mkdir /tmp/toolchain"
+      "cd /tmp/toolchain"
+      "echo '#define VALUE toolchain-cpp-ok' > pp.c"
+      "echo 'VALUE' >> pp.c"
+      "cpp pp.c > pp.out"
+      "grep toolchain-cpp-ok pp.out"
+      "echo '.global _start' > hello.s"
+      "echo '_start:' >> hello.s"
+      "echo 'mov \$1, %rax' >> hello.s"
+      "echo 'mov \$1, %rdi' >> hello.s"
+      "echo 'lea msg(%rip), %rsi' >> hello.s"
+      "echo 'mov \$13, %rdx' >> hello.s"
+      "echo 'syscall' >> hello.s"
+      "echo 'mov \$60, %rax' >> hello.s"
+      "echo 'xor %rdi, %rdi' >> hello.s"
+      "echo 'syscall' >> hello.s"
+      "echo 'msg: .ascii \"asm frontend\\n\"' >> hello.s"
+      "as hello.s -o hello.o"
+      "ld -nostdlib hello.o -o hello"
+      "./hello"
+      "which as"
+      "which cpp"
+      "which ld"
+      "pkg info toolchain-frontends"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: cpp pp\\.c > pp\\.out"
+      "^toolchain-cpp-ok$"
+      "TTY canonical line ready: as hello\\.s -o hello\\.o"
+      "TTY canonical line ready: ld -nostdlib hello\\.o -o hello"
+      "TTY canonical line ready: ./hello"
+      "^asm frontend$"
+      "^/bin/as$"
+      "^/bin/cpp$"
+      "^/bin/ld$"
+      "^name: toolchain-frontends$"
+      "^  /bin/as$"
+      "^  /bin/cpp$"
+      "^  /bin/ld$"
+    )
+    ;;
   nativepkg)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
     COMMANDS=(
@@ -2331,7 +2375,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
