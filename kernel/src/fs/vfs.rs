@@ -146,6 +146,9 @@ struct PtyState {
     masters: usize,
     slaves: usize,
     locked: bool,
+    termios: [u8; crate::tty::TERMIOS_SIZE],
+    winsize: [u8; 8],
+    foreground_pgrp: crate::process::Pid,
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +235,9 @@ impl PipeState {
 
 impl PtyState {
     fn new(capacity: usize) -> Self {
+        let mut winsize = [0u8; 8];
+        winsize[0..2].copy_from_slice(&24u16.to_le_bytes());
+        winsize[2..4].copy_from_slice(&80u16.to_le_bytes());
         Self {
             master_to_slave: VecDeque::new(),
             slave_to_master: VecDeque::new(),
@@ -239,6 +245,9 @@ impl PtyState {
             masters: 1,
             slaves: 0,
             locked: true,
+            termios: crate::tty::default_termios_bytes(),
+            winsize,
+            foreground_pgrp: 1,
         }
     }
 
@@ -1921,6 +1930,54 @@ impl Vfs {
         Ok(())
     }
 
+    fn pty_termios_bytes(&self, fd: usize) -> Result<[u8; crate::tty::TERMIOS_SIZE], VfsError> {
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        Ok(self.ptys.get(pty).ok_or(VfsError::BadFd)?.termios)
+    }
+
+    fn set_pty_termios_bytes(&mut self, fd: usize, bytes: &[u8]) -> Result<(), VfsError> {
+        if bytes.len() < crate::tty::TERMIOS_SIZE {
+            return Err(VfsError::BadFd);
+        }
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        let state = self.ptys.get_mut(pty).ok_or(VfsError::BadFd)?;
+        state
+            .termios
+            .copy_from_slice(&bytes[..crate::tty::TERMIOS_SIZE]);
+        Ok(())
+    }
+
+    fn pty_winsize(&self, fd: usize) -> Result<[u8; 8], VfsError> {
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        Ok(self.ptys.get(pty).ok_or(VfsError::BadFd)?.winsize)
+    }
+
+    fn set_pty_winsize(&mut self, fd: usize, bytes: &[u8]) -> Result<(), VfsError> {
+        if bytes.len() < 8 {
+            return Err(VfsError::BadFd);
+        }
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        let state = self.ptys.get_mut(pty).ok_or(VfsError::BadFd)?;
+        state.winsize.copy_from_slice(&bytes[..8]);
+        Ok(())
+    }
+
+    fn pty_foreground_pgrp(&self, fd: usize) -> Result<crate::process::Pid, VfsError> {
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        Ok(self.ptys.get(pty).ok_or(VfsError::BadFd)?.foreground_pgrp)
+    }
+
+    fn set_pty_foreground_pgrp(
+        &mut self,
+        fd: usize,
+        pgrp: crate::process::Pid,
+    ) -> Result<(), VfsError> {
+        let pty = self.pty_number(fd).ok_or(VfsError::BadFd)?;
+        let state = self.ptys.get_mut(pty).ok_or(VfsError::BadFd)?;
+        state.foreground_pgrp = pgrp;
+        Ok(())
+    }
+
     fn stat(&self, path: &str) -> Result<Stat, VfsError> {
         self.stat_inner(path, true)
     }
@@ -2355,6 +2412,42 @@ pub fn pty_number(fd: usize) -> Option<usize> {
 
 pub fn set_pty_locked(fd: usize, locked: bool) -> Result<(), VfsError> {
     with_vfs(|vfs| vfs.set_pty_locked(fd, locked))
+}
+
+pub fn pty_termios_bytes(fd: usize) -> Result<[u8; crate::tty::TERMIOS_SIZE], VfsError> {
+    let guard = VFS.lock();
+    guard
+        .as_ref()
+        .expect("VFS used before initialization")
+        .pty_termios_bytes(fd)
+}
+
+pub fn set_pty_termios_bytes(fd: usize, bytes: &[u8]) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_pty_termios_bytes(fd, bytes))
+}
+
+pub fn pty_winsize(fd: usize) -> Result<[u8; 8], VfsError> {
+    let guard = VFS.lock();
+    guard
+        .as_ref()
+        .expect("VFS used before initialization")
+        .pty_winsize(fd)
+}
+
+pub fn set_pty_winsize(fd: usize, bytes: &[u8]) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_pty_winsize(fd, bytes))
+}
+
+pub fn pty_foreground_pgrp(fd: usize) -> Result<crate::process::Pid, VfsError> {
+    let guard = VFS.lock();
+    guard
+        .as_ref()
+        .expect("VFS used before initialization")
+        .pty_foreground_pgrp(fd)
+}
+
+pub fn set_pty_foreground_pgrp(fd: usize, pgrp: crate::process::Pid) -> Result<(), VfsError> {
+    with_vfs(|vfs| vfs.set_pty_foreground_pgrp(fd, pgrp))
 }
 
 pub fn chmod(path: &str, mode: u16) -> Result<(), VfsError> {

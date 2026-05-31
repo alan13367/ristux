@@ -2694,6 +2694,7 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
 
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let is_tty = fs::is_tty_fd(vfs_fd);
+    let is_pty = fs::pty_number(vfs_fd).is_some();
     match request {
         TIOCGPTN => {
             let number = fs::pty_number(vfs_fd).ok_or(ENOTTY)?;
@@ -2715,6 +2716,9 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             if !process::set_current_controlling_pty(number) {
                 return Err(ESRCH);
             }
+            if let Some(pgrp) = process::current_pgrp() {
+                fs::set_pty_foreground_pgrp(vfs_fd, pgrp).map_err(|_| ENOTTY)?;
+            }
             Ok(0)
         }
         TIOCNOTTY => {
@@ -2731,7 +2735,12 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
                 return Err(ENOTTY);
             }
             let out = process::write_user_buffer(argp, 4).ok_or(EFAULT)?;
-            out.copy_from_slice(&(tty::foreground_pgrp() as u32).to_le_bytes());
+            let pgrp = if is_pty {
+                fs::pty_foreground_pgrp(vfs_fd).map_err(|_| ENOTTY)?
+            } else {
+                tty::foreground_pgrp()
+            };
+            out.copy_from_slice(&(pgrp as u32).to_le_bytes());
             Ok(0)
         }
         TIOCSPGRP => {
@@ -2740,14 +2749,22 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             }
             let input = process::read_user(argp, 4).ok_or(EFAULT)?;
             let pgrp = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) as u64;
-            tty::set_foreground_pgrp(pgrp);
+            if is_pty {
+                fs::set_pty_foreground_pgrp(vfs_fd, pgrp).map_err(|_| ENOTTY)?;
+            } else {
+                tty::set_foreground_pgrp(pgrp);
+            }
             Ok(0)
         }
         TCGETS => {
             if !is_tty {
                 return Err(ENOTTY);
             }
-            let termios = tty::termios_bytes();
+            let termios = if is_pty {
+                fs::pty_termios_bytes(vfs_fd).map_err(|_| ENOTTY)?
+            } else {
+                tty::termios_bytes()
+            };
             let out = process::write_user_buffer(argp, tty::TERMIOS_SIZE).ok_or(EFAULT)?;
             out.copy_from_slice(&termios);
             Ok(0)
@@ -2757,7 +2774,11 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
                 return Err(ENOTTY);
             }
             let input = process::read_user(argp, tty::TERMIOS_SIZE).ok_or(EFAULT)?;
-            tty::set_termios_bytes(input).map_err(|_| EINVAL)?;
+            if is_pty {
+                fs::set_pty_termios_bytes(vfs_fd, input).map_err(|_| ENOTTY)?;
+            } else {
+                tty::set_termios_bytes(input).map_err(|_| EINVAL)?;
+            }
             Ok(0)
         }
         TIOCGWINSZ => {
@@ -2765,16 +2786,23 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
                 return Err(ENOTTY);
             }
             let out = process::write_user_buffer(argp, 8).ok_or(EFAULT)?;
-            out[0..2].copy_from_slice(&24u16.to_le_bytes());
-            out[2..4].copy_from_slice(&80u16.to_le_bytes());
-            out[4..8].fill(0);
+            if is_pty {
+                out.copy_from_slice(&fs::pty_winsize(vfs_fd).map_err(|_| ENOTTY)?);
+            } else {
+                out[0..2].copy_from_slice(&24u16.to_le_bytes());
+                out[2..4].copy_from_slice(&80u16.to_le_bytes());
+                out[4..8].fill(0);
+            }
             Ok(0)
         }
         TIOCSWINSZ => {
             if !is_tty {
                 return Err(ENOTTY);
             }
-            process::read_user(argp, 8).ok_or(EFAULT)?;
+            let input = process::read_user(argp, 8).ok_or(EFAULT)?;
+            if is_pty {
+                fs::set_pty_winsize(vfs_fd, input).map_err(|_| ENOTTY)?;
+            }
             Ok(0)
         }
         _ => Ok(0),

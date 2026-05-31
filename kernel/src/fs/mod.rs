@@ -183,3 +183,27 @@ pub fn pty_number(fd: usize) -> Option<usize> {
 pub fn set_pty_locked(fd: usize, locked: bool) -> Result<(), vfs::VfsError> {
     vfs::set_pty_locked(fd, locked)
 }
+
+pub fn pty_termios_bytes(fd: usize) -> Result<[u8; crate::tty::TERMIOS_SIZE], vfs::VfsError> {
+    vfs::pty_termios_bytes(fd)
+}
+
+pub fn set_pty_termios_bytes(fd: usize, bytes: &[u8]) -> Result<(), vfs::VfsError> {
+    vfs::set_pty_termios_bytes(fd, bytes)
+}
+
+pub fn pty_winsize(fd: usize) -> Result<[u8; 8], vfs::VfsError> {
+    vfs::pty_winsize(fd)
+}
+
+pub fn set_pty_winsize(fd: usize, bytes: &[u8]) -> Result<(), vfs::VfsError> {
+    vfs::set_pty_winsize(fd, bytes)
+}
+
+pub fn pty_foreground_pgrp(fd: usize) -> Result<crate::process::Pid, vfs::VfsError> {
+    vfs::pty_foreground_pgrp(fd)
+}
+
+pub fn set_pty_foreground_pgrp(fd: usize, pgrp: crate::process::Pid) -> Result<(), vfs::VfsError> {
+    vfs::set_pty_foreground_pgrp(fd, pgrp)
+}

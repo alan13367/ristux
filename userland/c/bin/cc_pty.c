@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 
 static int expect_bytes(int fd, const char *expected, size_t len) {
@@ -20,8 +21,16 @@ static int check_openpty(void) {
     int master = -1;
     int slave = -1;
     char name[32];
+    struct termios term;
+    memset(&term, 0, sizeof(term));
+    term.c_iflag = ICRNL;
+    term.c_oflag = OPOST;
+    term.c_cflag = CREAD | CS8;
+    term.c_lflag = ISIG;
+    term.c_cc[VMIN] = 7;
+    term.c_cc[VTIME] = 2;
     struct winsize ws = { 30, 100, 0, 0 };
-    if (openpty(&master, &slave, name, NULL, &ws) < 0) {
+    if (openpty(&master, &slave, name, &term, &ws) < 0) {
         puts("cc_pty: openpty failed");
         return 1;
     }
@@ -32,6 +41,27 @@ static int check_openpty(void) {
     char *slave_name = ttyname(slave);
     if (slave_name == NULL || strcmp(slave_name, name) != 0) {
         puts("cc_pty: ttyname failed");
+        return 1;
+    }
+    struct termios got_term;
+    if (tcgetattr(slave, &got_term) < 0 ||
+        memcmp(&got_term, &term, sizeof(term)) != 0) {
+        puts("cc_pty: termios state failed");
+        return 1;
+    }
+    struct winsize got_ws;
+    memset(&got_ws, 0, sizeof(got_ws));
+    if (ioctl(master, TIOCGWINSZ, &got_ws) < 0 ||
+        got_ws.ws_row != ws.ws_row || got_ws.ws_col != ws.ws_col) {
+        puts("cc_pty: winsize state failed");
+        return 1;
+    }
+    int pgrp = (int)getpgrp();
+    int got_pgrp = -1;
+    if (ioctl(slave, TIOCSPGRP, &pgrp) < 0 ||
+        ioctl(master, TIOCGPGRP, &got_pgrp) < 0 ||
+        got_pgrp != pgrp) {
+        puts("cc_pty: foreground pgrp failed");
         return 1;
     }
     if (write(master, "op", 2) != 2 || !expect_bytes(slave, "op", 2)) {

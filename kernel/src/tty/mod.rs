@@ -448,6 +448,10 @@ pub fn termios_bytes() -> [u8; TERMIOS_SIZE] {
         .to_bytes()
 }
 
+pub fn default_termios_bytes() -> [u8; TERMIOS_SIZE] {
+    Termios::default().to_bytes()
+}
+
 pub fn set_termios_bytes(bytes: &[u8]) -> Result<(), ()> {
     let termios = Termios::from_bytes(bytes).ok_or(())?;
     let mut guard = TTY.lock();
