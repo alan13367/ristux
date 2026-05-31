@@ -25,6 +25,21 @@ int main(void) {
     }
     puts("cc_mmap: mprotect ok");
 
+    if (mprotect(anon + 4096, 4096, PROT_NONE) < 0) {
+        printf("cc_mmap: prot none failed errno=%d\n", errno);
+        return 1;
+    }
+    if (mprotect(anon + 4096, 4096, PROT_READ | PROT_WRITE) < 0) {
+        printf("cc_mmap: prot restore failed errno=%d\n", errno);
+        return 1;
+    }
+    anon[4096] = 'n';
+    if (anon[4096] != 'n') {
+        puts("cc_mmap: prot restore write failed");
+        return 1;
+    }
+    puts("cc_mmap: prot none ok");
+
     if (munmap(anon, 8192) < 0) {
         printf("cc_mmap: munmap failed errno=%d\n", errno);
         return 1;

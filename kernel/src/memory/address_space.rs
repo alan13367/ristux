@@ -21,6 +21,23 @@ pub struct AddressSpace {
 pub const USER_MMAP_START: usize = 0x5000_0000;
 pub const USER_MMAP_END: usize = 0x5800_0000;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum UserProtection {
+    None,
+    ReadOnly,
+    ReadWrite,
+}
+
+impl UserProtection {
+    pub const fn page_flags(self) -> PageFlags {
+        match self {
+            Self::None => PageFlags::USER_NO_ACCESS,
+            Self::ReadOnly => PageFlags::USER_READABLE,
+            Self::ReadWrite => PageFlags::USER_WRITABLE,
+        }
+    }
+}
+
 impl AddressSpace {
     pub fn new_kernel_clone() -> Result<Self, PagingError> {
         let p4_frame = unsafe { paging::create_p4_table()? };
@@ -228,7 +245,7 @@ impl AddressSpace {
         &mut self,
         addr: usize,
         len: usize,
-        writable: bool,
+        protection: UserProtection,
     ) -> Result<(), PagingError> {
         let start = paging::align_down(addr, FRAME_SIZE);
         let end = paging::align_up(
@@ -244,7 +261,7 @@ impl AddressSpace {
                 return Err(PagingError::NotMapped);
             }
             unsafe {
-                self.protect_user_page(page, writable)?;
+                self.protect_user_page(page, protection)?;
             }
             page += FRAME_SIZE;
         }
@@ -338,16 +355,36 @@ impl AddressSpace {
         self.user_mappings.iter().any(|(virt, _)| *virt == page)
     }
 
-    unsafe fn protect_user_page(&mut self, page: usize, writable: bool) -> Result<(), PagingError> {
+    unsafe fn protect_user_page(
+        &mut self,
+        page: usize,
+        protection: UserProtection,
+    ) -> Result<(), PagingError> {
         let pte = unsafe { paging::get_pte_mut(self.p4, page).ok_or(PagingError::NotMapped)? };
         let phys = *pte & paging::ADDR_MASK;
         let was_cow = *pte & paging::COW_FLAG != 0;
         let shared = super::refcount::get(phys as usize) > 1;
-        let mut flags = paging::PRESENT_FLAG | paging::USER_FLAG;
-        if was_cow || (writable && shared) {
-            flags |= paging::COW_FLAG;
-        } else if writable {
-            flags |= paging::WRITABLE_FLAG;
+        let mut flags = paging::PRESENT_FLAG;
+        match protection {
+            UserProtection::None => {
+                if was_cow {
+                    flags |= paging::COW_FLAG;
+                }
+            }
+            UserProtection::ReadOnly => {
+                flags |= paging::USER_FLAG;
+                if was_cow {
+                    flags |= paging::COW_FLAG;
+                }
+            }
+            UserProtection::ReadWrite => {
+                flags |= paging::USER_FLAG;
+                if was_cow || shared {
+                    flags |= paging::COW_FLAG;
+                } else {
+                    flags |= paging::WRITABLE_FLAG;
+                }
+            }
         }
         *pte = phys | flags;
         unsafe {

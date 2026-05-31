@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::AddressSpace,
+        address_space::{AddressSpace, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
         paging::{self, PageFlags},
     },
@@ -2092,19 +2092,19 @@ pub fn brk(new_break: usize) -> Result<usize, ()> {
     .ok_or(())?
 }
 
-pub fn mmap_anonymous(hint: usize, len: usize, writable: bool) -> Result<usize, ()> {
+pub fn mmap_anonymous(hint: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
     with_current(|p| {
         p.address_space
-            .map_anonymous(hint, len, user_page_flags(writable))
+            .map_anonymous(hint, len, protection.page_flags())
             .map_err(|_| ())
     })
     .ok_or(())?
 }
 
-pub fn mmap_fixed(addr: usize, len: usize, writable: bool) -> Result<usize, ()> {
+pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
     with_current(|p| {
         p.address_space
-            .map_fixed(addr, len, user_page_flags(writable))
+            .map_fixed(addr, len, protection.page_flags())
             .map_err(|_| ())
     })
     .ok_or(())?
@@ -2114,21 +2114,13 @@ pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
     with_current(|p| p.address_space.unmap_user_range(addr, len).map_err(|_| ())).ok_or(())?
 }
 
-pub fn mprotect(addr: usize, len: usize, writable: bool) -> Result<(), ()> {
+pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), ()> {
     with_current(|p| {
         p.address_space
-            .protect_user_range(addr, len, writable)
+            .protect_user_range(addr, len, protection)
             .map_err(|_| ())
     })
     .ok_or(())?
-}
-
-fn user_page_flags(writable: bool) -> PageFlags {
-    if writable {
-        PageFlags::USER_WRITABLE
-    } else {
-        PageFlags::USER_READABLE
-    }
 }
 
 pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, Option<i32>)> {

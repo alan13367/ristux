@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{USER_MMAP_END, USER_MMAP_START},
+        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -1888,7 +1888,7 @@ fn linux_mmap(
     fd: i64,
     offset: usize,
 ) -> Result<u64, i64> {
-    let writable = mmap_writable(prot)?;
+    let protection = mmap_protection(prot)?;
     if flags & MAP_PRIVATE == 0 {
         return Err(EINVAL);
     }
@@ -1910,9 +1910,9 @@ fn linux_mmap(
         if addr == 0 || addr % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
-        process::mmap_fixed(addr, length, true).map_err(|_| EINVAL)?
+        process::mmap_fixed(addr, length, UserProtection::ReadWrite).map_err(|_| EINVAL)?
     } else {
-        process::mmap_anonymous(addr, length, true).map_err(|_| ENOMEM)?
+        process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(|_| ENOMEM)?
     };
     if let Some(bytes) = file_bytes {
         if !bytes.is_empty() {
@@ -1920,8 +1920,8 @@ fn linux_mmap(
             out.copy_from_slice(&bytes);
         }
     }
-    if !writable {
-        process::mprotect(mapped, length, false).map_err(|_| ENOMEM)?;
+    if protection != UserProtection::ReadWrite {
+        process::mprotect(mapped, length, protection).map_err(|_| ENOMEM)?;
     }
     Ok(mapped as u64)
 }
@@ -1930,9 +1930,9 @@ fn linux_mprotect(addr: usize, len: usize, prot: i32) -> Result<u64, i64> {
     if addr % FRAME_SIZE != 0 {
         return Err(EINVAL);
     }
-    let writable = mmap_writable(prot)?;
+    let protection = mmap_protection(prot)?;
     let length = page_aligned_len(len)?;
-    process::mprotect(addr, length, writable)
+    process::mprotect(addr, length, protection)
         .map(|_| 0)
         .map_err(|_| EINVAL)
 }
@@ -1945,11 +1945,17 @@ fn linux_munmap(addr: usize, len: usize) -> Result<u64, i64> {
     process::munmap(addr, length).map(|_| 0).map_err(|_| EINVAL)
 }
 
-fn mmap_writable(prot: i32) -> Result<bool, i64> {
-    if prot == 0 || prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
+fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
+    if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
         return Err(EINVAL);
     }
-    Ok(prot & PROT_WRITE != 0)
+    if prot == 0 {
+        Ok(UserProtection::None)
+    } else if prot & PROT_WRITE != 0 {
+        Ok(UserProtection::ReadWrite)
+    } else {
+        Ok(UserProtection::ReadOnly)
+    }
 }
 
 fn page_aligned_len(len: usize) -> Result<usize, i64> {

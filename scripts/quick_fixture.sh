@@ -119,6 +119,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_mmap"
       "^cc_mmap: anonymous ok$"
       "^cc_mmap: mprotect ok$"
+      "^cc_mmap: prot none ok$"
       "^cc_mmap: munmap ok$"
       "^cc_mmap: fixed ok$"
       "^cc_mmap: file ok$"

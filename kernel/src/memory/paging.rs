@@ -23,6 +23,7 @@ pub struct PageFlags(u64);
 
 impl PageFlags {
     pub const WRITABLE: Self = Self(PRESENT | WRITABLE);
+    pub const USER_NO_ACCESS: Self = Self(PRESENT);
     pub const USER_READABLE: Self = Self(PRESENT | USER);
     pub const USER_WRITABLE: Self = Self(PRESENT | WRITABLE | USER);
 

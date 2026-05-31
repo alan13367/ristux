@@ -66,7 +66,7 @@ The current Linux-like syscall surface is:
 | 7 | `poll` | Readiness for regular files, TTY, pipes, and sockets. |
 | 8 | `lseek` | Regular file offsets. |
 | 9 | `mmap` | Anonymous and private file-backed mappings. |
-| 10 | `mprotect` | Read/read-write page permission changes. |
+| 10 | `mprotect` | No-access/read/read-write page permission changes. |
 | 11 | `munmap` | Unmaps page-aligned mmap ranges. |
 | 12 | `brk` | Process heap break used by the in-tree malloc. |
 | 13 | `rt_sigaction` | Installs one handler pointer per signal. |
@@ -257,8 +257,9 @@ These are explicit non-guarantees of the current ABI:
 
 - User stacks start with one mapped page and grow downward on page faults within
   a 1 MiB stack region. The lowest page is an unmapped guard page.
-- `mmap` currently supports `MAP_PRIVATE` anonymous mappings, `MAP_FIXED`
-  replacements inside the mmap arena, and private file-backed reads.
+- `mmap` currently supports `PROT_NONE`, read-only, and read-write
+  `MAP_PRIVATE` anonymous mappings, `MAP_FIXED` replacements inside the mmap
+  arena, and private file-backed reads.
   `MAP_SHARED` and demand paging are not part of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
 - The libc is a Ristux foundation layer, not a complete musl/newlib port yet.
