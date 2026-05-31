@@ -60,14 +60,26 @@ struct ShellEnv {
 #[derive(Clone)]
 struct Stage {
     argv: Vec<Vec<u8>>,
-    stdin_path: Option<Vec<u8>>,
-    stdout_path: Option<Vec<u8>>,
-    append_stdout: bool,
+    redirs: Vec<Redirection>,
 }
 
 struct LexToken {
     bytes: Vec<u8>,
     has_unquoted_glob: bool,
+}
+
+#[derive(Clone)]
+enum Redirection {
+    Open {
+        fd: i32,
+        path: Vec<u8>,
+        write: bool,
+        append: bool,
+    },
+    Dup {
+        fd: i32,
+        target: i32,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -263,10 +275,14 @@ impl Stage {
     fn new() -> Self {
         Self {
             argv: Vec::new(),
-            stdin_path: None,
-            stdout_path: None,
-            append_stdout: false,
+            redirs: Vec::new(),
         }
+    }
+
+    fn has_stdin_redirect(&self) -> bool {
+        self.redirs.iter().any(|redir| match redir {
+            Redirection::Open { fd, .. } | Redirection::Dup { fd, .. } => *fd == FD_STDIN,
+        })
     }
 }
 
@@ -621,6 +637,16 @@ fn expand_argv_token(token: LexToken, env: &ShellEnv) -> Vec<Vec<u8>> {
         }
     }
     vec![bytes]
+}
+
+fn parse_redirect_fd(token: &[u8]) -> Option<i32> {
+    if token.len() == 1 && token[0].is_ascii_digit() {
+        let fd = (token[0] - b'0') as i32;
+        if fd <= FD_STDERR {
+            return Some(fd);
+        }
+    }
+    None
 }
 
 fn find_command_substitution_end(bytes: &[u8], start: usize) -> Option<usize> {
@@ -1229,29 +1255,38 @@ fn parse_stage(segment: &[u8], env: &mut ShellEnv, last_status: i32) -> (Stage, 
             i += 1;
             continue;
         }
-        if tokens[i].bytes.as_slice() == b"<" {
-            if i + 1 < tokens.len() {
-                stage.stdin_path =
-                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
-                i += 2;
-                continue;
+        let mut redir_fd = None;
+        let mut redir_op_index = i;
+        if let Some(fd) = parse_redirect_fd(tokens[i].bytes.as_slice()) {
+            if i + 1 < tokens.len()
+                && matches!(tokens[i + 1].bytes.as_slice(), b"<" | b">" | b">>")
+            {
+                redir_fd = Some(fd);
+                redir_op_index = i + 1;
             }
         }
-        if tokens[i].bytes.as_slice() == b">" {
-            if i + 1 < tokens.len() {
-                stage.stdout_path =
-                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
-                stage.append_stdout = false;
-                i += 2;
-                continue;
-            }
-        }
-        if tokens[i].bytes.as_slice() == b">>" {
-            if i + 1 < tokens.len() {
-                stage.stdout_path =
-                    Some(expand_tilde(core::mem::take(&mut tokens[i + 1].bytes), env));
-                stage.append_stdout = true;
-                i += 2;
+        let op = tokens[redir_op_index].bytes.as_slice();
+        if matches!(op, b"<" | b">" | b">>") {
+            let read_redirect = op == b"<";
+            let append_redirect = op == b">>";
+            let fd = redir_fd.unwrap_or(if read_redirect { FD_STDIN } else { FD_STDOUT });
+            let next = redir_op_index + 1;
+            if next < tokens.len() && tokens[next].bytes.as_slice() == b"&" {
+                if next + 1 < tokens.len() {
+                    if let Some(target) = parse_redirect_fd(tokens[next + 1].bytes.as_slice()) {
+                        stage.redirs.push(Redirection::Dup { fd, target });
+                        i = next + 2;
+                        continue;
+                    }
+                }
+            } else if next < tokens.len() {
+                stage.redirs.push(Redirection::Open {
+                    fd,
+                    path: expand_tilde(core::mem::take(&mut tokens[next].bytes), env),
+                    write: !read_redirect,
+                    append: append_redirect,
+                });
+                i = next + 1;
                 continue;
             }
         }
@@ -1449,43 +1484,74 @@ fn run_function(
     }
 }
 
-fn restore_builtin_redirects(saved_stdin: i32, saved_stdout: i32) {
-    if saved_stdin >= 0 {
-        let _ = sys::dup2(saved_stdin, FD_STDIN);
-        let _ = sys::close(saved_stdin);
+fn save_redirect_fd(saved: &mut [i32; 3], fd: i32) -> bool {
+    if !(FD_STDIN..=FD_STDERR).contains(&fd) {
+        return false;
     }
-    if saved_stdout >= 0 {
-        let _ = sys::dup2(saved_stdout, FD_STDOUT);
-        let _ = sys::close(saved_stdout);
+    let index = fd as usize;
+    if saved[index] == -2 {
+        saved[index] = sys::dup(fd) as i32;
+        return saved[index] >= 0;
+    }
+    true
+}
+
+fn restore_builtin_redirects(saved: [i32; 3]) {
+    for (fd, saved_fd) in saved.iter().copied().enumerate() {
+        if saved_fd >= 0 {
+            let _ = sys::dup2(saved_fd, fd as i32);
+            let _ = sys::close(saved_fd);
+        }
     }
 }
 
-fn apply_builtin_redirects(stage: &Stage) -> Result<(i32, i32), i32> {
-    let mut saved_stdin = -1;
-    let mut saved_stdout = -1;
-    if let Some(ref path) = stage.stdin_path {
-        saved_stdin = sys::dup(FD_STDIN) as i32;
-        let fd = open_redirect(path, false, false);
-        if saved_stdin < 0 || fd < 0 {
-            restore_builtin_redirects(saved_stdin, saved_stdout);
-            let _ = sys::write(FD_STDERR, b"sh: cannot open input\n");
-            return Err(1);
+fn apply_redirections(stage: &Stage, mut saved: Option<&mut [i32; 3]>) -> Result<(), i32> {
+    for redir in &stage.redirs {
+        match redir {
+            Redirection::Open {
+                fd,
+                path,
+                write,
+                append,
+            } => {
+                if let Some(saved_fds) = saved.as_deref_mut() {
+                    if !save_redirect_fd(saved_fds, *fd) {
+                        let _ = sys::write(FD_STDERR, b"sh: cannot save redirection\n");
+                        return Err(1);
+                    }
+                }
+                let opened = open_redirect(path, *write, *append);
+                if opened < 0 {
+                    let _ = sys::write(FD_STDERR, b"sh: cannot open redirection\n");
+                    return Err(1);
+                }
+                let _ = sys::dup2(opened, *fd);
+                let _ = sys::close(opened);
+            }
+            Redirection::Dup { fd, target } => {
+                if let Some(saved_fds) = saved.as_deref_mut() {
+                    if !save_redirect_fd(saved_fds, *fd) {
+                        let _ = sys::write(FD_STDERR, b"sh: cannot save redirection\n");
+                        return Err(1);
+                    }
+                }
+                if sys::dup2(*target, *fd) < 0 {
+                    let _ = sys::write(FD_STDERR, b"sh: cannot duplicate redirection\n");
+                    return Err(1);
+                }
+            }
         }
-        let _ = sys::dup2(fd, FD_STDIN);
-        let _ = sys::close(fd);
     }
-    if let Some(ref path) = stage.stdout_path {
-        saved_stdout = sys::dup(FD_STDOUT) as i32;
-        let fd = open_redirect(path, true, stage.append_stdout);
-        if saved_stdout < 0 || fd < 0 {
-            restore_builtin_redirects(saved_stdin, saved_stdout);
-            let _ = sys::write(FD_STDERR, b"sh: cannot open output\n");
-            return Err(1);
-        }
-        let _ = sys::dup2(fd, FD_STDOUT);
-        let _ = sys::close(fd);
+    Ok(())
+}
+
+fn apply_builtin_redirects(stage: &Stage) -> Result<[i32; 3], i32> {
+    let mut saved = [-2, -2, -2];
+    if let Err(status) = apply_redirections(stage, Some(&mut saved)) {
+        restore_builtin_redirects(saved);
+        return Err(status);
     }
-    Ok((saved_stdin, saved_stdout))
+    Ok(saved)
 }
 
 fn builtin_command(
@@ -1654,7 +1720,7 @@ fn builtin_command(
                 let _ = sys::write(FD_STDERR, b"read: bad name\n");
                 return 2;
             }
-            let line = if stage.stdin_path.is_some() {
+            let line = if stage.has_stdin_redirect() {
                 let mut pending = Vec::new();
                 read_line_buffered(FD_STDIN, &mut pending)
             } else {
@@ -1762,12 +1828,12 @@ fn builtin(
     if !is_builtin_name(&stage.argv[0]) {
         return None;
     }
-    let (saved_stdin, saved_stdout) = match apply_builtin_redirects(stage) {
+    let saved = match apply_builtin_redirects(stage) {
         Ok(saved) => saved,
         Err(status) => return Some(status),
     };
     let status = builtin_command(stage, jobs, next_job_id, env, last_status);
-    restore_builtin_redirects(saved_stdin, saved_stdout);
+    restore_builtin_redirects(saved);
     Some(status)
 }
 
@@ -1821,23 +1887,8 @@ fn spawn_stage(
         sys::close(fds[1]);
     }
 
-    if let Some(ref path) = stage.stdin_path {
-        let fd = open_redirect(path, false, false);
-        if fd < 0 {
-            let _ = sys::write(FD_STDERR, b"sh: cannot open input\n");
-            sys::exit(1);
-        }
-        sys::dup2(fd, FD_STDIN);
-        sys::close(fd);
-    }
-    if let Some(ref path) = stage.stdout_path {
-        let fd = open_redirect(path, true, stage.append_stdout);
-        if fd < 0 {
-            let _ = sys::write(FD_STDERR, b"sh: cannot open output\n");
-            sys::exit(1);
-        }
-        sys::dup2(fd, FD_STDOUT);
-        sys::close(fd);
+    if apply_redirections(stage, None).is_err() {
+        sys::exit(1);
     }
 
     let prog = &stage.argv[0];
