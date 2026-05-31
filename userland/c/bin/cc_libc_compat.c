@@ -228,6 +228,33 @@ static int check_uname(void) {
         puts("cc_libc_compat: uname fault failed");
         return 1;
     }
+    char host[32];
+    if (gethostname(host, sizeof(host)) != 0 || strcmp(host, "ristux") != 0) {
+        puts("cc_libc_compat: gethostname failed");
+        return 1;
+    }
+    if (sethostname("buildhost", 9) != 0) {
+        puts("cc_libc_compat: sethostname failed");
+        return 1;
+    }
+    if (gethostname(host, sizeof(host)) != 0 || strcmp(host, "buildhost") != 0) {
+        puts("cc_libc_compat: gethostname updated failed");
+        return 1;
+    }
+    if (uname(&uts) != 0 || strcmp(uts.nodename, "buildhost") != 0) {
+        puts("cc_libc_compat: uname updated failed");
+        return 1;
+    }
+    char tiny[4];
+    errno = 0;
+    if (gethostname(tiny, sizeof(tiny)) != -1 || errno != ENAMETOOLONG) {
+        puts("cc_libc_compat: gethostname truncation failed");
+        return 1;
+    }
+    if (sethostname("ristux", 6) != 0) {
+        puts("cc_libc_compat: hostname restore failed");
+        return 1;
+    }
     puts("cc_libc_compat: uname ok");
     return 0;
 }

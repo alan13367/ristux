@@ -138,6 +138,7 @@ The current Linux-like syscall surface is:
 | 137 | `statfs` | Reports filesystem block/inode capacity and availability for a path. |
 | 138 | `fstatfs` | Reports filesystem block/inode capacity and availability for a descriptor. |
 | 160 | `setrlimit` | Updates supported per-process resource limits. |
+| 170 | `sethostname` | Root-only host nodename update used by `uname` and libc `gethostname`. |
 | 186 | `gettid` | Returns the current scheduler thread id; equal to pid until thread groups exist. |
 | 201 | `time` | Seconds since Unix epoch. |
 | 202 | `futex` | Basic `FUTEX_WAIT`/`FUTEX_WAKE` compatibility for uncontended pthread-style users. |
@@ -165,7 +166,8 @@ Unlisted syscall numbers return `-ENOSYS`.
 The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `gettid`, `getppid`, `setsid`, `uname`, `getenv`, `putenv`, `setenv`,
+  `gettid`, `getppid`, `setsid`, `uname`, `gethostname`, `sethostname`,
+  `getenv`, `putenv`, `setenv`,
   `unsetenv`, `clearenv`, `getrlimit`, `setrlimit`, and generic `syscall`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,

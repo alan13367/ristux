@@ -87,6 +87,7 @@
 #define SYS_statfs 137
 #define SYS_fstatfs 138
 #define SYS_setrlimit 160
+#define SYS_sethostname 170
 #define SYS_gettid 186
 #define SYS_time 201
 #define SYS_futex 202

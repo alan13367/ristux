@@ -44,6 +44,8 @@ pid_t getppid(void);
 pid_t getpgrp(void);
 int setpgid(pid_t pid, pid_t pgid);
 pid_t setsid(void);
+int gethostname(char *name, size_t len);
+int sethostname(const char *name, size_t len);
 uid_t getuid(void);
 uid_t geteuid(void);
 gid_t getgid(void);

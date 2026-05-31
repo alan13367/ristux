@@ -111,6 +111,12 @@ fn print_error(prefix: &[u8], value: &[u8]) {
 }
 
 fn print_fields(fields: &[bool; FIELD_COUNT]) -> i32 {
+    let mut uts = sys::UtsName::default();
+    let nodename = if sys::uname(&mut uts as *mut sys::UtsName) >= 0 {
+        uts.field(1)
+    } else {
+        NODENAME
+    };
     let mut printed = false;
     for index in 0..FIELD_COUNT {
         if !fields[index] {
@@ -119,7 +125,12 @@ fn print_fields(fields: &[bool; FIELD_COUNT]) -> i32 {
         if printed && !write_all(1, b" ") {
             return 1;
         }
-        if !write_all(1, field_value(index)) {
+        let value = if index == FIELD_NODENAME {
+            nodename
+        } else {
+            field_value(index)
+        };
+        if !write_all(1, value) {
             return 1;
         }
         printed = true;

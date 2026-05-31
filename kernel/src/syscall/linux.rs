@@ -18,6 +18,7 @@ use crate::{
         frame_allocator::FRAME_SIZE,
     },
     process,
+    sync::spinlock::SpinLock,
     syscall::SyscallInterruptFrame,
     tty,
 };
@@ -108,6 +109,7 @@ pub const NR_rt_sigpending: u64 = 127;
 pub const NR_statfs: u64 = 137;
 pub const NR_fstatfs: u64 = 138;
 pub const NR_setrlimit: u64 = 160;
+pub const NR_sethostname: u64 = 170;
 pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
 pub const NR_futex: u64 = 202;
@@ -194,6 +196,17 @@ const IOV_MAX: usize = 1024;
 const FUTEX_WAIT: i32 = 0;
 const FUTEX_WAKE: i32 = 1;
 const FUTEX_CMD_MASK: i32 = 0x7f;
+const HOSTNAME_MAX: usize = 64;
+
+struct HostnameState {
+    bytes: [u8; HOSTNAME_MAX],
+    len: usize,
+}
+
+static HOSTNAME: SpinLock<HostnameState> = SpinLock::new(HostnameState {
+    bytes: [0; HOSTNAME_MAX],
+    len: 0,
+});
 
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
@@ -356,12 +369,11 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getresgid => linux_getresgid(a0 as usize, a1 as usize, a2 as usize),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
-        NR_rt_sigprocmask => {
-            linux_rt_sigprocmask(a0 as i32, a1 as usize, a2 as usize, a3 as usize)
-        }
+        NR_rt_sigprocmask => linux_rt_sigprocmask(a0 as i32, a1 as usize, a2 as usize, a3 as usize),
         NR_rt_sigpending => linux_rt_sigpending(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
+        NR_sethostname => linux_sethostname(a0 as usize, a1 as usize),
         NR_gettid => Ok(process::current_pid().unwrap_or(0)),
         NR_futex => linux_futex(frame, a0 as usize, a1 as i32, a2 as i32, a3 as usize),
         _ => {
@@ -547,7 +559,13 @@ fn linux_write(
                         return Err(CONTEXT_SWITCHED);
                     }
                 }
-                Err(_) => return if total > 0 { Ok(total as u64) } else { Err(EBADF) },
+                Err(_) => {
+                    return if total > 0 {
+                        Ok(total as u64)
+                    } else {
+                        Err(EBADF)
+                    }
+                }
             }
         }
     }
@@ -861,18 +879,8 @@ fn linux_truncate(path_ptr: usize, len: i64) -> Result<u64, i64> {
         return Err(EINVAL);
     }
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    let fd = process::user_open_options(
-        &path,
-        false,
-        true,
-        false,
-        false,
-        false,
-        false,
-        0,
-        0,
-    )
-    .map_err(map_vfs_error)?;
+    let fd = process::user_open_options(&path, false, true, false, false, false, false, 0, 0)
+        .map_err(map_vfs_error)?;
     let result = linux_ftruncate(fd, len);
     let _ = process::user_close(fd);
     result
@@ -1807,13 +1815,34 @@ fn linux_uname(buf_ptr: usize) -> Result<u64, i64> {
         out[start..start + len].copy_from_slice(&value[..len]);
     }
 
+    let hostname = HOSTNAME.lock();
+    let nodename = if hostname.len == 0 {
+        &b"ristux"[..]
+    } else {
+        &hostname.bytes[..hostname.len]
+    };
     let out = process::write_user_buffer(buf_ptr, FIELD_LEN * FIELD_COUNT).ok_or(EFAULT)?;
     write_field(out, 0, b"Ristux");
-    write_field(out, 1, b"ristux");
+    write_field(out, 1, nodename);
     write_field(out, 2, b"0.1.0");
     write_field(out, 3, b"Ristux kernel");
     write_field(out, 4, b"x86_64");
     write_field(out, 5, b"localdomain");
+    Ok(0)
+}
+
+fn linux_sethostname(name_ptr: usize, len: usize) -> Result<u64, i64> {
+    if process::current_euid() != 0 {
+        return Err(EPERM);
+    }
+    if len == 0 || len > HOSTNAME_MAX {
+        return Err(EINVAL);
+    }
+    let name = process::read_user(name_ptr, len).ok_or(EFAULT)?;
+    let mut hostname = HOSTNAME.lock();
+    hostname.bytes.fill(0);
+    hostname.bytes[..len].copy_from_slice(name);
+    hostname.len = len;
     Ok(0)
 }
 
@@ -2165,13 +2194,7 @@ fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
-fn linux_fchownat(
-    dirfd: i32,
-    path_ptr: usize,
-    uid: u32,
-    gid: u32,
-    flags: i32,
-) -> Result<u64, i64> {
+fn linux_fchownat(dirfd: i32, path_ptr: usize, uid: u32, gid: u32, flags: i32) -> Result<u64, i64> {
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(EINVAL);
     }
@@ -2741,7 +2764,11 @@ fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     } else {
         crate::signal::send(pid as u64, signal)
     };
-    if delivered { Ok(0) } else { Err(ESRCH) }
+    if delivered {
+        Ok(0)
+    } else {
+        Err(ESRCH)
+    }
 }
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
@@ -2785,8 +2812,8 @@ fn linux_rt_sigprocmask(
     }
     let old = process::current_signal_mask().ok_or(ESRCH)?;
     if oldset_ptr != 0 {
-        let out = process::write_user_buffer(oldset_ptr, core::mem::size_of::<u64>())
-            .ok_or(EFAULT)?;
+        let out =
+            process::write_user_buffer(oldset_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
         out.copy_from_slice(&old.to_le_bytes());
     }
     if set_ptr == 0 {

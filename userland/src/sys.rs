@@ -37,6 +37,7 @@ pub const NR_EXECVE: usize = 59;
 pub const NR_EXIT: usize = 60;
 pub const NR_WAIT4: usize = 61;
 pub const NR_KILL: usize = 62;
+pub const NR_UNAME: usize = 63;
 pub const NR_FCNTL: usize = 72;
 pub const NR_GETCWD: usize = 79;
 pub const NR_STATFS: usize = 137;
@@ -55,6 +56,7 @@ pub const NR_SETGROUPS: usize = 116;
 pub const NR_SETRESUID: usize = 117;
 pub const NR_RT_SIGACTION: usize = 13;
 pub const NR_RT_SIGRETURN: usize = 15;
+pub const NR_SETHOSTNAME: usize = 170;
 
 pub const AF_INET: i32 = 2;
 pub const SOCK_STREAM: i32 = 1;
@@ -104,6 +106,30 @@ pub struct StatFs {
     pub f_frsize: u64,
     pub f_flags: u64,
     pub f_spare: [u64; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UtsName {
+    pub bytes: [u8; 65 * 6],
+}
+
+impl Default for UtsName {
+    fn default() -> Self {
+        Self { bytes: [0; 65 * 6] }
+    }
+}
+
+impl UtsName {
+    pub fn field(&self, index: usize) -> &[u8] {
+        let start = index.saturating_mul(65);
+        if start >= self.bytes.len() {
+            return b"";
+        }
+        let field = &self.bytes[start..start + 65];
+        let len = field.iter().position(|byte| *byte == 0).unwrap_or(65);
+        &field[..len]
+    }
 }
 
 impl SockAddrIn {
@@ -203,14 +229,7 @@ pub unsafe fn syscall4(nr: usize, a: usize, b: usize, c: usize, d: usize) -> isi
 }
 
 #[inline]
-pub unsafe fn syscall5(
-    nr: usize,
-    a: usize,
-    b: usize,
-    c: usize,
-    d: usize,
-    e: usize,
-) -> isize {
+pub unsafe fn syscall5(nr: usize, a: usize, b: usize, c: usize, d: usize, e: usize) -> isize {
     let ret: isize;
     unsafe {
         asm!(
@@ -445,7 +464,14 @@ pub fn getcwd(buf: *mut u8, len: usize) -> isize {
 
 #[inline]
 pub fn getdents64(fd: i32, buf: &mut [u8]) -> isize {
-    unsafe { syscall3(NR_GETDENTS64, fd as usize, buf.as_mut_ptr() as usize, buf.len()) }
+    unsafe {
+        syscall3(
+            NR_GETDENTS64,
+            fd as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+        )
+    }
 }
 
 #[inline]
@@ -456,6 +482,16 @@ pub fn statfs(path: *const u8, buf: *mut StatFs) -> isize {
 #[inline]
 pub fn fstatfs(fd: i32, buf: *mut StatFs) -> isize {
     unsafe { syscall2(NR_FSTATFS, fd as usize, buf as usize) }
+}
+
+#[inline]
+pub fn uname(buf: *mut UtsName) -> isize {
+    unsafe { syscall1(NR_UNAME, buf as usize) }
+}
+
+#[inline]
+pub fn sethostname(name: *const u8, len: usize) -> isize {
+    unsafe { syscall2(NR_SETHOSTNAME, name as usize, len) }
 }
 
 #[inline]
@@ -530,7 +566,14 @@ pub fn setgroups(groups: &[u32]) -> isize {
 
 #[inline]
 pub fn rt_sigaction(signum: usize, handler: usize) -> isize {
-    unsafe { syscall3(NR_RT_SIGACTION, signum, &handler as *const usize as usize, 0) }
+    unsafe {
+        syscall3(
+            NR_RT_SIGACTION,
+            signum,
+            &handler as *const usize as usize,
+            0,
+        )
+    }
 }
 
 #[inline]

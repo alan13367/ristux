@@ -125,6 +125,7 @@
 #define SYS_STATFS 137
 #define SYS_FSTATFS 138
 #define SYS_SETRLIMIT 160
+#define SYS_SETHOSTNAME 170
 #define SYS_GETTID 186
 #define SYS_TIME 201
 #define SYS_FUTEX 202
@@ -1039,6 +1040,30 @@ pid_t getppid(void) {
 
 int uname(struct utsname *buf) {
     return (int)syscall_ret(syscall1(SYS_UNAME, (long)buf));
+}
+
+int gethostname(char *name, size_t len) {
+    if (name == NULL || len == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    struct utsname uts;
+    if (uname(&uts) < 0) {
+        return -1;
+    }
+    size_t n = strlen(uts.nodename);
+    if (n >= len) {
+        memcpy(name, uts.nodename, len - 1);
+        name[len - 1] = '\0';
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(name, uts.nodename, n + 1);
+    return 0;
+}
+
+int sethostname(const char *name, size_t len) {
+    return (int)syscall_ret(syscall2(SYS_SETHOSTNAME, (long)name, len));
 }
 
 pid_t getpgrp(void) {
@@ -2969,6 +2994,7 @@ char *strerror(int errnum) {
     case EROFS: return "Read-only file system";
     case EPIPE: return "Broken pipe";
     case ERANGE: return "Result too large";
+    case ENAMETOOLONG: return "File name too long";
     case ENOSYS: return "Function not implemented";
     case EADDRINUSE: return "Address already in use";
     case ECONNRESET: return "Connection reset by peer";

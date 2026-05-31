@@ -64,6 +64,7 @@ file /bin/grep ../build/userland/grep.elf
 file /bin/gzip ../build/userland/gzip.elf
 file /bin/gunzip ../build/userland/gzip.elf
 file /bin/head ../build/userland/head.elf
+file /bin/hostname ../build/userland/hostname.elf
 file /bin/id ../build/userland/id.elf
 file /bin/install ../build/userland/install.elf
 file /bin/kill ../build/userland/kill.elf
@@ -194,6 +195,7 @@ package grep 0.1.0 /bin/grep
 package gzip 0.1.0 /bin/gzip
 package gzip 0.1.0 /bin/gunzip
 package head 0.1.0 /bin/head
+package hostname 0.1.0 /bin/hostname
 package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
 package install 0.1.0 /bin/install

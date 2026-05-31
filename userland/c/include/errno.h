@@ -20,8 +20,9 @@ extern int errno;
 #define ENOTTY 25
 #define EROFS 30
 #define EPIPE 32
-#define ENOSYS 38
 #define ERANGE 34
+#define ENAMETOOLONG 36
+#define ENOSYS 38
 #define EADDRINUSE 98
 #define ECONNRESET 104
 #define EISCONN 106
