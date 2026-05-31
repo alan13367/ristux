@@ -233,6 +233,8 @@ case "$SCENARIO" in
     EXPECTS=(
       "TTY canonical line ready: pty_shell_check"
       "pty_shell_check: shell output ok"
+      "pty_shell_check: ctrl-c ok"
+      "pty_shell_check: ctrl-z ok"
       "pty_shell_check: done"
     )
     ;;

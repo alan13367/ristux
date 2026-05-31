@@ -13,6 +13,7 @@ const SIGTERM: u8 = 15;
 const SIGKILL: u8 = 9;
 const TIOCGPTN: usize = 0x8004_5430;
 const TIOCSPTLCK: usize = 0x4004_5431;
+const TIOCSCTTY: usize = 0x540e;
 
 fn pts_path(number: u32) -> Vec<u8> {
     let mut path = Vec::new();
@@ -58,15 +59,35 @@ fn cleanup_child(pid: isize) {
     let _ = sys::wait4(pid, &mut status as *mut i32, 0, 0);
 }
 
-fn drive_shell(master: i32, child: isize) -> i32 {
-    let command = b"echo pty_shell_check: child shell ok\n";
-    if sys::write(master, command) != command.len() as isize {
+fn path_exists(path: &[u8]) -> bool {
+    let fd = sys::open(path.as_ptr(), 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    let _ = sys::close(fd as i32);
+    true
+}
+
+fn wait_path_exists(path: &[u8]) -> bool {
+    for _ in 0..50 {
+        if path_exists(path) {
+            return true;
+        }
+        let _ = sys::sched_yield();
+    }
+    false
+}
+
+fn write_master(master: i32, bytes: &[u8], child: isize) -> bool {
+    if sys::write(master, bytes) != bytes.len() as isize {
         let _ = sys::write(2, b"pty_shell_check: write failed\n");
         cleanup_child(child);
-        return 1;
+        return false;
     }
+    true
+}
 
-    let mut output = Vec::new();
+fn read_until(master: i32, child: isize, output: &mut Vec<u8>, needle: &[u8]) -> bool {
     let mut buf = [0u8; 128];
     for _ in 0..200 {
         let mut pollfd = sys::PollFd {
@@ -79,18 +100,8 @@ fn drive_shell(master: i32, child: isize) -> i32 {
             let n = sys::read(master, &mut buf);
             if n > 0 {
                 output.extend_from_slice(&buf[..n as usize]);
-                if contains(&output, b"pty_shell_check: child shell ok") {
-                    let _ = sys::write(master, b"exit\n");
-                    let _ = sys::write(1, b"pty_shell_check: shell output ok\n");
-                    let mut status = 0i32;
-                    for _ in 0..20 {
-                        if sys::wait4(child, &mut status as *mut i32, WNOHANG, 0) == child {
-                            return 0;
-                        }
-                        let _ = sys::sched_yield();
-                    }
-                    cleanup_child(child);
-                    return 0;
+                if contains(output, needle) {
+                    return true;
                 }
             }
         }
@@ -99,10 +110,93 @@ fn drive_shell(master: i32, child: isize) -> i32 {
             break;
         }
     }
+    false
+}
 
-    let _ = sys::write(2, b"pty_shell_check: shell output missing\n");
+fn drain_master(master: i32, child: isize, output: &mut Vec<u8>, polls: usize) -> bool {
+    let mut buf = [0u8; 128];
+    for _ in 0..polls {
+        let mut pollfd = sys::PollFd {
+            fd: master,
+            events: sys::POLLIN,
+            revents: 0,
+        };
+        let ready = sys::poll(&mut pollfd as *mut sys::PollFd, 1, 50);
+        if ready > 0 && pollfd.revents & sys::POLLIN != 0 {
+            let n = sys::read(master, &mut buf);
+            if n > 0 {
+                output.extend_from_slice(&buf[..n as usize]);
+            }
+        }
+        let mut status = 0i32;
+        if sys::wait4(child, &mut status as *mut i32, WNOHANG, 0) == child {
+            return false;
+        }
+    }
+    true
+}
+
+fn drive_shell(master: i32, child: isize) -> i32 {
+    let mut output = Vec::new();
+    if !write_master(master, b"printf pty_shell_check:%s-ok\\n shell\n", child)
+        || !read_until(
+            master,
+            child,
+            &mut output,
+            b"pty_shell_check:shell-ok",
+        )
+    {
+        let _ = sys::write(2, b"pty_shell_check: shell output missing\n");
+        cleanup_child(child);
+        return 1;
+    }
+    let _ = sys::write(1, b"pty_shell_check: shell output ok\n");
+
+    if !write_master(master, b"sleep 60\n", child)
+        || !read_until(master, child, &mut output, b"sleep 60")
+        || !drain_master(master, child, &mut output, 10)
+        || !write_master(master, &[0x03], child)
+        || !write_master(master, b"touch /tmp/pty-ctrl-c-ok\n", child)
+        || !read_until(master, child, &mut output, b"touch /tmp/pty-ctrl-c-ok")
+        || !wait_path_exists(b"/tmp/pty-ctrl-c-ok\0")
+    {
+        let _ = sys::write(2, b"pty_shell_check: ctrl-c failed\n");
+        cleanup_child(child);
+        return 1;
+    }
+    let _ = sys::write(1, b"pty_shell_check: ctrl-c ok\n");
+
+    output.clear();
+    if !write_master(master, b"sleep 60\n", child)
+        || !read_until(master, child, &mut output, b"sleep 60")
+        || !drain_master(master, child, &mut output, 10)
+        || !write_master(master, &[0x1a], child)
+        || !read_until(master, child, &mut output, b"] Stopped sleep 60")
+        || !write_master(master, b"jobs\n", child)
+        || !read_until(master, child, &mut output, b"] Stopped sleep 60")
+        || !write_master(master, b"fg\n", child)
+        || !drain_master(master, child, &mut output, 10)
+        || !write_master(master, &[0x03], child)
+        || !write_master(master, b"touch /tmp/pty-ctrl-z-ok\n", child)
+        || !read_until(master, child, &mut output, b"touch /tmp/pty-ctrl-z-ok")
+        || !wait_path_exists(b"/tmp/pty-ctrl-z-ok\0")
+    {
+        let _ = sys::write(2, b"pty_shell_check: ctrl-z failed\n");
+        cleanup_child(child);
+        return 1;
+    }
+    let _ = sys::write(1, b"pty_shell_check: ctrl-z ok\n");
+
+    let _ = sys::write(master, b"exit\n");
+    let mut status = 0i32;
+    for _ in 0..20 {
+        if sys::wait4(child, &mut status as *mut i32, WNOHANG, 0) == child {
+            return 0;
+        }
+        let _ = sys::sched_yield();
+    }
     cleanup_child(child);
-    1
+    0
 }
 
 fn main(_args: &[&[u8]]) -> i32 {
@@ -143,6 +237,7 @@ fn main(_args: &[&[u8]]) -> i32 {
 
     if child == 0 {
         let _ = sys::setsid();
+        let _ = sys::ioctl(slave as i32, TIOCSCTTY, 0);
         let _ = sys::dup2(slave as i32, 0);
         let _ = sys::dup2(slave as i32, 1);
         let _ = sys::dup2(slave as i32, 2);

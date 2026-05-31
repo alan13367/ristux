@@ -228,7 +228,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   quote-aware tokenization, unquoted `*`/`?` globbing, `$name` and `$?`
   expansion, `~` expansion through `HOME`, login profile sourcing from
   `/etc/profile` and `$HOME/.profile`, and `export NAME=value` environment
-  propagation.
+  propagation. PTY-backed shells are covered for Ctrl-C, Ctrl-Z, `jobs`, and
+  `fg` over `/dev/pts/N`.
 - Editor: `/bin/edit` and `/bin/vi` provide a small vi-like line editor with
   append, insert, open-line, delete-line, print, write, forced quit, and
   write-and-quit commands for basic file editing from the console or a PTY.
