@@ -2856,6 +2856,13 @@ fn run_profile(
     let _ = run_script_file(path, jobs, next_job_id, env, last_status);
 }
 
+fn enter_login_home(env: &ShellEnv) {
+    if let Some(home) = env.get(b"HOME") {
+        let path = cstr(home);
+        let _ = sys::chdir(path.as_ptr());
+    }
+}
+
 fn run_login_profiles(
     jobs: &mut Vec<Job>,
     next_job_id: &mut usize,
@@ -2887,6 +2894,7 @@ fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         .unwrap_or(false)
         || args.iter().any(|arg| *arg == b"--login");
     if login_shell {
+        enter_login_home(&env);
         run_login_profiles(&mut jobs, &mut next_job_id, &mut env, &mut last_status);
     }
     let mut script: Option<&[u8]> = None;

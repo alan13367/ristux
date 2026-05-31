@@ -136,10 +136,26 @@ if [[ "$BANNER" != SSH-* ]]; then
 fi
 
 SSH_OUTPUT="$(
-  printf 'echo host_ssh_check\nexit\n' |
-    ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=none \
-      -p "$SSH_PORT" root@127.0.0.1 2>&1 || true
+  (
+    sleep 1
+    printf 'echo host_ssh_check\n'
+    sleep 1
+    printf 'pwd\n'
+    sleep 1
+    printf 'env\n'
+    sleep 1
+    printf 'which sh\n'
+    sleep 1
+    printf 'which vi\n'
+    sleep 1
+    printf 'which cc\n'
+    sleep 1
+    printf 'stty -a\n'
+    sleep 1
+    printf 'exit\n'
+  ) | ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=none \
+    -p "$SSH_PORT" root@127.0.0.1 2>&1 || true
 )"
 if ! grep -q "host_ssh_check" <<<"$SSH_OUTPUT"; then
   kill "$QEMU_PID" 2>/dev/null || true
@@ -147,6 +163,24 @@ if ! grep -q "host_ssh_check" <<<"$SSH_OUTPUT"; then
   echo "$SSH_OUTPUT" >&2
   exit 1
 fi
+for pattern in \
+  "^/root$" \
+  "^USER=root$" \
+  "^HOME=/root$" \
+  "^PATH=.*bin$" \
+  "^/bin/sh$" \
+  "^/bin/vi$" \
+  "^/bin/cc$" \
+  "intr = \\^C;" \
+  "susp = \\^Z;"
+do
+  if ! grep -q "$pattern" <<<"$SSH_OUTPUT"; then
+    kill "$QEMU_PID" 2>/dev/null || true
+    echo "host_ssh_fixture: missing SSH session pattern '$pattern'" >&2
+    echo "$SSH_OUTPUT" >&2
+    exit 1
+  fi
+done
 
 set +e
 wait "$QEMU_PID"

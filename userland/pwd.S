@@ -1,33 +1,42 @@
 .section .text
 .global _start
 _start:
-    mov $10, %rax
+    mov $79, %rax
     lea buffer(%rip), %rdi
     mov $128, %rsi
-    int $0x80
+    syscall
     test %rax, %rax
     js .fail
 
-    mov %rax, %rdx
+    lea buffer(%rip), %r8
+    xor %rdx, %rdx
+.strlen:
+    cmpb $0, (%r8,%rdx,1)
+    je .write_path
+    inc %rdx
+    cmp $128, %rdx
+    jb .strlen
+
+.write_path:
     mov $1, %rax
     mov $1, %rdi
     lea buffer(%rip), %rsi
-    int $0x80
+    syscall
 
     mov $1, %rax
     mov $1, %rdi
     lea nl(%rip), %rsi
     mov $1, %rdx
-    int $0x80
+    syscall
 
-    mov $3, %rax
+    mov $60, %rax
     xor %rdi, %rdi
-    int $0x80
+    syscall
 
 .fail:
-    mov $3, %rax
+    mov $60, %rax
     mov $1, %rdi
-    int $0x80
+    syscall
 
 .halt:
     jmp .halt
