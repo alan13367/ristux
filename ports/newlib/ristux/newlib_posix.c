@@ -16,6 +16,14 @@ static int expect(int condition, const char *message) {
     return 0;
 }
 
+static volatile int saw_usr1;
+
+static void on_usr1(int signum) {
+    if (signum == SIGUSR1) {
+        saw_usr1 = 1;
+    }
+}
+
 static int read_exact(int fd, const char *expected) {
     char buf[32];
     memset(buf, 0, sizeof(buf));
@@ -102,6 +110,24 @@ int main(void) {
         return 1;
     }
     if (expect(kill(getpid(), 0) == 0, "kill self 0")) {
+        return 1;
+    }
+
+    struct sigaction act;
+    struct sigaction oldact;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    act.sa_handler = on_usr1;
+    if (expect(sigaction(SIGUSR1, &act, &oldact) == 0, "sigaction install")) {
+        return 1;
+    }
+    if (expect(kill(getpid(), SIGUSR1) == 0, "kill usr1")) {
+        return 1;
+    }
+    if (expect(saw_usr1 == 1, "handler seen")) {
+        return 1;
+    }
+    if (expect(sigaction(SIGUSR1, NULL, &oldact) == 0 && oldact.sa_handler == on_usr1, "sigaction query")) {
         return 1;
     }
     puts("cc_newlib_posix: signals ok");

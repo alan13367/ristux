@@ -14,6 +14,7 @@
 struct _reent {
     int _errno;
 };
+typedef void (*_sig_func_ptr)(int);
 #endif
 
 #ifndef NULL
@@ -28,7 +29,9 @@ struct _reent {
 #define SYS_FSTAT 5
 #define SYS_LSEEK 8
 #define SYS_BRK 12
+#define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGPROCMASK 14
+#define SYS_RT_SIGRETURN 15
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_DUP 32
@@ -65,6 +68,8 @@ struct _reent {
 #define RISTUX_O_NONBLOCK 04000
 #define RISTUX_O_CLOEXEC 02000000
 #define RISTUX_STAT_SIZE 144
+
+static _sig_func_ptr signal_handlers[64];
 
 static long ristux_syscall0(long n) {
     long ret;
@@ -115,6 +120,129 @@ static long syscall_ret(struct _reent *r, long ret) {
 
 static int public_syscall_ret(long ret) {
     return (int)syscall_ret(NULL, ret);
+}
+
+static int translate_signal_to_ristux(int sig) {
+    if (sig == SIGHUP) {
+        return 1;
+    }
+    if (sig == SIGINT) {
+        return 2;
+    }
+    if (sig == SIGQUIT) {
+        return 3;
+    }
+    if (sig == SIGKILL) {
+        return 9;
+    }
+    if (sig == SIGUSR1) {
+        return 10;
+    }
+#ifdef SIGUSR2
+    if (sig == SIGUSR2) {
+        return 12;
+    }
+#endif
+#ifdef SIGPIPE
+    if (sig == SIGPIPE) {
+        return 13;
+    }
+#endif
+#ifdef SIGALRM
+    if (sig == SIGALRM) {
+        return 14;
+    }
+#endif
+    if (sig == SIGTERM) {
+        return 15;
+    }
+#ifdef SIGCHLD
+    if (sig == SIGCHLD) {
+        return 17;
+    }
+#endif
+#ifdef SIGCONT
+    if (sig == SIGCONT) {
+        return 18;
+    }
+#endif
+#ifdef SIGTSTP
+    if (sig == SIGTSTP) {
+        return 20;
+    }
+#endif
+    return -1;
+}
+
+static int translate_signal_from_ristux(int sig) {
+    switch (sig) {
+    case 1:
+        return SIGHUP;
+    case 2:
+        return SIGINT;
+    case 3:
+        return SIGQUIT;
+    case 9:
+        return SIGKILL;
+    case 10:
+        return SIGUSR1;
+#ifdef SIGUSR2
+    case 12:
+        return SIGUSR2;
+#endif
+#ifdef SIGPIPE
+    case 13:
+        return SIGPIPE;
+#endif
+#ifdef SIGALRM
+    case 14:
+        return SIGALRM;
+#endif
+    case 15:
+        return SIGTERM;
+#ifdef SIGCHLD
+    case 17:
+        return SIGCHLD;
+#endif
+#ifdef SIGCONT
+    case 18:
+        return SIGCONT;
+#endif
+#ifdef SIGTSTP
+    case 20:
+        return SIGTSTP;
+#endif
+    default:
+        return sig;
+    }
+}
+
+static uint64_t translate_sigset_to_ristux(sigset_t set) {
+    uint64_t out = 0;
+    for (int sig = 1; sig < 64; sig++) {
+        if (((uint64_t)set & (1ULL << sig)) == 0) {
+            continue;
+        }
+        int ristux_sig = translate_signal_to_ristux(sig);
+        if (ristux_sig > 0 && ristux_sig < 64) {
+            out |= 1ULL << ristux_sig;
+        }
+    }
+    return out;
+}
+
+static sigset_t translate_sigset_from_ristux(uint64_t set) {
+    uint64_t out = 0;
+    for (int sig = 1; sig < 64; sig++) {
+        if ((set & (1ULL << sig)) == 0) {
+            continue;
+        }
+        int newlib_sig = translate_signal_from_ristux(sig);
+        if (newlib_sig > 0 && newlib_sig < 64) {
+            out |= 1ULL << newlib_sig;
+        }
+    }
+    return (sigset_t)out;
 }
 
 static int translate_open_flags(int flags) {
@@ -236,11 +364,19 @@ int _link_r(struct _reent *r, const char *old_path, const char *new_path) {
 }
 
 int _kill_r(struct _reent *r, int pid, int sig) {
-    return (int)syscall_ret(r, ristux_syscall2(SYS_KILL, pid, sig));
+    int ristux_sig = sig == 0 ? 0 : translate_signal_to_ristux(sig);
+    if (ristux_sig < 0) {
+        return set_errno(r, -EINVAL);
+    }
+    return (int)syscall_ret(r, ristux_syscall2(SYS_KILL, pid, ristux_sig));
 }
 
 int _kill(pid_t pid, int sig) {
-    return public_syscall_ret(ristux_syscall2(SYS_KILL, pid, sig));
+    int ristux_sig = sig == 0 ? 0 : translate_signal_to_ristux(sig);
+    if (ristux_sig < 0) {
+        return set_errno(NULL, -EINVAL);
+    }
+    return public_syscall_ret(ristux_syscall2(SYS_KILL, pid, ristux_sig));
 }
 
 off_t _lseek_r(struct _reent *r, int fd, off_t offset, int whence) {
@@ -315,16 +451,71 @@ static int translate_sigprocmask_how(int how) {
     }
 }
 
+static void signal_trampoline(unsigned long signum, unsigned long frame) {
+    if (signum < 64) {
+        _sig_func_ptr handler = signal_handlers[signum];
+        if (handler != SIG_DFL && handler != SIG_IGN && handler != SIG_ERR) {
+            handler(translate_signal_from_ristux((int)signum));
+        }
+    }
+    (void)ristux_syscall1(SYS_RT_SIGRETURN, (long)frame);
+    for (;;) {
+    }
+}
+
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
+    int ristux_sig = translate_signal_to_ristux(signum);
+    if (ristux_sig <= 0 || ristux_sig >= 64) {
+        return set_errno(NULL, -EINVAL);
+    }
+
+    _sig_func_ptr old = signal_handlers[ristux_sig];
+    if (oldact != NULL) {
+        oldact->sa_handler = old;
+        oldact->sa_mask = 0;
+        oldact->sa_flags = 0;
+    }
+    if (act == NULL) {
+        return 0;
+    }
+
+    signal_handlers[ristux_sig] = act->sa_handler;
+    void *kernel_handler = act->sa_handler == SIG_DFL ? NULL : (void *)signal_trampoline;
+    long ret = syscall_ret(NULL, ristux_syscall3(SYS_RT_SIGACTION, ristux_sig, (long)&kernel_handler, 0));
+    if (ret < 0) {
+        signal_handlers[ristux_sig] = old;
+        return -1;
+    }
+    return 0;
+}
+
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     int ristux_how = translate_sigprocmask_how(how);
     if (ristux_how < 0) {
         return set_errno(NULL, -EINVAL);
     }
-    return public_syscall_ret(ristux_syscall4(SYS_RT_SIGPROCMASK, ristux_how, (long)set, (long)oldset, sizeof(sigset_t)));
+    uint64_t ristux_set = 0;
+    uint64_t old_ristux_set = 0;
+    uint64_t *set_ptr = NULL;
+    uint64_t *oldset_ptr = oldset == NULL ? NULL : &old_ristux_set;
+    if (set != NULL) {
+        ristux_set = translate_sigset_to_ristux(*set);
+        set_ptr = &ristux_set;
+    }
+    int ret = public_syscall_ret(ristux_syscall4(SYS_RT_SIGPROCMASK, ristux_how, (long)set_ptr, (long)oldset_ptr, sizeof(uint64_t)));
+    if (ret == 0 && oldset != NULL) {
+        *oldset = translate_sigset_from_ristux(old_ristux_set);
+    }
+    return ret;
 }
 
 int sigpending(sigset_t *set) {
-    return public_syscall_ret(ristux_syscall2(SYS_RT_SIGPENDING, (long)set, sizeof(sigset_t)));
+    uint64_t ristux_set = 0;
+    int ret = public_syscall_ret(ristux_syscall2(SYS_RT_SIGPENDING, (long)&ristux_set, sizeof(uint64_t)));
+    if (ret == 0 && set != NULL) {
+        *set = translate_sigset_from_ristux(ristux_set);
+    }
+    return ret;
 }
 
 ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t count) {
