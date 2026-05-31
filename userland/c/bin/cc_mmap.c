@@ -102,6 +102,47 @@ int main(void) {
         return 1;
     }
 
+    const char *shared_initial = "shared mmap initial";
+    const char *shared_changed = "shared mmap changed";
+    fd = open("/tmp/cc_mmap_shared.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (fd < 0) {
+        puts("cc_mmap: shared open failed");
+        return 1;
+    }
+    if (write(fd, shared_initial, strlen(shared_initial)) != (ssize_t)strlen(shared_initial)) {
+        puts("cc_mmap: shared write failed");
+        return 1;
+    }
+    char *shared = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (shared == MAP_FAILED) {
+        printf("cc_mmap: shared mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    memcpy(shared, shared_changed, strlen(shared_changed));
+    if (msync(shared, 4096, MS_SYNC) < 0) {
+        printf("cc_mmap: msync failed errno=%d\n", errno);
+        return 1;
+    }
+    if (munmap(shared, 4096) < 0) {
+        puts("cc_mmap: shared munmap failed");
+        return 1;
+    }
+    fd = open("/tmp/cc_mmap_shared.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared reopen failed");
+        return 1;
+    }
+    char shared_buf[32];
+    int shared_read = read(fd, shared_buf, sizeof(shared_buf));
+    close(fd);
+    if (shared_read < (int)strlen(shared_changed) ||
+        memcmp(shared_buf, shared_changed, strlen(shared_changed)) != 0) {
+        puts("cc_mmap: shared contents failed");
+        return 1;
+    }
+    puts("cc_mmap: shared ok");
+
     puts("cc_mmap: done");
     return 0;
 }

@@ -55,6 +55,15 @@ struct TimedWait {
     deadline_ms: u64,
 }
 
+#[derive(Clone, Copy)]
+struct SharedMapping {
+    addr: usize,
+    len: usize,
+    file_offset: usize,
+    vfs_fd: usize,
+    writable: bool,
+}
+
 pub struct Process {
     pub pid: Pid,
     pub parent: Option<Pid>,
@@ -75,6 +84,7 @@ pub struct Process {
     rlimit_nofile_max: u64,
     fds: Vec<FdEntry>,
     socket_handles: Vec<usize>,
+    shared_mappings: Vec<SharedMapping>,
     timed_wait: Option<TimedWait>,
     next_fd: usize,
     pub entry: u64,
@@ -156,6 +166,7 @@ impl Process {
             rlimit_nofile_max: MAX_FDS as u64,
             fds: Vec::new(),
             socket_handles: Vec::new(),
+            shared_mappings: Vec::new(),
             timed_wait: None,
             next_fd: 3,
             entry: 0,
@@ -380,6 +391,7 @@ impl Process {
     }
 
     fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, elf::ElfError> {
+        self.flush_and_close_shared_mappings();
         let old = core::mem::replace(
             &mut self.address_space,
             AddressSpace::new_kernel_clone().map_err(|_| elf::ElfError::Unsupported)?,
@@ -494,7 +506,116 @@ impl Process {
         }
     }
 
+    fn flush_shared_mappings_range(
+        &mut self,
+        addr: usize,
+        len: usize,
+    ) -> Result<(), fs::vfs::VfsError> {
+        if len == 0 || current_pid() != Some(self.pid) {
+            return Ok(());
+        }
+        let Some(range_end) = addr.checked_add(len) else {
+            return Err(fs::vfs::VfsError::BadFd);
+        };
+        for mapping in &self.shared_mappings {
+            if !mapping.writable {
+                continue;
+            }
+            let mapping_end = mapping.addr.saturating_add(mapping.len);
+            let start = cmp::max(addr, mapping.addr);
+            let end = cmp::min(range_end, mapping_end);
+            if start >= end {
+                continue;
+            }
+            if !self.allows(start, end - start) {
+                return Err(fs::vfs::VfsError::BadFd);
+            }
+            let file_offset = mapping.file_offset + (start - mapping.addr);
+            fs::lseek(mapping.vfs_fd, file_offset as isize, 0)?;
+            let bytes = unsafe { slice::from_raw_parts(start as *const u8, end - start) };
+            let mut written = 0usize;
+            while written < bytes.len() {
+                let count = fs::write(mapping.vfs_fd, &bytes[written..])?;
+                if count == 0 {
+                    return Err(fs::vfs::VfsError::BadFd);
+                }
+                written += count;
+            }
+        }
+        Ok(())
+    }
+
+    fn discard_shared_mappings_range(&mut self, addr: usize, len: usize) {
+        let Some(range_end) = addr.checked_add(len) else {
+            return;
+        };
+        let mut retained = Vec::new();
+        for mapping in core::mem::take(&mut self.shared_mappings) {
+            let mapping_end = mapping.addr.saturating_add(mapping.len);
+            let start = cmp::max(addr, mapping.addr);
+            let end = cmp::min(range_end, mapping_end);
+            if start >= end {
+                retained.push(mapping);
+                continue;
+            }
+            if mapping.addr < start {
+                if let Ok(dup) = fs::duplicate_fd(mapping.vfs_fd) {
+                    retained.push(SharedMapping {
+                        addr: mapping.addr,
+                        len: start - mapping.addr,
+                        file_offset: mapping.file_offset,
+                        vfs_fd: dup,
+                        writable: mapping.writable,
+                    });
+                }
+            }
+            if end < mapping_end {
+                if let Ok(dup) = fs::duplicate_fd(mapping.vfs_fd) {
+                    retained.push(SharedMapping {
+                        addr: end,
+                        len: mapping_end - end,
+                        file_offset: mapping.file_offset + (end - mapping.addr),
+                        vfs_fd: dup,
+                        writable: mapping.writable,
+                    });
+                }
+            }
+            let _ = fs::close(mapping.vfs_fd);
+        }
+        self.shared_mappings = retained;
+    }
+
+    fn register_shared_mapping(
+        &mut self,
+        addr: usize,
+        len: usize,
+        vfs_fd: usize,
+        file_offset: usize,
+        writable: bool,
+    ) -> Result<(), fs::vfs::VfsError> {
+        let dup = fs::duplicate_fd(vfs_fd)?;
+        self.shared_mappings.push(SharedMapping {
+            addr,
+            len,
+            file_offset,
+            vfs_fd: dup,
+            writable,
+        });
+        Ok(())
+    }
+
+    fn flush_and_close_shared_mappings(&mut self) {
+        let mappings = self.shared_mappings.clone();
+        for mapping in &mappings {
+            let _ = self.flush_shared_mappings_range(mapping.addr, mapping.len);
+        }
+        for mapping in core::mem::take(&mut self.shared_mappings) {
+            let _ = fs::close(mapping.vfs_fd);
+        }
+    }
+
     fn destroy(&mut self) {
+        self.flush_and_close_shared_mappings();
         for entry in &self.fds {
             let _ = fs::close(entry.vfs_fd);
         }
@@ -590,6 +711,7 @@ impl ProcessTable {
             if was_current {
                 process.address_space.activate();
             }
+            process.flush_and_close_shared_mappings();
             for entry in &process.fds {
                 let _ = fs::close(entry.vfs_fd);
             }
@@ -738,6 +860,10 @@ impl Process {
                 let _ = table.duplicate(*handle);
             });
         }
+        let mut shared_mappings = self.shared_mappings.clone();
+        for mapping in &mut shared_mappings {
+            mapping.vfs_fd = fs::duplicate_fd(mapping.vfs_fd).ok()?;
+        }
         Some(Self {
             pid: self.pid,
             parent: self.parent,
@@ -758,6 +884,7 @@ impl Process {
             rlimit_nofile_max: self.rlimit_nofile_max,
             fds,
             socket_handles,
+            shared_mappings,
             timed_wait: None,
             next_fd: self.next_fd,
             entry: self.entry,
@@ -2147,15 +2274,44 @@ pub fn mmap_anonymous(hint: usize, len: usize, protection: UserProtection) -> Re
 
 pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
     with_current(|p| {
+        p.flush_shared_mappings_range(addr, len).map_err(|_| ())?;
         p.address_space
             .map_fixed(addr, len, protection.page_flags())
-            .map_err(|_| ())
+            .map_err(|_| ())?;
+        p.discard_shared_mappings_range(addr, len);
+        Ok(addr)
     })
     .ok_or(())?
 }
 
 pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
-    with_current(|p| p.address_space.unmap_user_range(addr, len).map_err(|_| ())).ok_or(())?
+    with_current(|p| {
+        p.flush_shared_mappings_range(addr, len).map_err(|_| ())?;
+        p.address_space
+            .unmap_user_range(addr, len)
+            .map_err(|_| ())?;
+        p.discard_shared_mappings_range(addr, len);
+        Ok(())
+    })
+    .ok_or(())?
+}
+
+pub fn register_shared_mapping(
+    addr: usize,
+    len: usize,
+    vfs_fd: usize,
+    file_offset: usize,
+    writable: bool,
+) -> Result<(), ()> {
+    with_current(|p| {
+        p.register_shared_mapping(addr, len, vfs_fd, file_offset, writable)
+            .map_err(|_| ())
+    })
+    .ok_or(())?
+}
+
+pub fn msync(addr: usize, len: usize) -> Result<(), ()> {
+    with_current(|p| p.flush_shared_mappings_range(addr, len).map_err(|_| ())).ok_or(())?
 }
 
 pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), ()> {

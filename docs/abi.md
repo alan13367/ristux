@@ -65,7 +65,7 @@ The current Linux-like syscall surface is:
 | 6 | `lstat` | Symlink metadata without final-target traversal. |
 | 7 | `poll` | Readiness for regular files, TTY, pipes, and sockets. |
 | 8 | `lseek` | Regular file offsets. |
-| 9 | `mmap` | Anonymous and private file-backed mappings. |
+| 9 | `mmap` | Anonymous, private file-backed, and shared file-backed mappings. |
 | 10 | `mprotect` | No-access/read/read-write page permission changes. |
 | 11 | `munmap` | Unmaps page-aligned mmap ranges. |
 | 12 | `brk` | Process heap break used by the in-tree malloc. |
@@ -81,6 +81,7 @@ The current Linux-like syscall surface is:
 | 23 | `select` | `fd_set` readiness over the same TTY, pipe, file, and socket backend as `poll`. |
 | 22 | `pipe` | Returns two descriptors in an `int[2]`. |
 | 24 | `sched_yield` | Yields to the scheduler. |
+| 26 | `msync` | Writes dirty `MAP_SHARED` file-backed pages back to the mapped file. |
 | 32 | `dup` | Duplicates a descriptor to the next free slot. |
 | 33 | `dup2` | Duplicates a descriptor to a requested slot. |
 | 35 | `nanosleep` | Timer-backed sleep. |
@@ -243,7 +244,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `netdb.h`, `gethostbyname`, `getaddrinfo`, `freeaddrinfo`, and
   `gai_strerror`; the resolver reads `/etc/resolv.conf` and issues UDP DNS
   A-record queries.
-- Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `brk`, `sbrk`, `malloc`,
+- Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `msync`, `brk`, `sbrk`, `malloc`,
   `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
   `printf`, `vprintf`.
@@ -302,10 +303,10 @@ These are explicit non-guarantees of the current ABI:
 
 - User stacks start with one mapped page and grow downward on page faults within
   a 1 MiB stack region. The lowest page is an unmapped guard page.
-- `mmap` currently supports `PROT_NONE`, read-only, and read-write
-  `MAP_PRIVATE` anonymous mappings, `MAP_FIXED` replacements inside the mmap
-  arena, and private file-backed reads.
-  `MAP_SHARED` and demand paging are not part of the contract yet.
+- `mmap` currently supports `PROT_NONE`, read-only, and read-write anonymous
+  mappings, `MAP_FIXED` replacements inside the mmap arena, private file-backed
+  reads, and file-backed `MAP_SHARED` writeback via `msync` or unmap. Demand
+  paging is not part of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
 - The libc is a Ristux foundation layer, not a complete musl/newlib port yet.
 - Socket coverage is enough for the current TCP/UDP fixtures, not a complete

@@ -66,6 +66,7 @@
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_SELECT 23
+#define SYS_MSYNC 26
 #define SYS_NANOSLEEP 35
 #define SYS_DUP 32
 #define SYS_DUP2 33
@@ -1084,6 +1085,10 @@ int munmap(void *addr, size_t length) {
 
 int mprotect(void *addr, size_t length, int prot) {
     return (int)syscall_ret(syscall3(SYS_MPROTECT, (long)addr, (long)length, prot));
+}
+
+int msync(void *addr, size_t length, int flags) {
+    return (int)syscall_ret(syscall3(SYS_MSYNC, (long)addr, (long)length, flags));
 }
 
 pid_t fork(void) {

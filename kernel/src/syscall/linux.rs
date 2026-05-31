@@ -48,6 +48,7 @@ pub const NR_access: u64 = 21;
 pub const NR_pipe: u64 = 22;
 pub const NR_select: u64 = 23;
 pub const NR_sched_yield: u64 = 24;
+pub const NR_msync: u64 = 26;
 pub const NR_dup: u64 = 32;
 pub const NR_dup2: u64 = 33;
 pub const NR_nanosleep: u64 = 35;
@@ -189,9 +190,13 @@ const SETTABLE_STATUS_FLAGS: u32 = O_APPEND | O_NONBLOCK;
 const PROT_READ: i32 = 0x1;
 const PROT_WRITE: i32 = 0x2;
 const PROT_EXEC: i32 = 0x4;
+const MAP_SHARED: i32 = 0x01;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_FIXED: i32 = 0x10;
 const MAP_ANONYMOUS: i32 = 0x20;
+const MS_ASYNC: i32 = 0x1;
+const MS_INVALIDATE: i32 = 0x2;
+const MS_SYNC: i32 = 0x4;
 const POLLIN: i16 = 0x001;
 const POLLOUT: i16 = 0x004;
 const POLLERR: i16 = 0x008;
@@ -256,6 +261,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             a4 as usize,
         ),
         NR_sched_yield => linux_sched_yield(frame),
+        NR_msync => linux_msync(a0 as usize, a1 as usize, a2 as i32),
         NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
         NR_dup3 => linux_dup3(a0 as usize, a1 as usize, a2 as u32),
@@ -2369,7 +2375,12 @@ fn linux_mmap(
     offset: usize,
 ) -> Result<u64, i64> {
     let protection = mmap_protection(prot)?;
-    if flags & MAP_PRIVATE == 0 {
+    if flags & !(MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS) != 0 {
+        return Err(EINVAL);
+    }
+    let shared = flags & MAP_SHARED != 0;
+    let private = flags & MAP_PRIVATE != 0;
+    if shared == private {
         return Err(EINVAL);
     }
     let length = page_aligned_len(len)?;
@@ -2377,13 +2388,15 @@ fn linux_mmap(
         return Err(ENOMEM);
     }
 
-    let file_bytes = if flags & MAP_ANONYMOUS != 0 {
+    let anonymous = flags & MAP_ANONYMOUS != 0;
+    let file_mapping = if anonymous {
         None
     } else {
         if fd < 0 || offset % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
-        Some(read_mmap_file(fd as usize, length, offset)?)
+        let vfs_fd = process::user_vfs_fd(fd as usize).ok_or(EBADF)?;
+        Some((vfs_fd, read_mmap_file_from_vfs_dup(vfs_fd, length, offset)?))
     };
 
     let mapped = if flags & MAP_FIXED != 0 {
@@ -2394,10 +2407,17 @@ fn linux_mmap(
     } else {
         process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(|_| ENOMEM)?
     };
-    if let Some(bytes) = file_bytes {
+    if let Some((vfs_fd, bytes)) = file_mapping {
         if !bytes.is_empty() {
             let out = process::write_user_buffer(mapped, bytes.len()).ok_or(EFAULT)?;
             out.copy_from_slice(&bytes);
+        }
+        if shared {
+            let writable = prot & PROT_WRITE != 0;
+            if process::register_shared_mapping(mapped, length, vfs_fd, offset, writable).is_err() {
+                let _ = process::munmap(mapped, length);
+                return Err(EINVAL);
+            }
         }
     }
     if protection != UserProtection::ReadWrite {
@@ -2425,6 +2445,14 @@ fn linux_munmap(addr: usize, len: usize) -> Result<u64, i64> {
     process::munmap(addr, length).map(|_| 0).map_err(|_| EINVAL)
 }
 
+fn linux_msync(addr: usize, len: usize, flags: i32) -> Result<u64, i64> {
+    if addr % FRAME_SIZE != 0 || flags & !(MS_ASYNC | MS_INVALIDATE | MS_SYNC) != 0 {
+        return Err(EINVAL);
+    }
+    let length = page_aligned_len(len)?;
+    process::msync(addr, length).map(|_| 0).map_err(|_| EINVAL)
+}
+
 fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
     if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
         return Err(EINVAL);
@@ -2447,8 +2475,7 @@ fn page_aligned_len(len: usize) -> Result<usize, i64> {
         .ok_or(ENOMEM)
 }
 
-fn read_mmap_file(fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
-    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+fn read_mmap_file_from_vfs_dup(vfs_fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
     let dup = fs::duplicate_fd(vfs_fd).map_err(map_vfs_error)?;
     let result = read_mmap_file_from_vfs(dup, len, offset);
     let _ = fs::close(dup);
