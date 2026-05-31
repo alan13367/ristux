@@ -31,6 +31,34 @@ int main(void) {
     }
     puts("cc_mmap: munmap ok");
 
+    char *fixed_base = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fixed_base == MAP_FAILED) {
+        printf("cc_mmap: fixed base failed errno=%d\n", errno);
+        return 1;
+    }
+    fixed_base[0] = 'o';
+    char *fixed = mmap(fixed_base, 4096, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (fixed != fixed_base) {
+        printf("cc_mmap: fixed failed errno=%d\n", errno);
+        return 1;
+    }
+    if (fixed[0] != 0) {
+        puts("cc_mmap: fixed replacement failed");
+        return 1;
+    }
+    fixed[0] = 'f';
+    if (fixed[0] != 'f') {
+        puts("cc_mmap: fixed write failed");
+        return 1;
+    }
+    if (munmap(fixed, 4096) < 0) {
+        puts("cc_mmap: fixed munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: fixed ok");
+
     const char *payload = "file backed mmap ok";
     int fd = open("/tmp/cc_mmap.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
     if (fd < 0) {

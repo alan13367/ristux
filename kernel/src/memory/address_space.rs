@@ -180,6 +180,31 @@ impl AddressSpace {
         Ok(base)
     }
 
+    pub fn map_fixed(
+        &mut self,
+        addr: usize,
+        len: usize,
+        flags: PageFlags,
+    ) -> Result<usize, PagingError> {
+        let len = paging::align_up(len, FRAME_SIZE);
+        if addr % FRAME_SIZE != 0 || len == 0 {
+            return Err(PagingError::NotMapped);
+        }
+        let end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
+        if addr < USER_MMAP_START || end > USER_MMAP_END || addr >= end {
+            return Err(PagingError::NotMapped);
+        }
+        self.unmap_user_range(addr, len)?;
+        for page in (addr..end).step_by(FRAME_SIZE) {
+            self.map_zero_page_with_flags(page, flags)?;
+        }
+        self.mmap_next = end.min(USER_MMAP_END);
+        if self.mmap_next >= USER_MMAP_END {
+            self.mmap_next = USER_MMAP_START;
+        }
+        Ok(addr)
+    }
+
     pub fn unmap_user_range(&mut self, addr: usize, len: usize) -> Result<(), PagingError> {
         let start = paging::align_down(addr, FRAME_SIZE);
         let end = paging::align_up(

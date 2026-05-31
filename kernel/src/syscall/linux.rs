@@ -1889,7 +1889,7 @@ fn linux_mmap(
     offset: usize,
 ) -> Result<u64, i64> {
     let writable = mmap_writable(prot)?;
-    if flags & MAP_FIXED != 0 || flags & MAP_PRIVATE == 0 {
+    if flags & MAP_PRIVATE == 0 {
         return Err(EINVAL);
     }
     let length = page_aligned_len(len)?;
@@ -1906,7 +1906,14 @@ fn linux_mmap(
         Some(read_mmap_file(fd as usize, length, offset)?)
     };
 
-    let mapped = process::mmap_anonymous(addr, length, true).map_err(|_| ENOMEM)?;
+    let mapped = if flags & MAP_FIXED != 0 {
+        if addr == 0 || addr % FRAME_SIZE != 0 {
+            return Err(EINVAL);
+        }
+        process::mmap_fixed(addr, length, true).map_err(|_| EINVAL)?
+    } else {
+        process::mmap_anonymous(addr, length, true).map_err(|_| ENOMEM)?
+    };
     if let Some(bytes) = file_bytes {
         if !bytes.is_empty() {
             let out = process::write_user_buffer(mapped, bytes.len()).ok_or(EFAULT)?;

@@ -257,9 +257,9 @@ These are explicit non-guarantees of the current ABI:
 
 - User stacks start with one mapped page and grow downward on page faults within
   a 1 MiB stack region. The lowest page is an unmapped guard page.
-- `mmap` currently supports `MAP_PRIVATE` anonymous mappings and private
-  file-backed reads. `MAP_SHARED`, `MAP_FIXED`, and demand paging are not part
-  of the contract yet.
+- `mmap` currently supports `MAP_PRIVATE` anonymous mappings, `MAP_FIXED`
+  replacements inside the mmap arena, and private file-backed reads.
+  `MAP_SHARED` and demand paging are not part of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
 - The libc is a Ristux foundation layer, not a complete musl/newlib port yet.
 - Socket coverage is enough for the current TCP/UDP fixtures, not a complete

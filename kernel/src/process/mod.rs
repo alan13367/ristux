@@ -2101,6 +2101,15 @@ pub fn mmap_anonymous(hint: usize, len: usize, writable: bool) -> Result<usize, 
     .ok_or(())?
 }
 
+pub fn mmap_fixed(addr: usize, len: usize, writable: bool) -> Result<usize, ()> {
+    with_current(|p| {
+        p.address_space
+            .map_fixed(addr, len, user_page_flags(writable))
+            .map_err(|_| ())
+    })
+    .ok_or(())?
+}
+
 pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
     with_current(|p| p.address_space.unmap_user_range(addr, len).map_err(|_| ())).ok_or(())?
 }
