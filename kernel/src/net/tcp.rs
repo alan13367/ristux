@@ -15,6 +15,7 @@ pub const TCP_FLAG_ACK: u8 = 0x10;
 const TCP_RETRANSMIT_TICKS: u64 = 25;
 const TCP_MAX_RETRANSMITS: u8 = 3;
 const TCP_RECV_WINDOW: u16 = 4096;
+const TCP_TIME_WAIT_TICKS: u64 = 100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TcpState {
@@ -26,6 +27,7 @@ pub enum TcpState {
     CloseWait,
     FinWait1,
     FinWait2,
+    Closing,
     LastAck,
     TimeWait,
 }
@@ -80,6 +82,7 @@ pub struct TcpSocket {
     pub window: u16,
     pub rx_buffer: VecDeque<u8>,
     pub error: Option<TcpError>,
+    time_wait_deadline_tick: Option<u64>,
 }
 
 impl TcpSocket {
@@ -94,11 +97,13 @@ impl TcpSocket {
             window: TCP_RECV_WINDOW,
             rx_buffer: VecDeque::new(),
             error: None,
+            time_wait_deadline_tick: None,
         }
     }
 
     pub fn listen(&mut self) {
         self.state = TcpState::Listen;
+        self.time_wait_deadline_tick = None;
     }
 
     fn established(&self) -> bool {
@@ -182,6 +187,7 @@ impl TcpStack {
             socket.remote_port = remote_port;
             socket.state = TcpState::SynSent;
             socket.error = None;
+            socket.time_wait_deadline_tick = None;
             let seq = socket.seq;
             let outbound = build_outbound(socket, TCP_FLAG_SYN, &[]);
             let span = tcp_sequence_span(TCP_FLAG_SYN, 0);
@@ -266,6 +272,7 @@ impl TcpStack {
                 }
             };
             socket.state = next_state;
+            socket.time_wait_deadline_tick = None;
             let seq = socket.seq;
             let outbound = build_outbound(socket, TCP_FLAG_ACK | TCP_FLAG_FIN, &[]);
             let span = tcp_sequence_span(TCP_FLAG_ACK | TCP_FLAG_FIN, 0);
@@ -314,6 +321,7 @@ impl TcpStack {
             if socket.state != TcpState::Listen {
                 socket.state = TcpState::Closed;
                 socket.error = Some(TcpError::ConnectionReset);
+                socket.time_wait_deadline_tick = None;
                 self.remove_retransmits(packet.src_ip, packet.src_port, packet.dst_port);
                 return true;
             }
@@ -332,6 +340,7 @@ impl TcpStack {
                     socket.seq = packet.ack;
                     socket.state = TcpState::Established;
                     socket.error = None;
+                    socket.time_wait_deadline_tick = None;
                     outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
                 }
             }
@@ -355,29 +364,26 @@ impl TcpStack {
                 outbound = handle_established_like(socket, &packet, TcpState::CloseWait);
             }
             TcpState::FinWait1 => {
-                if packet.flags & TCP_FLAG_ACK != 0 {
-                    socket.state = TcpState::FinWait2;
-                }
-                if packet.flags & TCP_FLAG_FIN != 0 {
-                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
-                    socket.state = TcpState::TimeWait;
-                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
-                }
+                outbound = handle_fin_wait1(socket, &packet);
             }
             TcpState::FinWait2 => {
-                if packet.flags & TCP_FLAG_FIN != 0 {
-                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
-                    socket.state = TcpState::TimeWait;
-                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
-                }
+                outbound = handle_fin_wait2(socket, &packet);
+            }
+            TcpState::Closing => {
+                outbound = handle_closing(socket, &packet);
             }
             TcpState::LastAck => {
-                if packet.flags & TCP_FLAG_ACK != 0 {
+                if packet.flags & TCP_FLAG_FIN != 0 {
+                    outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
+                }
+                if fin_acknowledged(socket, &packet) {
                     socket.state = TcpState::Closed;
+                    socket.time_wait_deadline_tick = None;
                 }
             }
             TcpState::TimeWait => {
                 if packet.flags & TCP_FLAG_FIN != 0 {
+                    enter_time_wait(socket);
                     outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
                 }
             }
@@ -406,28 +412,17 @@ impl TcpStack {
             TcpState::Established => handle_established_like(socket, &packet, TcpState::CloseWait),
             TcpState::CloseWait => handle_established_like(socket, &packet, TcpState::CloseWait),
             TcpState::FinWait1 => {
-                if packet.flags & TCP_FLAG_ACK != 0 {
-                    socket.state = TcpState::FinWait2;
-                }
-                if packet.flags & TCP_FLAG_FIN != 0 {
-                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
-                    socket.state = TcpState::TimeWait;
-                    Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
-                } else {
-                    None
-                }
+                handle_fin_wait1(socket, &packet)
             }
             TcpState::FinWait2 => {
-                if packet.flags & TCP_FLAG_FIN != 0 {
-                    socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32 + 1);
-                    socket.state = TcpState::TimeWait;
-                    Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
-                } else {
-                    None
-                }
+                handle_fin_wait2(socket, &packet)
+            }
+            TcpState::Closing => {
+                handle_closing(socket, &packet)
             }
             TcpState::TimeWait => {
                 if packet.flags & TCP_FLAG_FIN != 0 {
+                    enter_time_wait(socket);
                     Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
                 } else {
                     None
@@ -442,6 +437,7 @@ impl TcpStack {
     }
 
     pub fn poll_retransmit(&mut self, now_tick: u64) -> bool {
+        self.expire_time_wait(now_tick);
         let mut retransmitted = false;
         let mut failed = Vec::new();
         for entry in self.retransmits.iter_mut() {
@@ -564,6 +560,21 @@ impl TcpStack {
         }) {
             socket.state = TcpState::Closed;
             socket.error = Some(error);
+            socket.time_wait_deadline_tick = None;
+        }
+    }
+
+    fn expire_time_wait(&mut self, now_tick: u64) {
+        for socket in self.sockets.iter_mut() {
+            if socket.state == TcpState::TimeWait
+                && socket
+                    .time_wait_deadline_tick
+                    .map(|deadline| deadline <= now_tick)
+                    .unwrap_or(false)
+            {
+                socket.state = TcpState::Closed;
+                socket.time_wait_deadline_tick = None;
+            }
         }
     }
 }
@@ -597,6 +608,90 @@ fn handle_established_like(
     } else {
         None
     }
+}
+
+fn handle_fin_wait1(socket: &mut TcpSocket, packet: &TcpPacket) -> Option<TcpOutbound> {
+    let fin_acked = fin_acknowledged(socket, packet);
+    let mut ack_needed = accept_in_order_payload(socket, packet);
+    if consume_remote_fin(socket, packet) {
+        if fin_acked {
+            enter_time_wait(socket);
+        } else {
+            socket.state = TcpState::Closing;
+        }
+        ack_needed = true;
+    } else if fin_acked {
+        socket.state = TcpState::FinWait2;
+    }
+    if ack_needed {
+        Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+    } else {
+        None
+    }
+}
+
+fn handle_fin_wait2(socket: &mut TcpSocket, packet: &TcpPacket) -> Option<TcpOutbound> {
+    let mut ack_needed = accept_in_order_payload(socket, packet);
+    if consume_remote_fin(socket, packet) {
+        enter_time_wait(socket);
+        ack_needed = true;
+    }
+    if ack_needed {
+        Some(build_outbound(socket, TCP_FLAG_ACK, &[]))
+    } else {
+        None
+    }
+}
+
+fn handle_closing(socket: &mut TcpSocket, packet: &TcpPacket) -> Option<TcpOutbound> {
+    let mut outbound = None;
+    if packet.flags & TCP_FLAG_FIN != 0 {
+        outbound = Some(build_outbound(socket, TCP_FLAG_ACK, &[]));
+    }
+    if fin_acknowledged(socket, packet) {
+        enter_time_wait(socket);
+    }
+    outbound
+}
+
+fn accept_in_order_payload(socket: &mut TcpSocket, packet: &TcpPacket) -> bool {
+    if packet.payload.is_empty() {
+        return false;
+    }
+    if packet.seq == socket.ack {
+        let accepted = packet.payload.len().min(socket.recv_window_available());
+        if accepted > 0 {
+            socket.ack = packet.seq.wrapping_add(accepted as u32);
+            socket.rx_buffer.extend(packet.payload[..accepted].iter().copied());
+        }
+    }
+    true
+}
+
+fn consume_remote_fin(socket: &mut TcpSocket, packet: &TcpPacket) -> bool {
+    if packet.flags & TCP_FLAG_FIN == 0 {
+        return false;
+    }
+    let fin_seq = packet.seq.wrapping_add(packet.payload.len() as u32);
+    if fin_seq != socket.ack {
+        return false;
+    }
+    socket.ack = fin_seq.wrapping_add(1);
+    true
+}
+
+fn fin_acknowledged(socket: &TcpSocket, packet: &TcpPacket) -> bool {
+    packet.flags & TCP_FLAG_ACK != 0 && seq_at_or_after(packet.ack, socket.seq)
+}
+
+fn seq_at_or_after(seq: u32, checkpoint: u32) -> bool {
+    (seq.wrapping_sub(checkpoint) as i32) >= 0
+}
+
+fn enter_time_wait(socket: &mut TcpSocket) {
+    socket.state = TcpState::TimeWait;
+    socket.time_wait_deadline_tick =
+        Some(crate::time::monotonic_ticks().saturating_add(TCP_TIME_WAIT_TICKS));
 }
 
 fn build_reset_for_unmatched(packet: &TcpPacket) -> TcpOutbound {
@@ -820,6 +915,150 @@ pub fn self_test() {
         panic!("tcp receive window reopen self-test failed");
     }
     let _ = stack.send(socket, b"GET / HTTP/1.0\r\n\r\n");
+
+    let mut close_stack = TcpStack::new();
+    let active = close_stack.open();
+    {
+        let socket = &mut close_stack.sockets[active];
+        socket.remote_ip = Ipv4Addr([10, 0, 2, 2]);
+        socket.remote_port = 443;
+        socket.state = TcpState::Established;
+        socket.seq = 5000;
+        socket.ack = 9000;
+    }
+    close_stack.close(active).expect("tcp active close");
+    let _ = close_stack.pop_outbound().expect("tcp active FIN missing");
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 2]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 443,
+        dst_port: close_stack.sockets[active].local_port,
+        seq: 9000,
+        ack: 5000,
+        flags: TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[active].state != TcpState::FinWait1 {
+        panic!("tcp close accepted partial FIN ACK");
+    }
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 2]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 443,
+        dst_port: close_stack.sockets[active].local_port,
+        seq: 9000,
+        ack: 5001,
+        flags: TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[active].state != TcpState::FinWait2 {
+        panic!("tcp close did not enter FIN_WAIT_2");
+    }
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 2]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 443,
+        dst_port: close_stack.sockets[active].local_port,
+        seq: 9000,
+        ack: 5001,
+        flags: TCP_FLAG_FIN | TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[active].state != TcpState::TimeWait {
+        panic!("tcp close did not enter TIME_WAIT");
+    }
+    let _ = close_stack.pop_outbound().expect("tcp FIN ACK missing");
+    close_stack.poll_retransmit(
+        crate::time::monotonic_ticks().saturating_add(TCP_TIME_WAIT_TICKS + 1),
+    );
+    if close_stack.sockets[active].state != TcpState::Closed {
+        panic!("tcp TIME_WAIT did not expire");
+    }
+
+    let simultaneous = close_stack.open();
+    {
+        let socket = &mut close_stack.sockets[simultaneous];
+        socket.remote_ip = Ipv4Addr([10, 0, 2, 3]);
+        socket.remote_port = 444;
+        socket.state = TcpState::Established;
+        socket.seq = 7000;
+        socket.ack = 3000;
+    }
+    close_stack
+        .close(simultaneous)
+        .expect("tcp simultaneous close");
+    let _ = close_stack
+        .pop_outbound()
+        .expect("tcp simultaneous FIN missing");
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 3]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 444,
+        dst_port: close_stack.sockets[simultaneous].local_port,
+        seq: 3000,
+        ack: 7000,
+        flags: TCP_FLAG_FIN | TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[simultaneous].state != TcpState::Closing {
+        panic!("tcp simultaneous close did not enter CLOSING");
+    }
+    let _ = close_stack
+        .pop_outbound()
+        .expect("tcp simultaneous FIN ACK missing");
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 3]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 444,
+        dst_port: close_stack.sockets[simultaneous].local_port,
+        seq: 3001,
+        ack: 7001,
+        flags: TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[simultaneous].state != TcpState::TimeWait {
+        panic!("tcp simultaneous close did not enter TIME_WAIT");
+    }
+
+    let passive = close_stack.open();
+    {
+        let socket = &mut close_stack.sockets[passive];
+        socket.remote_ip = Ipv4Addr([10, 0, 2, 4]);
+        socket.remote_port = 445;
+        socket.state = TcpState::CloseWait;
+        socket.seq = 8000;
+        socket.ack = 4001;
+    }
+    close_stack.close(passive).expect("tcp passive close");
+    let _ = close_stack
+        .pop_outbound()
+        .expect("tcp passive FIN missing");
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 4]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 445,
+        dst_port: close_stack.sockets[passive].local_port,
+        seq: 4001,
+        ack: 8000,
+        flags: TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[passive].state != TcpState::LastAck {
+        panic!("tcp passive close accepted partial FIN ACK");
+    }
+    close_stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 4]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 445,
+        dst_port: close_stack.sockets[passive].local_port,
+        seq: 4001,
+        ack: 8001,
+        flags: TCP_FLAG_ACK,
+        payload: Vec::new(),
+    });
+    if close_stack.sockets[passive].state != TcpState::Closed {
+        panic!("tcp passive close did not close after FIN ACK");
+    }
     crate::println!(
         "TCP MVP self-test passed: {} socket(s), {} established.",
         stack.stats().sockets,
