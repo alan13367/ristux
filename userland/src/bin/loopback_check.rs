@@ -58,6 +58,9 @@ fn main(_args: &[&[u8]]) -> i32 {
         return 1;
     }
     let _ = sys::write(1, b"loopback_check: client received\n");
+    let _ = sys::close(server as i32);
+    let _ = sys::close(client as i32);
+    let _ = sys::close(listener as i32);
     let _ = sys::write(1, b"loopback_check: done\n");
     0
 }
