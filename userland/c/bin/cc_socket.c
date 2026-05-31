@@ -61,6 +61,24 @@ int main(void) {
         puts("cc_socket: bind failed");
         return 1;
     }
+    int duplicate = socket(AF_INET, SOCK_DGRAM, 0);
+    if (duplicate < 0) {
+        puts("cc_socket: duplicate socket failed");
+        return 1;
+    }
+    errno = 0;
+    if (bind(duplicate, (struct sockaddr *)&server_addr, sizeof(server_addr)) != -1 ||
+        errno != EADDRINUSE) {
+        puts("cc_socket: duplicate bind failed");
+        return 1;
+    }
+    int bind_error = 0;
+    socklen_t bind_error_len = sizeof(bind_error);
+    if (getsockopt(duplicate, SOL_SOCKET, SO_ERROR, &bind_error, &bind_error_len) < 0 ||
+        bind_error != EADDRINUSE) {
+        puts("cc_socket: duplicate bind error failed");
+        return 1;
+    }
 
     int flags = fcntl(server, F_GETFL);
     if (flags < 0 || fcntl(server, F_SETFL, flags | O_NONBLOCK) < 0) {
@@ -136,7 +154,7 @@ int main(void) {
         return 1;
     }
 
-    if (close(tcp) < 0 || close(client) < 0 || close(server) < 0) {
+    if (close(tcp) < 0 || close(duplicate) < 0 || close(client) < 0 || close(server) < 0) {
         puts("cc_socket: close failed");
         return 1;
     }

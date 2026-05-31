@@ -63,6 +63,21 @@ static int close_fin_roundtrip(void) {
         puts("cc_tcp: listen failed");
         return 1;
     }
+    int duplicate = socket(AF_INET, SOCK_STREAM, 0);
+    if (duplicate < 0) {
+        puts("cc_tcp: duplicate socket failed");
+        return 1;
+    }
+    errno = 0;
+    if (bind(duplicate, (struct sockaddr *)&addr, sizeof(addr)) != -1 ||
+        errno != EADDRINUSE) {
+        puts("cc_tcp: duplicate bind failed");
+        return 1;
+    }
+    if (close(duplicate) < 0) {
+        puts("cc_tcp: duplicate close failed");
+        return 1;
+    }
     if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         puts("cc_tcp: connect failed");
         return 1;

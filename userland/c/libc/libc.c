@@ -2970,6 +2970,7 @@ char *strerror(int errnum) {
     case EPIPE: return "Broken pipe";
     case ERANGE: return "Result too large";
     case ENOSYS: return "Function not implemented";
+    case EADDRINUSE: return "Address already in use";
     case ECONNRESET: return "Connection reset by peer";
     case ENOTCONN: return "Socket is not connected";
     case ETIMEDOUT: return "Connection timed out";

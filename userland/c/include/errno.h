@@ -22,6 +22,7 @@ extern int errno;
 #define EPIPE 32
 #define ENOSYS 38
 #define ERANGE 34
+#define EADDRINUSE 98
 #define ECONNRESET 104
 #define ENOTCONN 107
 #define ETIMEDOUT 110

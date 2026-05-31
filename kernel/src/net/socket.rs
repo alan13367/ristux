@@ -28,6 +28,7 @@ pub enum SocketError {
     BadFd,
     Invalid,
     WouldBlock,
+    AddressInUse,
     ConnectionReset,
     TimedOut,
 }
@@ -192,7 +193,12 @@ impl SocketTable {
     }
 
     pub fn bind(&mut self, handle: usize, local_port: u16) -> Result<(), SocketError> {
-        match self.entry(handle)?.backend {
+        let entry = *self.entry(handle)?;
+        if local_port != 0 && self.bound_port_in_use(handle, entry.kind, local_port) {
+            self.record_error(handle, SocketError::AddressInUse);
+            return Err(SocketError::AddressInUse);
+        }
+        match entry.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => self
                 .tcp
@@ -592,6 +598,27 @@ impl SocketTable {
         }
     }
 
+    fn bound_port_in_use(&self, handle: usize, kind: SocketType, local_port: u16) -> bool {
+        self.sockets
+            .iter()
+            .enumerate()
+            .any(|(index, entry)| {
+                index != handle
+                    && entry.kind == kind
+                    && entry.ref_count > 0
+                    && self.backend_local_port(entry.backend) == Some(local_port)
+            })
+    }
+
+    fn backend_local_port(&self, backend: SocketBackend) -> Option<u16> {
+        match backend {
+            SocketBackend::Closed => None,
+            SocketBackend::Tcp(socket) => self.tcp.local_port(socket),
+            SocketBackend::Udp(socket) => super::udp_socket_local_port(socket),
+            SocketBackend::Icmp(_) => None,
+        }
+    }
+
     fn entry(&self, handle: usize) -> Result<&SocketEntry, SocketError> {
         let entry = self.sockets.get(handle).ok_or(SocketError::BadFd)?;
         if entry.backend == SocketBackend::Closed {
@@ -620,6 +647,7 @@ fn map_tcp_error(err: TcpError) -> SocketError {
 
 fn socket_error_code(err: SocketError) -> i32 {
     match err {
+        SocketError::AddressInUse => 98,
         SocketError::ConnectionReset => 104,
         SocketError::TimedOut => 110,
         _ => 0,

@@ -142,6 +142,7 @@ const ENOTDIR: i64 = -20;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
+const EADDRINUSE: i64 = -98;
 const ECONNRESET: i64 = -104;
 const ENOTCONN: i64 = -107;
 const ETIMEDOUT: i64 = -110;
@@ -1738,6 +1739,7 @@ fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
         crate::net::socket::SocketError::BadFd => EBADF,
         crate::net::socket::SocketError::Invalid => EINVAL,
         crate::net::socket::SocketError::WouldBlock => EAGAIN,
+        crate::net::socket::SocketError::AddressInUse => EADDRINUSE,
         crate::net::socket::SocketError::ConnectionReset => ECONNRESET,
         crate::net::socket::SocketError::TimedOut => ETIMEDOUT,
     }
