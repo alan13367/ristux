@@ -9,6 +9,7 @@ use core::ptr;
 use ristux_userland::sys;
 
 struct Account {
+    name: Vec<u8>,
     uid: u32,
     gid: u32,
     home: Vec<u8>,
@@ -18,6 +19,15 @@ struct Account {
 fn cstr(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 1);
     out.extend_from_slice(bytes);
+    out.push(0);
+    out
+}
+
+fn env_cstr(name: &[u8], value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(name.len() + value.len() + 2);
+    out.extend_from_slice(name);
+    out.push(b'=');
+    out.extend_from_slice(value);
     out.push(0);
     out
 }
@@ -86,6 +96,7 @@ fn find_account(passwd: &[u8], name: &[u8]) -> Option<Account> {
             continue;
         }
         return Some(Account {
+            name: fields[0].to_vec(),
             uid: parse_u32(fields[2])?,
             gid: parse_u32(fields[3])?,
             home: fields[5].to_vec(),
@@ -109,7 +120,15 @@ fn exec_shell(account: &Account) -> ! {
     let shell = cstr(&account.shell);
     let argv0 = cstr(b"-sh");
     let argv: [*const u8; 2] = [argv0.as_ptr(), ptr::null()];
-    let envp: [*const u8; 1] = [ptr::null()];
+    let env = [
+        env_cstr(b"USER", &account.name),
+        env_cstr(b"LOGNAME", &account.name),
+        env_cstr(b"HOME", &account.home),
+        env_cstr(b"SHELL", &account.shell),
+        env_cstr(b"PATH", b"/bin"),
+    ];
+    let mut envp: Vec<*const u8> = env.iter().map(|entry| entry.as_ptr()).collect();
+    envp.push(ptr::null());
     let _ = sys::execve(shell.as_ptr(), argv.as_ptr(), envp.as_ptr());
     let _ = sys::write(2, b"login: exec shell failed\n");
     sys::exit(127);
