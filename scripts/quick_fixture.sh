@@ -2617,6 +2617,25 @@ case "$SCENARIO" in
       "^ssh_session_check$"
     )
     ;;
+  ssh)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
+    COMMANDS=(
+      "pkg info ssh"
+      "pkg info sshd"
+      "ssh -y -y -t -p 2222 -l root 127.0.0.1"
+      "echo ssh_alias_session_check"
+      "exit"
+    )
+    EXPECTS=(
+      "init: started dropbear on 0.0.0.0:2222"
+      "^name: ssh$"
+      "^  /bin/ssh$"
+      "^name: sshd$"
+      "^  /bin/sshd$"
+      "TTY canonical line ready: ssh -y -y -t -p 2222 -l root 127.0.0.1"
+      "^ssh_alias_session_check$"
+    )
+    ;;
   command)
     shift
     if [[ $# -eq 0 ]]; then
@@ -2632,7 +2651,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
     exit 2
     ;;
 esac
