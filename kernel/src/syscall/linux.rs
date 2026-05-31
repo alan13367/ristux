@@ -105,6 +105,8 @@ pub const NR_getresuid: u64 = 118;
 pub const NR_setresgid: u64 = 119;
 pub const NR_getresgid: u64 = 120;
 pub const NR_rt_sigpending: u64 = 127;
+pub const NR_statfs: u64 = 137;
+pub const NR_fstatfs: u64 = 138;
 pub const NR_setrlimit: u64 = 160;
 pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
@@ -320,6 +322,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_stat => linux_stat(a0 as usize, a1 as usize),
         NR_fstat => linux_fstat(a0 as usize, a1 as usize),
         NR_lstat => linux_lstat(a0 as usize, a1 as usize),
+        NR_statfs => linux_statfs(a0 as usize, a1 as usize),
+        NR_fstatfs => linux_fstatfs(a0 as usize, a1 as usize),
         NR_kill => linux_kill(a0 as i64, a1 as u8),
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
@@ -2674,6 +2678,38 @@ fn write_linux_stat(
     out[28..32].copy_from_slice(&owner.to_le_bytes()); // st_uid
     out[32..36].copy_from_slice(&group.to_le_bytes()); // st_gid
     out[48..56].copy_from_slice(&size.to_le_bytes()); // st_size
+    Ok(0)
+}
+
+fn linux_statfs(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
+    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
+    let stats = fs::statfs(&path).map_err(map_vfs_error)?;
+    write_linux_statfs(buf_ptr, stats)
+}
+
+fn linux_fstatfs(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
+    let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
+    let path = fs::fd_path(vfs_fd).map_err(map_vfs_error)?;
+    let stats = fs::statfs(&path).map_err(map_vfs_error)?;
+    write_linux_statfs(buf_ptr, stats)
+}
+
+fn write_linux_statfs(buf_ptr: usize, stats: fs::FsStat) -> Result<u64, i64> {
+    const STATFS_SIZE: usize = 120;
+    let out = process::write_user_buffer(buf_ptr, STATFS_SIZE).ok_or(EFAULT)?;
+    for byte in out.iter_mut() {
+        *byte = 0;
+    }
+    out[0..8].copy_from_slice(&stats.fs_type.to_le_bytes());
+    out[8..16].copy_from_slice(&stats.block_size.to_le_bytes());
+    out[16..24].copy_from_slice(&stats.blocks.to_le_bytes());
+    out[24..32].copy_from_slice(&stats.blocks_free.to_le_bytes());
+    out[32..40].copy_from_slice(&stats.blocks_available.to_le_bytes());
+    out[40..48].copy_from_slice(&stats.files.to_le_bytes());
+    out[48..56].copy_from_slice(&stats.files_free.to_le_bytes());
+    out[64..72].copy_from_slice(&stats.name_max.to_le_bytes());
+    out[72..80].copy_from_slice(&stats.block_size.to_le_bytes());
     Ok(0)
 }
 

@@ -28,6 +28,7 @@
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/statfs.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -121,6 +122,8 @@
 #define SYS_SETRESGID 119
 #define SYS_GETRESGID 120
 #define SYS_RT_SIGPENDING 127
+#define SYS_STATFS 137
+#define SYS_FSTATFS 138
 #define SYS_SETRLIMIT 160
 #define SYS_GETTID 186
 #define SYS_TIME 201
@@ -1790,6 +1793,14 @@ int stat(const char *path, struct stat *buf) {
 
 int fstat(int fd, struct stat *buf) {
     return (int)syscall_ret(syscall2(SYS_FSTAT, fd, (long)buf));
+}
+
+int statfs(const char *path, struct statfs *buf) {
+    return (int)syscall_ret(syscall2(SYS_STATFS, (long)path, (long)buf));
+}
+
+int fstatfs(int fd, struct statfs *buf) {
+    return (int)syscall_ret(syscall2(SYS_FSTATFS, fd, (long)buf));
 }
 
 int lstat(const char *path, struct stat *buf) {

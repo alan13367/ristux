@@ -130,7 +130,7 @@ pub fn write_file(path: &str, data: &[u8]) {
     vfs::write_file(path, data);
 }
 
-pub use vfs::Stat;
+pub use vfs::{FsStat, Stat};
 
 pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, vfs::VfsError> {
     vfs::lseek(fd, offset, whence)
@@ -154,6 +154,10 @@ pub fn lstat(path: &str) -> Result<Stat, vfs::VfsError> {
 
 pub fn fstat(fd: usize) -> Result<Stat, vfs::VfsError> {
     vfs::fstat(fd)
+}
+
+pub fn statfs(path: &str) -> Result<FsStat, vfs::VfsError> {
+    vfs::statfs(path)
 }
 
 pub fn fd_path(fd: usize) -> Result<alloc::string::String, vfs::VfsError> {

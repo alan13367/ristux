@@ -501,6 +501,8 @@ impl Ext2Fs {
             block_size: self.block_size,
             blocks_count: self.blocks_count,
             inodes_count: self.inodes_count,
+            free_blocks_count: self.count_free_blocks().unwrap_or(0),
+            free_inodes_count: self.count_free_inodes().unwrap_or(0),
             groups: self.groups.len(),
         }
     }
@@ -905,6 +907,24 @@ impl Ext2Fs {
         Err(Ext2Error::NoSpace)
     }
 
+    fn count_free_inodes(&self) -> Result<u32, Ext2Error> {
+        let mut free = 0u32;
+        for (group_index, group) in self.groups.iter().enumerate() {
+            let mut bitmap = [0u8; 1024];
+            read_block_sized(group.inode_bitmap as u64, self.block_size, &mut bitmap)?;
+            for bit in 0..self.inodes_per_group as usize {
+                let ino = group_index as u32 * self.inodes_per_group + bit as u32 + 1;
+                if ino > self.inodes_count {
+                    break;
+                }
+                if !bitmap_bit(&bitmap, bit) {
+                    free = free.saturating_add(1);
+                }
+            }
+        }
+        Ok(free)
+    }
+
     fn free_inode(&mut self, ino: u32) -> Result<(), Ext2Error> {
         if ino == 0 || ino > self.inodes_count {
             return Err(Ext2Error::NotFound);
@@ -936,6 +956,24 @@ impl Ext2Fs {
             }
         }
         Err(Ext2Error::NoSpace)
+    }
+
+    fn count_free_blocks(&self) -> Result<u32, Ext2Error> {
+        let mut free = 0u32;
+        for (group_index, group) in self.groups.iter().enumerate() {
+            let mut bitmap = [0u8; 1024];
+            read_block_sized(group.block_bitmap as u64, self.block_size, &mut bitmap)?;
+            for bit in 0..self.blocks_per_group as usize {
+                let block = group_index as u32 * self.blocks_per_group + bit as u32;
+                if block >= self.blocks_count {
+                    break;
+                }
+                if !bitmap_bit(&bitmap, bit) {
+                    free = free.saturating_add(1);
+                }
+            }
+        }
+        Ok(free)
     }
 
     fn free_block(&mut self, block: u32) -> Result<(), Ext2Error> {
@@ -974,6 +1012,8 @@ pub struct Ext2Stats {
     pub block_size: usize,
     pub blocks_count: u32,
     pub inodes_count: u32,
+    pub free_blocks_count: u32,
+    pub free_inodes_count: u32,
     pub groups: usize,
 }
 

@@ -39,6 +39,8 @@ pub const NR_WAIT4: usize = 61;
 pub const NR_KILL: usize = 62;
 pub const NR_FCNTL: usize = 72;
 pub const NR_GETCWD: usize = 79;
+pub const NR_STATFS: usize = 137;
+pub const NR_FSTATFS: usize = 138;
 pub const NR_GETDENTS64: usize = 217;
 pub const NR_CHDIR: usize = 80;
 pub const NR_GETUID: usize = 102;
@@ -85,6 +87,23 @@ pub struct SockAddrIn {
     pub port: u16,
     pub addr: [u8; 4],
     pub zero: [u8; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct StatFs {
+    pub f_type: u64,
+    pub f_bsize: u64,
+    pub f_blocks: u64,
+    pub f_bfree: u64,
+    pub f_bavail: u64,
+    pub f_files: u64,
+    pub f_ffree: u64,
+    pub f_fsid: [i32; 2],
+    pub f_namelen: u64,
+    pub f_frsize: u64,
+    pub f_flags: u64,
+    pub f_spare: [u64; 4],
 }
 
 impl SockAddrIn {
@@ -427,6 +446,16 @@ pub fn getcwd(buf: *mut u8, len: usize) -> isize {
 #[inline]
 pub fn getdents64(fd: i32, buf: &mut [u8]) -> isize {
     unsafe { syscall3(NR_GETDENTS64, fd as usize, buf.as_mut_ptr() as usize, buf.len()) }
+}
+
+#[inline]
+pub fn statfs(path: *const u8, buf: *mut StatFs) -> isize {
+    unsafe { syscall2(NR_STATFS, path as usize, buf as usize) }
+}
+
+#[inline]
+pub fn fstatfs(fd: i32, buf: *mut StatFs) -> isize {
+    unsafe { syscall2(NR_FSTATFS, fd as usize, buf as usize) }
 }
 
 #[inline]

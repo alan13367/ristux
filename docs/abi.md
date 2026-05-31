@@ -135,6 +135,8 @@ The current Linux-like syscall surface is:
 | 119 | `setresgid` | Real/effective/saved gid update. |
 | 120 | `getresgid` | Reads real/effective/saved gid. |
 | 127 | `rt_sigpending` | Reads the current pending signal mask. |
+| 137 | `statfs` | Reports filesystem block/inode capacity and availability for a path. |
+| 138 | `fstatfs` | Reports filesystem block/inode capacity and availability for a descriptor. |
 | 160 | `setrlimit` | Updates supported per-process resource limits. |
 | 186 | `gettid` | Returns the current scheduler thread id; equal to pid until thread groups exist. |
 | 201 | `time` | Seconds since Unix epoch. |
@@ -178,7 +180,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `unlinkat`, `rmdir`, `rename`, `renameat`, `access`, `openat`, `fstatat`,
   `faccessat`, `chmod`, `fchmodat`, `chown`, `fchownat`, `umask`,
   `getdents64`, `link`, `linkat`, `symlink`, `symlinkat`, `readlink`,
-  `readlinkat`, `chdir`, `getcwd`.
+  `readlinkat`, `chdir`, `getcwd`, `statfs`, and `fstatfs`.
 - Paths are absolute and normalized by the VFS for repeated slashes, `.`, and
   `..`; symlink expansion is capped at eight hops.
 - Devices currently include `/dev/null`, `/dev/zero`, `/dev/random`,

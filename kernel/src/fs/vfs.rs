@@ -424,6 +424,52 @@ impl Vfs {
             || path.starts_with("/initrd/"))
     }
 
+    fn statfs(&self, path: &str) -> Result<FsStat, VfsError> {
+        const EXT2_SUPER_MAGIC: u64 = 0xef53;
+        const TMPFS_MAGIC: u64 = 0x0102_1994;
+        const PROC_SUPER_MAGIC: u64 = 0x9fa0;
+        const DEVFS_MAGIC: u64 = 0x1373;
+        const INITRD_MAGIC: u64 = 0x8584_58f6;
+
+        let normalized = normalize_path(path)?;
+        let path = normalized.as_str();
+        if Self::use_root_ext2(path) {
+            let stats = self.root_ext2().ok_or(VfsError::NotFound)?.stats();
+            return Ok(FsStat {
+                fs_type: EXT2_SUPER_MAGIC,
+                block_size: stats.block_size as u64,
+                blocks: stats.blocks_count as u64,
+                blocks_free: stats.free_blocks_count as u64,
+                blocks_available: stats.free_blocks_count as u64,
+                files: stats.inodes_count as u64,
+                files_free: stats.free_inodes_count as u64,
+                name_max: 255,
+            });
+        }
+        let (fs_type, block_size, blocks, files) =
+            if path == "/tmp" || path.starts_with("/tmp/") {
+                (TMPFS_MAGIC, 1024, 1024, 1024)
+            } else if path == "/proc" || path.starts_with("/proc/") {
+                (PROC_SUPER_MAGIC, 1024, 0, 0)
+            } else if path == "/dev" || path.starts_with("/dev/") {
+                (DEVFS_MAGIC, 1024, 0, 0)
+            } else if path == "/initrd" || path.starts_with("/initrd/") {
+                (INITRD_MAGIC, 1024, 0, 0)
+            } else {
+                return Err(VfsError::NotFound);
+            };
+        Ok(FsStat {
+            fs_type,
+            block_size,
+            blocks,
+            blocks_free: blocks,
+            blocks_available: blocks,
+            files,
+            files_free: files,
+            name_max: 255,
+        })
+    }
+
     fn resolve_mount_list_paths(&self, prefix: &str) -> Vec<String> {
         let mut paths = self
             .nodes
@@ -2153,6 +2199,18 @@ pub struct Stat {
     pub mtime: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FsStat {
+    pub fs_type: u64,
+    pub block_size: u64,
+    pub blocks: u64,
+    pub blocks_free: u64,
+    pub blocks_available: u64,
+    pub files: u64,
+    pub files_free: u64,
+    pub name_max: u64,
+}
+
 pub fn lseek(fd: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
     with_vfs(|vfs| vfs.lseek(fd, offset, whence))
 }
@@ -2167,6 +2225,10 @@ pub fn lstat(path: &str) -> Result<Stat, VfsError> {
 
 pub fn fstat(fd: usize) -> Result<Stat, VfsError> {
     with_vfs(|vfs| vfs.fstat(fd))
+}
+
+pub fn statfs(path: &str) -> Result<FsStat, VfsError> {
+    with_vfs(|vfs| vfs.statfs(path))
 }
 
 pub fn fd_path(fd: usize) -> Result<String, VfsError> {

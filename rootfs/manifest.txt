@@ -39,6 +39,7 @@ file /bin/cc_session ../build/userland/cc_session.elf
 file /bin/cc_signal ../build/userland/cc_signal.elf
 file /bin/cc_socket ../build/userland/cc_socket.elf
 file /bin/cc_stack ../build/userland/cc_stack.elf
+file /bin/cc_statfs ../build/userland/cc_statfs.elf
 file /bin/cc_sse ../build/userland/cc_sse.elf
 file /bin/cc_tcp ../build/userland/cc_tcp.elf
 file /bin/cc_tty ../build/userland/cc_tty.elf
@@ -47,6 +48,7 @@ file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/date ../build/userland/date.elf
 file /bin/dd ../build/userland/dd.elf
 file /bin/dbclient ../build/userland/dbclient.elf
+file /bin/df ../build/userland/df.elf
 file /bin/diff ../build/userland/diff.elf
 file /bin/dirname ../build/userland/dirname.elf
 file /bin/dropbear ../build/userland/dropbear.elf
@@ -162,6 +164,7 @@ package cc_session 0.1.0 /bin/cc_session
 package cc_signal 0.1.0 /bin/cc_signal
 package cc_socket 0.1.0 /bin/cc_socket
 package cc_stack 0.1.0 /bin/cc_stack
+package cc_statfs 0.1.0 /bin/cc_statfs
 package cc_sse 0.1.0 /bin/cc_sse
 package cc_tcp 0.1.0 /bin/cc_tcp
 package cc_tty 0.1.0 /bin/cc_tty
@@ -175,6 +178,7 @@ package curl_lite 0.1.0 /bin/curl_lite
 package date 0.1.0 /bin/date
 package dd 0.1.0 /bin/dd
 package dbclient 2026.91 /bin/dbclient
+package df 0.1.0 /bin/df
 package diff 0.1.0 /bin/diff
 package dirname 0.1.0 /bin/dirname
 package dropbear 2026.91 /bin/dropbear
