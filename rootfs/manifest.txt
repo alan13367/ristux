@@ -63,6 +63,9 @@ file /bin/free ../build/userland/free.elf
 file /bin/grep ../build/userland/grep.elf
 file /bin/gzip ../build/userland/gzip.elf
 file /bin/gunzip ../build/userland/gzip.elf
+file /bin/xz ../build/userland/xz.elf
+file /bin/unxz ../build/userland/xz.elf
+file /bin/xzcat ../build/userland/xz.elf
 file /bin/head ../build/userland/head.elf
 file /bin/hostname ../build/userland/hostname.elf
 file /bin/id ../build/userland/id.elf
@@ -194,6 +197,9 @@ package free 0.1.0 /bin/free
 package grep 0.1.0 /bin/grep
 package gzip 0.1.0 /bin/gzip
 package gzip 0.1.0 /bin/gunzip
+package xz 0.1.0 /bin/xz
+package xz 0.1.0 /bin/unxz
+package xz 0.1.0 /bin/xzcat
 package head 0.1.0 /bin/head
 package hostname 0.1.0 /bin/hostname
 package id 0.1.0 /bin/id
