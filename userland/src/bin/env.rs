@@ -78,14 +78,67 @@ fn has_slash(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| *byte == b'/')
 }
 
-fn command_path(command: &[u8]) -> Vec<u8> {
+fn path_exists(path: &[u8]) -> bool {
+    let path_c = cstr(path);
+    let mut stat_buf = [0u8; 144];
+    unsafe {
+        sys::syscall2(
+            sys::NR_STAT,
+            path_c.as_ptr() as usize,
+            stat_buf.as_mut_ptr() as usize,
+        ) >= 0
+    }
+}
+
+fn env_value<'a>(env: &'a [Vec<u8>], name: &[u8]) -> Option<&'a [u8]> {
+    env.iter().rev().find_map(|entry| {
+        let name_len = var_name_len(entry)?;
+        if &entry[..name_len] == name {
+            Some(&entry[name_len + 1..])
+        } else {
+            None
+        }
+    })
+}
+
+fn append_command_path(out: &mut Vec<u8>, dir: &[u8], command: &[u8]) {
+    if dir.is_empty() {
+        out.push(b'.');
+    } else {
+        out.extend_from_slice(dir);
+    }
+    if out.last().copied() != Some(b'/') {
+        out.push(b'/');
+    }
+    out.extend_from_slice(command);
+}
+
+fn command_path(command: &[u8], env: &[Vec<u8>]) -> Vec<u8> {
     if has_slash(command) {
         return command.to_vec();
     }
-    let mut out = Vec::with_capacity(command.len() + 5);
-    out.extend_from_slice(b"/bin/");
-    out.extend_from_slice(command);
-    out
+    let path = env_value(env, b"PATH").unwrap_or(b"/bin:/usr/bin");
+    let mut start = 0usize;
+    while start <= path.len() {
+        let end = path[start..]
+            .iter()
+            .position(|byte| *byte == b':')
+            .map(|offset| start + offset)
+            .unwrap_or(path.len());
+        let mut candidate = Vec::with_capacity(command.len() + end.saturating_sub(start) + 2);
+        append_command_path(&mut candidate, &path[start..end], command);
+        if path_exists(&candidate) {
+            return candidate;
+        }
+        if end == path.len() {
+            break;
+        }
+        start = end + 1;
+    }
+    let mut fallback = Vec::with_capacity(command.len() + 5);
+    fallback.extend_from_slice(b"/bin/");
+    fallback.extend_from_slice(command);
+    fallback
 }
 
 fn print_env(env: &[Vec<u8>]) -> i32 {
@@ -127,7 +180,7 @@ fn main(args: &[&[u8]], inherited: &[Vec<u8>]) -> i32 {
         return print_env(&env);
     }
 
-    let path = command_path(args[index]);
+    let path = command_path(args[index], &env);
     let path_c = cstr(&path);
     let mut owned_args: Vec<Vec<u8>> = Vec::new();
     for arg in &args[index..] {

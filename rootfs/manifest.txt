@@ -60,6 +60,7 @@ file /bin/edit ../build/userland/edit.elf
 file /bin/vi ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
 file /bin/env ../build/userland/env.elf
+file /usr/bin/env ../build/userland/env.elf
 file /bin/expr ../build/userland/expr.elf
 file /bin/false ../build/userland/false.elf
 file /bin/find ../build/userland/find.elf
@@ -201,6 +202,7 @@ package edit 0.1.0 /bin/edit
 package vi 0.1.0 /bin/vi deps=edit
 package echo 0.1.0 /bin/echo
 package env 0.1.0 /bin/env
+package env 0.1.0 /usr/bin/env
 package expr 0.1.0 /bin/expr
 package false 0.1.0 /bin/false
 package find 0.1.0 /bin/find

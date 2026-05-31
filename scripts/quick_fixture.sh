@@ -903,6 +903,10 @@ case "$SCENARIO" in
       "echo 'echo shell-\$0' >> exec.sh"
       "chmod +x exec.sh"
       "./exec.sh alpha beta"
+      "echo '#!/usr/bin/env sh' > envexec.sh"
+      "echo 'echo envshebang-\$1' >> envexec.sh"
+      "chmod +x envexec.sh"
+      "./envexec.sh ok"
     )
     EXPECTS=(
       "TTY canonical line ready: sh run.sh"
@@ -913,6 +917,8 @@ case "$SCENARIO" in
       "TTY canonical line ready: ./exec\\.sh alpha beta"
       "^shebang-alpha-beta$"
       "^shell-/tmp/shscript/exec\\.sh$"
+      "TTY canonical line ready: ./envexec\\.sh ok"
+      "^envshebang-ok$"
     )
     ;;
   shell-list)
@@ -1762,6 +1768,9 @@ case "$SCENARIO" in
       "env | grep ROAD"
       "env FOO=bar env | grep FOO"
       "env -i USER=clean env | grep USER"
+      "env PATH=/usr/bin:/bin env | grep USER"
+      "test -f /usr/bin/env"
+      "echo $?"
       "pkg info env"
     )
     EXPECTS=(
@@ -1771,8 +1780,12 @@ case "$SCENARIO" in
       "^FOO=bar$"
       "TTY canonical line ready: env -i USER=clean env | grep USER"
       "^USER=clean$"
+      "TTY canonical line ready: env PATH=/usr/bin:/bin env"
+      "TTY canonical line ready: test -f /usr/bin/env"
+      "^0$"
       "^name: env$"
       "^  /bin/env$"
+      "^  /usr/bin/env$"
     )
     ;;
   cut)
