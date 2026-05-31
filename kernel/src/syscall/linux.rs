@@ -68,6 +68,7 @@ pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
 pub const NR_wait4: u64 = 61;
 pub const NR_kill: u64 = 62;
+pub const NR_uname: u64 = 63;
 pub const NR_fcntl: u64 = 72;
 pub const NR_fsync: u64 = 74;
 pub const NR_ftruncate: u64 = 77;
@@ -252,6 +253,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             Ok(0)
         }
         NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
+        NR_uname => linux_uname(a0 as usize),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
         NR_fsync => linux_fsync(a0 as usize),
         NR_ftruncate => linux_ftruncate(a0 as usize, a1 as i64),
@@ -1607,6 +1609,27 @@ fn linux_getppid() -> Result<u64, i64> {
     process::get_parent(pid)
         .map(|ppid| ppid as u64)
         .ok_or(ESRCH)
+}
+
+fn linux_uname(buf_ptr: usize) -> Result<u64, i64> {
+    const FIELD_LEN: usize = 65;
+    const FIELD_COUNT: usize = 6;
+
+    fn write_field(out: &mut [u8], index: usize, value: &[u8]) {
+        let start = index * FIELD_LEN;
+        let len = value.len().min(FIELD_LEN - 1);
+        out[start..start + FIELD_LEN].fill(0);
+        out[start..start + len].copy_from_slice(&value[..len]);
+    }
+
+    let out = process::write_user_buffer(buf_ptr, FIELD_LEN * FIELD_COUNT).ok_or(EFAULT)?;
+    write_field(out, 0, b"Ristux");
+    write_field(out, 1, b"ristux");
+    write_field(out, 2, b"0.1.0");
+    write_field(out, 3, b"Ristux kernel");
+    write_field(out, 4, b"x86_64");
+    write_field(out, 5, b"localdomain");
+    Ok(0)
 }
 
 fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {

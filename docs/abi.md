@@ -100,6 +100,7 @@ The current Linux-like syscall surface is:
 | 60 | `exit` | Terminates the current process. |
 | 61 | `wait4` | Waits for a child; status encodes exit status in bits 8..15 and stopped children as `WIFSTOPPED` when `WUNTRACED` is set. |
 | 62 | `kill` | Sends process signals, including `SIGCONT` to resume stopped jobs. |
+| 63 | `uname` | Writes Linux-compatible fixed-width system identity fields. |
 | 72 | `fcntl` | `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`. |
 | 78 | `getdents` | Alias of the `getdents64` implementation. |
 | 79 | `getcwd` | Copies the current working directory. |
@@ -146,8 +147,8 @@ Unlisted syscall numbers return `-ENOSYS`.
 The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `getppid`, `setsid`, `getenv`, `putenv`, `setenv`, `unsetenv`, and
-  `clearenv`.
+  `getppid`, `setsid`, `uname`, `getenv`, `putenv`, `setenv`, `unsetenv`,
+  and `clearenv`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
   `setgroups`, and libc

@@ -14,6 +14,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <syslog.h>
 #include <time.h>
@@ -179,6 +180,26 @@ static int check_resource_syslog(void) {
     setlogmask(old);
     closelog();
     puts("cc_libc_compat: resource syslog ok");
+    return 0;
+}
+
+static int check_uname(void) {
+    struct utsname uts;
+    if (uname(&uts) != 0 ||
+        strcmp(uts.sysname, "Ristux") != 0 ||
+        strcmp(uts.nodename, "ristux") != 0 ||
+        strcmp(uts.release, "0.1.0") != 0 ||
+        strcmp(uts.machine, "x86_64") != 0 ||
+        strcmp(uts.domainname, "localdomain") != 0) {
+        puts("cc_libc_compat: uname failed");
+        return 1;
+    }
+    errno = 0;
+    if (uname(NULL) != -1 || errno != EFAULT) {
+        puts("cc_libc_compat: uname fault failed");
+        return 1;
+    }
+    puts("cc_libc_compat: uname ok");
     return 0;
 }
 
@@ -384,6 +405,7 @@ int main(void) {
         check_format() != 0 ||
         check_path() != 0 ||
         check_resource_syslog() != 0 ||
+        check_uname() != 0 ||
         check_time_format() != 0 ||
         check_setjmp() != 0 ||
         check_dropbear_types() != 0 ||

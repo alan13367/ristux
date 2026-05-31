@@ -32,6 +32,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <syslog.h>
 #include <termios.h>
@@ -83,6 +84,7 @@
 #define SYS_EXIT 60
 #define SYS_WAIT4 61
 #define SYS_KILL 62
+#define SYS_UNAME 63
 #define SYS_FCNTL 72
 #define SYS_FSYNC 74
 #define SYS_FTRUNCATE 77
@@ -982,6 +984,10 @@ pid_t getpid(void) {
 
 pid_t getppid(void) {
     return (pid_t)syscall_ret(syscall0(SYS_GETPPID));
+}
+
+int uname(struct utsname *buf) {
+    return (int)syscall_ret(syscall1(SYS_UNAME, (long)buf));
 }
 
 pid_t getpgrp(void) {
