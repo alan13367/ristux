@@ -229,10 +229,22 @@ impl Process {
     }
 
     fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> usize {
-        let user_fd = self.next_fd;
-        self.next_fd += 1;
+        let user_fd = self.lowest_available_fd();
         self.set_fd_with_flags(user_fd, vfs_fd, status_flags, 0);
         user_fd
+    }
+
+    fn lowest_available_fd(&self) -> usize {
+        let mut candidate = 0;
+        loop {
+            if self.fds[..self.fd_count]
+                .iter()
+                .all(|entry| entry.user_fd != candidate)
+            {
+                return candidate;
+            }
+            candidate += 1;
+        }
     }
 
     fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {

@@ -1692,6 +1692,10 @@ int kill(int pid, int sig) {
     return (int)syscall_ret(syscall2(SYS_KILL, pid, sig));
 }
 
+int raise(int sig) {
+    return kill(getpid(), sig);
+}
+
 static void signal_trampoline(unsigned long signum, unsigned long frame) {
     if (signum < 32) {
         sighandler_t handler = signal_handlers[signum];

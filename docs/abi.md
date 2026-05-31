@@ -157,7 +157,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Entropy: `getrandom`; `/dev/random` and `/dev/urandom` are backed by the
   same kernel ChaCha DRBG, seeded from CPU/time sources and mixed with keyboard
   interrupt timing.
-- Signals: `signal`, kernel-backed handler delivery, and `rt_sigreturn`.
+- Signals: `signal`, `raise`, kernel-backed handler delivery, and
+  `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
   `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads

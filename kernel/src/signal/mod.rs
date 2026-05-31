@@ -5,6 +5,7 @@ pub enum Signal {
     Term,
     Kill,
     Int,
+    Usr1,
     Tstp,
     Cont,
     Quit,
@@ -17,6 +18,7 @@ impl Signal {
             15 => Some(Self::Term),
             9 => Some(Self::Kill),
             2 => Some(Self::Int),
+            10 => Some(Self::Usr1),
             20 => Some(Self::Tstp),
             18 => Some(Self::Cont),
             3 => Some(Self::Quit),
@@ -30,6 +32,7 @@ impl Signal {
             Self::Term => 15,
             Self::Kill => 9,
             Self::Int => 2,
+            Self::Usr1 => 10,
             Self::Tstp => 20,
             Self::Cont => 18,
             Self::Quit => 3,
@@ -48,9 +51,12 @@ pub fn init() {
 
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
     let delivered = match signal {
-        Signal::Kill | Signal::Term | Signal::Int | Signal::Tstp | Signal::Quit => {
-            process::signal(pid, signal.default_status())
-        }
+        Signal::Kill
+        | Signal::Term
+        | Signal::Int
+        | Signal::Usr1
+        | Signal::Tstp
+        | Signal::Quit => process::signal(pid, signal.default_status()),
         Signal::Cont => process::continue_process(pid),
         Signal::Child => {
             if let Some((_, _, parent, _)) = process::get_process_info(pid) {
