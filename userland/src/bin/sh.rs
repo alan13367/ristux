@@ -1368,7 +1368,19 @@ fn is_builtin_name(name: &[u8]) -> bool {
     )
 }
 
-fn external_command_path(name: &[u8]) -> Option<Vec<u8>> {
+fn append_path_candidate(out: &mut Vec<u8>, dir: &[u8], name: &[u8]) {
+    if dir.is_empty() {
+        out.extend_from_slice(name);
+        return;
+    }
+    out.extend_from_slice(dir);
+    if !dir.ends_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(name);
+}
+
+fn external_command_path(name: &[u8], env: &ShellEnv) -> Option<Vec<u8>> {
     if name.contains(&b'/') {
         let path = cstr(name);
         let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
@@ -1378,22 +1390,22 @@ fn external_command_path(name: &[u8]) -> Option<Vec<u8>> {
         }
         return None;
     }
-    let mut path = Vec::with_capacity(b"/bin/".len() + name.len() + 1);
-    path.extend_from_slice(b"/bin/");
-    path.extend_from_slice(name);
-    path.push(0);
-    let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
-    if fd >= 0 {
-        let _ = sys::close(fd as i32);
-        path.pop();
-        Some(path)
-    } else {
-        None
+    let path_env = env.get(b"PATH").unwrap_or(b"/bin");
+    for dir in path_env.split(|byte| *byte == b':') {
+        let mut path = Vec::with_capacity(dir.len() + name.len() + 2);
+        append_path_candidate(&mut path, dir, name);
+        let path_c = cstr(&path);
+        let fd = sys::open(path_c.as_ptr(), O_RDONLY, 0);
+        if fd >= 0 {
+            let _ = sys::close(fd as i32);
+            return Some(path);
+        }
     }
+    None
 }
 
-fn external_command_exists(name: &[u8]) -> bool {
-    external_command_path(name).is_some()
+fn external_command_exists(name: &[u8], env: &ShellEnv) -> bool {
+    external_command_path(name, env).is_some()
 }
 
 fn print_command_resolution(name: &[u8], env: &ShellEnv) -> bool {
@@ -1402,7 +1414,7 @@ fn print_command_resolution(name: &[u8], env: &ShellEnv) -> bool {
         let _ = sys::write(FD_STDOUT, b"\n");
         return true;
     }
-    if let Some(path) = external_command_path(name) {
+    if let Some(path) = external_command_path(name, env) {
         let _ = sys::write(FD_STDOUT, &path);
         let _ = sys::write(FD_STDOUT, b"\n");
         return true;
@@ -1570,10 +1582,11 @@ fn builtin_command(
                 } else if is_builtin_name(arg) {
                     let _ = sys::write(FD_STDOUT, arg);
                     let _ = sys::write(FD_STDOUT, b" is a shell builtin\n");
-                } else if external_command_exists(arg) {
+                } else if external_command_exists(arg, env) {
                     let _ = sys::write(FD_STDOUT, arg);
-                    let _ = sys::write(FD_STDOUT, b" is /bin/");
-                    let _ = sys::write(FD_STDOUT, arg);
+                    let _ = sys::write(FD_STDOUT, b" is ");
+                    let path = external_command_path(arg, env).unwrap_or_default();
+                    let _ = sys::write(FD_STDOUT, &path);
                     let _ = sys::write(FD_STDOUT, b"\n");
                 } else {
                     let _ = sys::write(FD_STDERR, arg);
@@ -1830,12 +1843,10 @@ fn spawn_stage(
     let prog = &stage.argv[0];
     let path_c = if prog.contains(&b'/') {
         cstr(prog)
+    } else if let Some(path) = external_command_path(prog, env) {
+        cstr(&path)
     } else {
-        let mut p = Vec::with_capacity(5 + prog.len() + 1);
-        p.extend_from_slice(b"/bin/");
-        p.extend_from_slice(prog);
-        p.push(0);
-        p
+        cstr(prog)
     };
 
     let mut owned_args: Vec<Vec<u8>> = Vec::with_capacity(stage.argv.len());
