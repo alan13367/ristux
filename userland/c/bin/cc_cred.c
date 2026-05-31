@@ -79,6 +79,37 @@ int main(void) {
         puts("cc_cred: grouplist failed");
         return 1;
     }
+    gid_t current_groups[8];
+    int group_count = getgroups(0, NULL);
+    if (group_count < 1 || group_count > 8) {
+        puts("cc_cred: getgroups count failed");
+        return 1;
+    }
+    if (getgroups(group_count, current_groups) != group_count ||
+        current_groups[0] != gid) {
+        puts("cc_cred: getgroups list failed");
+        return 1;
+    }
+    if (uid == 0) {
+        gid_t root_groups[2] = { gid, 7 };
+        if (setgroups(2, root_groups) < 0 ||
+            getgroups(2, current_groups) != 2 ||
+            current_groups[0] != gid ||
+            current_groups[1] != 7) {
+            puts("cc_cred: getgroups after set failed");
+            return 1;
+        }
+        errno = 0;
+        if (getgroups(1, current_groups) != -1 || errno != EINVAL) {
+            puts("cc_cred: getgroups small buffer failed");
+            return 1;
+        }
+        gid_t restore[1] = { gid };
+        if (setgroups(1, restore) < 0) {
+            puts("cc_cred: restore groups failed");
+            return 1;
+        }
+    }
     if (uid != 0) {
         gid_t groups[1] = { gid };
         if (setgroups(1, groups) == 0 || errno != EACCES) {

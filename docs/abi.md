@@ -125,6 +125,7 @@ The current Linux-like syscall surface is:
 | 110 | `getppid` | Parent pid. |
 | 111 | `getpgrp` | Current process group. |
 | 112 | `setsid` | Create a new session/process group when not already a process-group leader. |
+| 115 | `getgroups` | Reads supplementary groups. |
 | 116 | `setgroups` | Root-only group-list update. |
 | 117 | `setresuid` | Real/effective/saved uid update. |
 | 118 | `getresuid` | Reads real/effective/saved uid. |
@@ -148,7 +149,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `getppid`, `setsid`, `getenv`, `putenv`, `setenv`, `unsetenv`, and
   `clearenv`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
-  `setresuid`, `getresuid`, `setresgid`, `getresgid`, `setgroups`, and libc
+  `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
+  `setgroups`, and libc
   user/group database helpers
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
   `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.

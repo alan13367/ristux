@@ -2032,6 +2032,12 @@ pub fn set_current_groups(groups: &[u32]) -> Result<(), ()> {
     .unwrap_or(Err(()))
 }
 
+pub fn current_groups() -> Option<Vec<u32>> {
+    with_current_read(|p| {
+        p.credentials.groups[..p.credentials.group_count.min(p.credentials.groups.len())].to_vec()
+    })
+}
+
 pub fn set_current_umask(mask: u16) -> u16 {
     with_current(|p| {
         let old = p.umask;

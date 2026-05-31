@@ -110,6 +110,7 @@
 #define SYS_GETPPID 110
 #define SYS_GETPGRP 111
 #define SYS_SETSID 112
+#define SYS_GETGROUPS 115
 #define SYS_SETGROUPS 116
 #define SYS_SETRESUID 117
 #define SYS_GETRESUID 118
@@ -1077,6 +1078,10 @@ int setegid(gid_t egid) {
 
 int setgroups(size_t size, const gid_t *list) {
     return (int)syscall_ret(syscall2(SYS_SETGROUPS, (long)size, (long)list));
+}
+
+int getgroups(int size, gid_t list[]) {
+    return (int)syscall_ret(syscall2(SYS_GETGROUPS, size, (long)list));
 }
 
 #define USERDB_FILE_MAX 2048

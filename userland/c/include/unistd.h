@@ -54,6 +54,7 @@ int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
 int setegid(gid_t egid);
 int setresgid(gid_t rgid, gid_t egid, gid_t sgid);
 int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
+int getgroups(int size, gid_t list[]);
 int setgroups(size_t size, const gid_t *list);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);

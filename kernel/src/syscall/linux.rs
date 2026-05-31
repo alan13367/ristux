@@ -95,6 +95,7 @@ pub const NR_setpgid: u64 = 109;
 pub const NR_getppid: u64 = 110;
 pub const NR_getpgrp: u64 = 111;
 pub const NR_setsid: u64 = 112;
+pub const NR_getgroups: u64 = 115;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
 pub const NR_getresuid: u64 = 118;
@@ -258,6 +259,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_setsid => linux_setsid(),
+        NR_getgroups => linux_getgroups(a0 as usize, a1 as usize),
         NR_chdir => linux_chdir(a0 as usize),
         NR_getcwd => linux_getcwd(a0 as usize, a1 as usize),
         NR_rename => linux_rename(a0 as usize, a1 as usize),
@@ -1816,6 +1818,21 @@ fn linux_setgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
     process::set_current_groups(&groups)
         .map(|_| 0)
         .map_err(|_| EACCES)
+}
+
+fn linux_getgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
+    let groups = process::current_groups().ok_or(ESRCH)?;
+    if size == 0 {
+        return Ok(groups.len() as u64);
+    }
+    if size < groups.len() {
+        return Err(EINVAL);
+    }
+    let out = process::write_user_buffer(list_ptr, groups.len() * 4).ok_or(EFAULT)?;
+    for (index, group) in groups.iter().copied().enumerate() {
+        out[index * 4..index * 4 + 4].copy_from_slice(&group.to_le_bytes());
+    }
+    Ok(groups.len() as u64)
 }
 
 fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
