@@ -25,7 +25,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill pwd grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
+USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill pwd udp grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -98,7 +98,6 @@ USER_CHMOD_ELF := build/userland/chmod.elf
 USER_KILL_ELF := build/userland/kill.elf
 USER_MKDIR_ELF := build/userland/mkdir.elf
 USER_RM_ELF := build/userland/rm.elf
-USER_UDP_OBJ := build/userland/udp.o
 USER_UDP_ELF := build/userland/udp.elf
 USER_LIBC_OBJ := build/userland/libc.o
 USER_LIBC_SO := build/userland/libc.so
@@ -254,6 +253,7 @@ $(USER_CHMOD_ELF): $(USERLAND_RS_STAMP)
 $(USER_LS_ELF): $(USERLAND_RS_STAMP)
 $(USER_KILL_ELF): $(USERLAND_RS_STAMP)
 $(USER_PWD_ELF): $(USERLAND_RS_STAMP)
+$(USER_UDP_ELF): $(USERLAND_RS_STAMP)
 $(USER_GREP_ELF): $(USERLAND_RS_STAMP)
 $(USER_PRINTF_ELF): $(USERLAND_RS_STAMP)
 $(USER_TEST_ELF): $(USERLAND_RS_STAMP)
@@ -295,13 +295,6 @@ $(USER_STTY_OBJ): userland/c/bin/stty.c $(USER_C_HEADERS)
 
 $(USER_STTY_ELF): $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_STTY_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ) userland/c/linker.ld
 	$(RUST_LLD) -flavor gnu -T userland/c/linker.ld -o $@ $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_STTY_OBJ) $(USER_C_LIBC_OBJ) $(USER_CRTN_OBJ)
-
-$(USER_UDP_OBJ): userland/udp.S
-	mkdir -p build/userland
-	$(CLANG) --target=x86_64-unknown-none-elf -x assembler -c $< -o $@
-
-$(USER_UDP_ELF): $(USER_UDP_OBJ) userland/linker.ld
-	$(RUST_LLD) -flavor gnu -T userland/linker.ld -o $@ $(USER_UDP_OBJ)
 
 $(USER_LIBC_OBJ): userland/libc.S
 	mkdir -p build/userland
