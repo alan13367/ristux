@@ -31,6 +31,7 @@
 #include <sys/statfs.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/utsname.h>
@@ -105,6 +106,8 @@
 #define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
 #define SYS_GETRLIMIT 97
+#define SYS_GETRUSAGE 98
+#define SYS_TIMES 100
 #define SYS_GETUID 102
 #define SYS_GETGID 104
 #define SYS_SETUID 105
@@ -477,7 +480,7 @@ int getopt(int argc, char *const argv[], const char *optstring) {
 long sysconf(int name) {
     switch (name) {
     case _SC_CLK_TCK:
-        return CLOCKS_PER_SEC;
+        return 100;
     case _SC_OPEN_MAX:
         return OPEN_MAX;
     case _SC_PAGESIZE:
@@ -3770,6 +3773,14 @@ int getrlimit(int resource, struct rlimit *rlim) {
 
 int setrlimit(int resource, const struct rlimit *rlim) {
     return (int)syscall_ret(syscall2(SYS_SETRLIMIT, resource, (long)rlim));
+}
+
+int getrusage(int who, struct rusage *usage) {
+    return (int)syscall_ret(syscall2(SYS_GETRUSAGE, who, (long)usage));
+}
+
+clock_t times(struct tms *buf) {
+    return (clock_t)syscall_ret(syscall1(SYS_TIMES, (long)buf));
 }
 
 char *basename(char *path) {

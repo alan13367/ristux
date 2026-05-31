@@ -118,6 +118,8 @@ The current Linux-like syscall surface is:
 | 95 | `umask` | Sets the process mask and returns the previous mask. |
 | 96 | `gettimeofday` | Wall-clock seconds and microseconds. |
 | 97 | `getrlimit` | Reports kernel process limits for `RLIMIT_CORE` and `RLIMIT_NOFILE`. |
+| 98 | `getrusage` | Reports self/thread user time from kernel uptime ticks and zeroed child usage counters. |
+| 100 | `times` | Returns boot-relative process-accounting ticks at `_SC_CLK_TCK` frequency. |
 | 102 | `getuid` | Real uid. |
 | 104 | `getgid` | Real gid. |
 | 105 | `setuid` | Credential update with permission checks. |
@@ -169,7 +171,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `gettid`, `getppid`, `setsid`, `uname`, `gethostname`, `sethostname`,
   `getenv`, `putenv`, `setenv`,
   `unsetenv`, `clearenv`, `getopt`, `sysconf`, `getpagesize`, `getrlimit`,
-  `setrlimit`, and generic `syscall`.
+  `setrlimit`, `getrusage`, `times`, and generic `syscall`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
   `setgroups`, and libc

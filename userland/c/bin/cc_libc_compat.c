@@ -13,6 +13,7 @@
 #include <strings.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -214,7 +215,7 @@ static int check_sysconf(void) {
         sysconf(_SC_PAGESIZE) != 4096 ||
         sysconf(_SC_PAGE_SIZE) != 4096 ||
         sysconf(_SC_OPEN_MAX) != OPEN_MAX ||
-        sysconf(_SC_CLK_TCK) != CLOCKS_PER_SEC ||
+        sysconf(_SC_CLK_TCK) != 100 ||
         sysconf(_SC_NPROCESSORS_CONF) < 1 ||
         sysconf(_SC_NPROCESSORS_ONLN) < 1) {
         puts("cc_libc_compat: sysconf values failed");
@@ -335,6 +336,51 @@ static int check_time_format(void) {
         return 1;
     }
     puts("cc_libc_compat: time format ok");
+    return 0;
+}
+
+static int check_process_accounting(void) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0 ||
+        usage.ru_utime.tv_sec < 0 ||
+        usage.ru_utime.tv_usec < 0 ||
+        usage.ru_utime.tv_usec >= 1000000) {
+        puts("cc_libc_compat: getrusage self failed");
+        return 1;
+    }
+
+    memset(&usage, 0xff, sizeof(usage));
+    if (getrusage(RUSAGE_CHILDREN, &usage) != 0 ||
+        usage.ru_utime.tv_sec != 0 ||
+        usage.ru_utime.tv_usec != 0 ||
+        usage.ru_stime.tv_sec != 0 ||
+        usage.ru_stime.tv_usec != 0) {
+        puts("cc_libc_compat: getrusage children failed");
+        return 1;
+    }
+
+    errno = 0;
+    if (getrusage(999, &usage) != -1 || errno != EINVAL) {
+        puts("cc_libc_compat: getrusage invalid failed");
+        return 1;
+    }
+
+    struct tms tms;
+    clock_t ticks = times(&tms);
+    if (ticks < 0 ||
+        tms.tms_utime < 0 ||
+        tms.tms_stime != 0 ||
+        tms.tms_cutime != 0 ||
+        tms.tms_cstime != 0) {
+        puts("cc_libc_compat: times failed");
+        return 1;
+    }
+    if (times(NULL) < 0) {
+        puts("cc_libc_compat: times null failed");
+        return 1;
+    }
+
+    puts("cc_libc_compat: process accounting ok");
     return 0;
 }
 
@@ -528,6 +574,7 @@ int main(void) {
         check_resource_syslog() != 0 ||
         check_uname() != 0 ||
         check_time_format() != 0 ||
+        check_process_accounting() != 0 ||
         check_setjmp() != 0 ||
         check_dropbear_types() != 0 ||
         check_crypt() != 0 ||

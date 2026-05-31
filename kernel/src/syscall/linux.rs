@@ -89,6 +89,8 @@ pub const NR_chown: u64 = 92;
 pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
 pub const NR_getrlimit: u64 = 97;
+pub const NR_getrusage: u64 = 98;
+pub const NR_times: u64 = 100;
 pub const NR_getuid: u64 = 102;
 pub const NR_getgid: u64 = 104;
 pub const NR_setuid: u64 = 105;
@@ -323,6 +325,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
         NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
         NR_getrlimit => linux_getrlimit(a0 as i32, a1 as usize),
+        NR_getrusage => linux_getrusage(a0 as i32, a1 as usize),
+        NR_times => linux_times(a0 as usize),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
@@ -2080,6 +2084,41 @@ fn linux_getrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
     };
     write_rlimit(rlim_ptr, cur, max)?;
     Ok(0)
+}
+
+fn linux_getrusage(who: i32, usage_ptr: usize) -> Result<u64, i64> {
+    const RUSAGE_SELF: i32 = 0;
+    const RUSAGE_CHILDREN: i32 = -1;
+    const RUSAGE_THREAD: i32 = 1;
+    const RUSAGE_SIZE: usize = 144;
+
+    if !matches!(who, RUSAGE_SELF | RUSAGE_CHILDREN | RUSAGE_THREAD) {
+        return Err(EINVAL);
+    }
+
+    let out = process::write_user_buffer(usage_ptr, RUSAGE_SIZE).ok_or(EFAULT)?;
+    out.fill(0);
+    if who != RUSAGE_CHILDREN {
+        let ticks = crate::time::uptime_ticks();
+        let hz = crate::config::PIT_TARGET_HZ as u64;
+        let sec = ticks / hz;
+        let usec = ticks % hz * 1_000_000 / hz;
+        out[0..8].copy_from_slice(&(sec as i64).to_le_bytes());
+        out[8..16].copy_from_slice(&(usec as i64).to_le_bytes());
+    }
+    Ok(0)
+}
+
+fn linux_times(buf_ptr: usize) -> Result<u64, i64> {
+    let ticks = crate::time::uptime_ticks();
+    if buf_ptr != 0 {
+        let out = process::write_user_buffer(buf_ptr, 32).ok_or(EFAULT)?;
+        out[0..8].copy_from_slice(&(ticks as i64).to_le_bytes());
+        out[8..16].copy_from_slice(&0i64.to_le_bytes());
+        out[16..24].copy_from_slice(&0i64.to_le_bytes());
+        out[24..32].copy_from_slice(&0i64.to_le_bytes());
+    }
+    Ok(ticks)
 }
 
 fn linux_setrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {

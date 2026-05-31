@@ -132,6 +132,11 @@ pub fn monotonic_ticks() -> u64 {
     interrupts::timer_ticks()
 }
 
+pub fn uptime_ticks() -> u64 {
+    let state = *TIMEKEEPER.lock();
+    ticks_since_boot(state)
+}
+
 pub fn uptime_millis() -> u64 {
     let state = *TIMEKEEPER.lock();
     ticks_since_boot(state).saturating_mul(1000) / config::PIT_TARGET_HZ as u64
