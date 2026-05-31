@@ -57,6 +57,7 @@ file /bin/env ../build/userland/env.elf
 file /bin/expr ../build/userland/expr.elf
 file /bin/false ../build/userland/false.elf
 file /bin/find ../build/userland/find.elf
+file /bin/free ../build/userland/free.elf
 file /bin/grep ../build/userland/grep.elf
 file /bin/gzip ../build/userland/gzip.elf
 file /bin/gunzip ../build/userland/gzip.elf
@@ -102,6 +103,7 @@ file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
 file /bin/uname ../build/userland/uname.elf
 file /bin/uniq ../build/userland/uniq.elf
+file /bin/uptime ../build/userland/uptime.elf
 file /bin/wc ../build/userland/wc.elf
 file /bin/which ../build/userland/which.elf
 file /bin/xargs ../build/userland/xargs.elf
@@ -182,6 +184,7 @@ package env 0.1.0 /bin/env
 package expr 0.1.0 /bin/expr
 package false 0.1.0 /bin/false
 package find 0.1.0 /bin/find
+package free 0.1.0 /bin/free
 package grep 0.1.0 /bin/grep
 package gzip 0.1.0 /bin/gzip
 package gzip 0.1.0 /bin/gunzip
@@ -236,6 +239,7 @@ package true 0.1.0 /bin/true
 package udp 0.1.0 /bin/udp
 package uname 0.1.0 /bin/uname
 package uniq 0.1.0 /bin/uniq
+package uptime 0.1.0 /bin/uptime
 package wc 0.1.0 /bin/wc
 package which 0.1.0 /bin/which
 package xargs 0.1.0 /bin/xargs
