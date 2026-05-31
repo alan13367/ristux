@@ -86,6 +86,7 @@ pub const NR_chmod: u64 = 90;
 pub const NR_chown: u64 = 92;
 pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
+pub const NR_getrlimit: u64 = 97;
 pub const NR_getuid: u64 = 102;
 pub const NR_getgid: u64 = 104;
 pub const NR_setuid: u64 = 105;
@@ -103,6 +104,7 @@ pub const NR_getresuid: u64 = 118;
 pub const NR_setresgid: u64 = 119;
 pub const NR_getresgid: u64 = 120;
 pub const NR_rt_sigpending: u64 = 127;
+pub const NR_setrlimit: u64 = 160;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
@@ -127,6 +129,8 @@ const ECONNRESET: i64 = -104;
 const ENOTCONN: i64 = -107;
 const ETIMEDOUT: i64 = -110;
 const CONTEXT_SWITCHED: i64 = i64::MIN;
+const RLIMIT_CORE: i32 = 4;
+const RLIMIT_NOFILE: i32 = 7;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
@@ -274,6 +278,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
         NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
         NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
+        NR_getrlimit => linux_getrlimit(a0 as i32, a1 as usize),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
         NR_lseek => linux_lseek(a0 as usize, a1 as i64, a2 as u32),
@@ -312,6 +317,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         }
         NR_rt_sigpending => linux_rt_sigpending(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
+        NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
             Err(ENOSYS)
@@ -1856,6 +1862,50 @@ fn linux_getgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
         out[index * 4..index * 4 + 4].copy_from_slice(&group.to_le_bytes());
     }
     Ok(groups.len() as u64)
+}
+
+fn linux_getrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
+    let (cur, max) = match resource {
+        RLIMIT_CORE => (0, 0),
+        RLIMIT_NOFILE => process::current_nofile_limit().ok_or(ESRCH)?,
+        _ => return Err(EINVAL),
+    };
+    write_rlimit(rlim_ptr, cur, max)?;
+    Ok(0)
+}
+
+fn linux_setrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
+    let (cur, max) = read_rlimit(rlim_ptr)?;
+    match resource {
+        RLIMIT_CORE => {
+            if cur != 0 || max != 0 {
+                return Err(EINVAL);
+            }
+        }
+        RLIMIT_NOFILE => {
+            process::set_current_nofile_limit(cur, max).map_err(|_| EINVAL)?;
+        }
+        _ => return Err(EINVAL),
+    }
+    Ok(0)
+}
+
+fn read_rlimit(rlim_ptr: usize) -> Result<(u64, u64), i64> {
+    let bytes = process::read_user(rlim_ptr, 16).ok_or(EFAULT)?;
+    let cur = u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]);
+    let max = u64::from_le_bytes([
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]);
+    Ok((cur, max))
+}
+
+fn write_rlimit(rlim_ptr: usize, cur: u64, max: u64) -> Result<(), i64> {
+    let out = process::write_user_buffer(rlim_ptr, 16).ok_or(EFAULT)?;
+    out[0..8].copy_from_slice(&cur.to_le_bytes());
+    out[8..16].copy_from_slice(&max.to_le_bytes());
+    Ok(())
 }
 
 fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {

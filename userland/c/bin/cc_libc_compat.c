@@ -173,6 +173,35 @@ static int check_resource_syslog(void) {
         puts("cc_libc_compat: rlimit failed");
         return 1;
     }
+    if (getrlimit(RLIMIT_NOFILE, &lim) < 0 ||
+        lim.rlim_cur != OPEN_MAX ||
+        lim.rlim_max != OPEN_MAX) {
+        puts("cc_libc_compat: nofile rlimit failed");
+        return 1;
+    }
+    struct rlimit lowered = { 8, OPEN_MAX };
+    if (setrlimit(RLIMIT_NOFILE, &lowered) < 0 ||
+        getrlimit(RLIMIT_NOFILE, &lim) < 0 ||
+        lim.rlim_cur != 8 ||
+        lim.rlim_max != OPEN_MAX) {
+        puts("cc_libc_compat: nofile setrlimit failed");
+        return 1;
+    }
+    struct rlimit restored = { OPEN_MAX, OPEN_MAX };
+    if (setrlimit(RLIMIT_NOFILE, &restored) < 0) {
+        puts("cc_libc_compat: nofile restore failed");
+        return 1;
+    }
+    errno = 0;
+    if (getrlimit(999, &lim) != -1 || errno != EINVAL) {
+        puts("cc_libc_compat: invalid getrlimit failed");
+        return 1;
+    }
+    errno = 0;
+    if (setrlimit(RLIMIT_NOFILE, NULL) != -1 || errno != EFAULT) {
+        puts("cc_libc_compat: setrlimit fault failed");
+        return 1;
+    }
     openlog("cc_libc_compat", LOG_PID, LOG_AUTHPRIV);
     syslog(LOG_INFO, "syslog ok %d", 42);
     int old = setlogmask(LOG_UPTO(LOG_ERR));

@@ -102,6 +102,7 @@
 #define SYS_CHOWN 92
 #define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
+#define SYS_GETRLIMIT 97
 #define SYS_GETUID 102
 #define SYS_GETGID 104
 #define SYS_SETUID 105
@@ -119,6 +120,7 @@
 #define SYS_SETRESGID 119
 #define SYS_GETRESGID 120
 #define SYS_RT_SIGPENDING 127
+#define SYS_SETRLIMIT 160
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
@@ -3514,43 +3516,11 @@ void syslog(int priority, const char *format, ...) {
 }
 
 int getrlimit(int resource, struct rlimit *rlim) {
-    if (rlim == NULL) {
-        errno = EFAULT;
-        return -1;
-    }
-    switch (resource) {
-    case RLIMIT_CORE:
-        rlim->rlim_cur = 0;
-        rlim->rlim_max = 0;
-        return 0;
-    case RLIMIT_NOFILE:
-        rlim->rlim_cur = OPEN_MAX;
-        rlim->rlim_max = OPEN_MAX;
-        return 0;
-    default:
-        errno = EINVAL;
-        return -1;
-    }
+    return (int)syscall_ret(syscall2(SYS_GETRLIMIT, resource, (long)rlim));
 }
 
 int setrlimit(int resource, const struct rlimit *rlim) {
-    if (rlim == NULL) {
-        errno = EFAULT;
-        return -1;
-    }
-    switch (resource) {
-    case RLIMIT_CORE:
-        return 0;
-    case RLIMIT_NOFILE:
-        if (rlim->rlim_cur > OPEN_MAX || rlim->rlim_max > OPEN_MAX) {
-            errno = EINVAL;
-            return -1;
-        }
-        return 0;
-    default:
-        errno = EINVAL;
-        return -1;
-    }
+    return (int)syscall_ret(syscall2(SYS_SETRLIMIT, resource, (long)rlim));
 }
 
 char *basename(char *path) {

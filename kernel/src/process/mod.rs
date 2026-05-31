@@ -20,7 +20,7 @@ static CURRENT_PID: SpinLock<Option<Pid>> = SpinLock::new(None);
 
 pub type Pid = u64;
 
-const MAX_FDS: usize = 16;
+pub const MAX_FDS: usize = 256;
 const MAX_USER_ARGS: usize = 32;
 const MAX_USER_ENVS: usize = 16;
 pub const FD_CLOEXEC: u32 = 1;
@@ -71,8 +71,9 @@ pub struct Process {
     pub address_space: AddressSpace,
     pub credentials: Credentials,
     pub umask: u16,
-    fd_count: usize,
-    fds: [FdEntry; MAX_FDS],
+    rlimit_nofile_cur: u64,
+    rlimit_nofile_max: u64,
+    fds: Vec<FdEntry>,
     socket_handles: Vec<usize>,
     timed_wait: Option<TimedWait>,
     next_fd: usize,
@@ -151,13 +152,9 @@ impl Process {
             address_space,
             credentials,
             umask: 0o022,
-            fd_count: 0,
-            fds: [FdEntry {
-                user_fd: 0,
-                vfs_fd: 0,
-                status_flags: 0,
-                fd_flags: 0,
-            }; MAX_FDS],
+            rlimit_nofile_cur: MAX_FDS as u64,
+            rlimit_nofile_max: MAX_FDS as u64,
+            fds: Vec::new(),
             socket_handles: Vec::new(),
             timed_wait: None,
             next_fd: 3,
@@ -193,32 +190,28 @@ impl Process {
         status_flags: u32,
         fd_flags: u32,
     ) {
-        if let Some(entry) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|e| e.user_fd == user_fd)
-        {
+        if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             entry.vfs_fd = vfs_fd;
             entry.status_flags = status_flags;
             entry.fd_flags = fd_flags;
             return;
         }
-        if self.fd_count >= MAX_FDS {
+        if self.fds.len() >= MAX_FDS {
             panic!("too many file descriptors");
         }
-        self.fds[self.fd_count] = FdEntry {
+        self.fds.push(FdEntry {
             user_fd,
             vfs_fd,
             status_flags,
             fd_flags,
-        };
-        self.fd_count += 1;
+        });
         if user_fd >= self.next_fd {
             self.next_fd = user_fd + 1;
         }
     }
 
     fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
-        self.fds[..self.fd_count]
+        self.fds
             .iter()
             .find(|e| e.user_fd == user_fd)
             .map(|e| e.vfs_fd)
@@ -241,10 +234,7 @@ impl Process {
     fn lowest_available_fd(&self) -> usize {
         let mut candidate = 0;
         loop {
-            if self.fds[..self.fd_count]
-                .iter()
-                .all(|entry| entry.user_fd != candidate)
-            {
+            if self.fds.iter().all(|entry| entry.user_fd != candidate) {
                 return candidate;
             }
             candidate += 1;
@@ -252,13 +242,8 @@ impl Process {
     }
 
     fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {
-        let index = self.fds[..self.fd_count]
-            .iter()
-            .position(|e| e.user_fd == user_fd)?;
-        let vfs_fd = self.fds[index].vfs_fd;
-        self.fd_count -= 1;
-        self.fds[index] = self.fds[self.fd_count];
-        Some(vfs_fd)
+        let index = self.fds.iter().position(|e| e.user_fd == user_fd)?;
+        Some(self.fds.swap_remove(index).vfs_fd)
     }
 
     fn replace_fd_with_flags(
@@ -268,10 +253,7 @@ impl Process {
         status_flags: u32,
         fd_flags: u32,
     ) -> Option<usize> {
-        if let Some(entry) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|e| e.user_fd == user_fd)
-        {
+        if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             let old = entry.vfs_fd;
             entry.vfs_fd = vfs_fd;
             entry.status_flags = status_flags;
@@ -283,17 +265,14 @@ impl Process {
     }
 
     fn status_flags(&self, user_fd: usize) -> Option<u32> {
-        self.fds[..self.fd_count]
+        self.fds
             .iter()
             .find(|e| e.user_fd == user_fd)
             .map(|e| e.status_flags)
     }
 
     fn set_status_flags(&mut self, user_fd: usize, flags: u32) -> bool {
-        if let Some(entry) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|e| e.user_fd == user_fd)
-        {
+        if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             entry.status_flags = flags;
             return true;
         }
@@ -301,17 +280,14 @@ impl Process {
     }
 
     fn fd_flags(&self, user_fd: usize) -> Option<u32> {
-        self.fds[..self.fd_count]
+        self.fds
             .iter()
             .find(|e| e.user_fd == user_fd)
             .map(|e| e.fd_flags)
     }
 
     fn set_fd_flags(&mut self, user_fd: usize, flags: u32) -> bool {
-        if let Some(entry) = self.fds[..self.fd_count]
-            .iter_mut()
-            .find(|e| e.user_fd == user_fd)
-        {
+        if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             entry.fd_flags = flags;
             return true;
         }
@@ -321,11 +297,10 @@ impl Process {
     fn close_on_exec_fds(&mut self) -> Vec<usize> {
         let mut closed = Vec::new();
         let mut index = 0;
-        while index < self.fd_count {
+        while index < self.fds.len() {
             if self.fds[index].fd_flags & FD_CLOEXEC != 0 {
                 closed.push(self.fds[index].vfs_fd);
-                self.fd_count -= 1;
-                self.fds[index] = self.fds[self.fd_count];
+                self.fds.swap_remove(index);
             } else {
                 index += 1;
             }
@@ -520,10 +495,10 @@ impl Process {
     }
 
     fn destroy(&mut self) {
-        for index in 0..self.fd_count {
-            let _ = fs::close(self.fds[index].vfs_fd);
+        for entry in &self.fds {
+            let _ = fs::close(entry.vfs_fd);
         }
-        self.fd_count = 0;
+        self.fds.clear();
         self.close_socket_handles();
         let old = core::mem::replace(
             &mut self.address_space,
@@ -585,10 +560,10 @@ impl ProcessTable {
         };
         {
             let process = &mut self.processes[index];
-            for i in 0..process.fd_count {
-                let _ = fs::close(process.fds[i].vfs_fd);
+            for entry in &process.fds {
+                let _ = fs::close(entry.vfs_fd);
             }
-            process.fd_count = 0;
+            process.fds.clear();
             process.next_fd = 3;
         }
         let process = &mut self.processes[index];
@@ -615,10 +590,10 @@ impl ProcessTable {
             if was_current {
                 process.address_space.activate();
             }
-            for index in 0..process.fd_count {
-                let _ = fs::close(process.fds[index].vfs_fd);
+            for entry in &process.fds {
+                let _ = fs::close(entry.vfs_fd);
             }
-            process.fd_count = 0;
+            process.fds.clear();
             process.close_socket_handles();
             let mut old = AddressSpace::new_kernel_clone().expect("address space");
             core::mem::swap(&mut process.address_space, &mut old);
@@ -751,11 +726,10 @@ impl ProcessTable {
 impl Process {
     fn clone_process(&self) -> Option<Self> {
         let address_space = self.address_space.clone_full_copy().ok()?;
-        let mut fds = self.fds;
-        let fd_count = self.fd_count;
-        for i in 0..fd_count {
-            if let Ok(dup) = fs::duplicate_fd(fds[i].vfs_fd) {
-                fds[i].vfs_fd = dup;
+        let mut fds = self.fds.clone();
+        for entry in &mut fds {
+            if let Ok(dup) = fs::duplicate_fd(entry.vfs_fd) {
+                entry.vfs_fd = dup;
             }
         }
         let socket_handles = self.socket_handles.clone();
@@ -780,7 +754,8 @@ impl Process {
             address_space,
             credentials: self.credentials,
             umask: self.umask,
-            fd_count,
+            rlimit_nofile_cur: self.rlimit_nofile_cur,
+            rlimit_nofile_max: self.rlimit_nofile_max,
             fds,
             socket_handles,
             timed_wait: None,
@@ -1759,12 +1734,12 @@ pub fn kill_current(status: i32) {
 pub fn stats() -> ProcessStats {
     with_table(|table| ProcessStats {
         process_count: table.processes.len(),
-        fd_count: table.processes.iter().map(|p| p.fd_count).sum(),
+        fd_count: table.processes.iter().map(|p| p.fds.len()).sum(),
         cwd_count: table.processes.iter().filter(|p| !p.cwd.is_empty()).count(),
         fd_path_checksum: table
             .processes
             .iter()
-            .map(|p| p.fd_count + p.pid as usize)
+            .map(|p| p.fds.len() + p.pid as usize)
             .sum(),
     })
 }
@@ -2045,6 +2020,22 @@ pub fn set_current_umask(mask: u16) -> u16 {
         old
     })
     .unwrap_or(0o022)
+}
+
+pub fn current_nofile_limit() -> Option<(u64, u64)> {
+    with_current_read(|p| (p.rlimit_nofile_cur, p.rlimit_nofile_max))
+}
+
+pub fn set_current_nofile_limit(cur: u64, max: u64) -> Result<(), ()> {
+    with_current(|p| {
+        if cur > max || max > MAX_FDS as u64 {
+            return Err(());
+        }
+        p.rlimit_nofile_cur = cur;
+        p.rlimit_nofile_max = max;
+        Ok(())
+    })
+    .unwrap_or(Err(()))
 }
 
 pub fn user_cwd() -> Option<String> {

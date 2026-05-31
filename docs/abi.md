@@ -116,6 +116,7 @@ The current Linux-like syscall surface is:
 | 92 | `chown` | Updates owner and group. |
 | 95 | `umask` | Sets the process mask and returns the previous mask. |
 | 96 | `gettimeofday` | Wall-clock seconds and microseconds. |
+| 97 | `getrlimit` | Reports kernel process limits for `RLIMIT_CORE` and `RLIMIT_NOFILE`. |
 | 102 | `getuid` | Real uid. |
 | 104 | `getgid` | Real gid. |
 | 105 | `setuid` | Credential update with permission checks. |
@@ -133,6 +134,7 @@ The current Linux-like syscall surface is:
 | 119 | `setresgid` | Real/effective/saved gid update. |
 | 120 | `getresgid` | Reads real/effective/saved gid. |
 | 127 | `rt_sigpending` | Reads the current pending signal mask. |
+| 160 | `setrlimit` | Updates supported per-process resource limits. |
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
@@ -148,7 +150,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 
 - Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
   `getppid`, `setsid`, `uname`, `getenv`, `putenv`, `setenv`, `unsetenv`,
-  and `clearenv`.
+  `clearenv`, `getrlimit`, and `setrlimit`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
   `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
   `setgroups`, and libc
