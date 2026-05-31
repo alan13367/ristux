@@ -20,6 +20,11 @@ static int expect_bytes(int fd, const char *expected, size_t len) {
     return got == (ssize_t)len && memcmp(buf, expected, len) == 0;
 }
 
+static int expect_no_read_ready(int fd) {
+    struct pollfd pfd = { fd, POLLIN, 0 };
+    return poll(&pfd, 1, 0) == 0;
+}
+
 static int wait_for_exit(pid_t child, int expected_status) {
     int status = 0;
     for (int i = 0; i < 100; i++) {
@@ -36,6 +41,18 @@ static int wait_for_exit(pid_t child, int expected_status) {
 }
 
 static int check_signal_chars(int master, int slave) {
+    struct termios term;
+    if (tcgetattr(slave, &term) < 0) {
+        puts("cc_pty: signal termios get failed");
+        return 1;
+    }
+    term.c_lflag |= ISIG;
+    term.c_cc[VINTR] = 0x03;
+    if (tcsetattr(slave, TCSANOW, &term) < 0) {
+        puts("cc_pty: signal termios set failed");
+        return 1;
+    }
+
     pid_t child = fork();
     if (child < 0) {
         puts("cc_pty: signal fork failed");
@@ -67,6 +84,41 @@ static int check_signal_chars(int master, int slave) {
     }
     puts("cc_pty: signal char ok");
     return 0;
+}
+
+static int check_line_discipline(int master, int slave) {
+    if (write(master, "ab", 2) != 2 || !expect_bytes(master, "ab", 2)) {
+        puts("cc_pty: echo failed");
+        return 1;
+    }
+    if (!expect_no_read_ready(slave)) {
+        puts("cc_pty: canonical premature read failed");
+        return 1;
+    }
+    if (write(master, "c\n", 2) != 2 || !expect_bytes(master, "c\n", 2)) {
+        puts("cc_pty: newline echo failed");
+        return 1;
+    }
+    struct pollfd slave_ready = { slave, POLLIN, 0 };
+    if (poll(&slave_ready, 1, 0) != 1 || (slave_ready.revents & POLLIN) == 0) {
+        puts("cc_pty: canonical poll failed");
+        return 1;
+    }
+    if (!expect_bytes(slave, "abc\n", 4)) {
+        puts("cc_pty: canonical read failed");
+        return 1;
+    }
+    puts("cc_pty: line discipline ok");
+    return 0;
+}
+
+static int set_raw(int slave) {
+    struct termios term;
+    if (tcgetattr(slave, &term) < 0) {
+        return 0;
+    }
+    cfmakeraw(&term);
+    return tcsetattr(slave, TCSANOW, &term) == 0;
 }
 
 static int check_openpty(void) {
@@ -161,6 +213,14 @@ int main(void) {
     if (poll(writable, 2, 0) != 2 || (writable[0].revents & POLLOUT) == 0 ||
         (writable[1].revents & POLLOUT) == 0) {
         puts("cc_pty: poll write failed");
+        return 1;
+    }
+
+    if (check_line_discipline(master, slave) != 0) {
+        return 1;
+    }
+    if (!set_raw(slave)) {
+        puts("cc_pty: raw mode failed");
         return 1;
     }
 

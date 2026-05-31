@@ -220,6 +220,7 @@ case "$SCENARIO" in
     COMMANDS=("cc_pty")
     EXPECTS=(
       "cc_pty: open ok"
+      "cc_pty: line discipline ok"
       "cc_pty: master-to-slave ok"
       "cc_pty: slave-to-master ok"
       "cc_pty: signal char ok"

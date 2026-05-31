@@ -144,6 +144,7 @@ struct PipeState {
 struct PtyState {
     master_to_slave: VecDeque<u8>,
     slave_to_master: VecDeque<u8>,
+    input_line: Vec<u8>,
     capacity: usize,
     masters: usize,
     slaves: usize,
@@ -243,6 +244,7 @@ impl PtyState {
         Self {
             master_to_slave: VecDeque::new(),
             slave_to_master: VecDeque::new(),
+            input_line: Vec::new(),
             capacity,
             masters: 1,
             slaves: 0,
@@ -291,10 +293,16 @@ impl PtyState {
     }
 
     fn write_master_input(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        const IFLAG_ICRNL: u32 = 0x100;
         const LFLAG_ISIG: u32 = 0x1;
+        const LFLAG_ICANON: u32 = 0x2;
+        const LFLAG_ECHO: u32 = 0x8;
         const VINTR: usize = 0;
         const VQUIT: usize = 1;
+        const VERASE: usize = 2;
+        const VEOF: usize = 4;
         const VSUSP: usize = 10;
+        const TERMIOS_IFLAG: usize = 0;
         const TERMIOS_LFLAG: usize = 12;
 
         if input.is_empty() {
@@ -304,6 +312,12 @@ impl PtyState {
             return Err(VfsError::BadFd);
         }
 
+        let iflag = u32::from_le_bytes([
+            self.termios[TERMIOS_IFLAG],
+            self.termios[TERMIOS_IFLAG + 1],
+            self.termios[TERMIOS_IFLAG + 2],
+            self.termios[TERMIOS_IFLAG + 3],
+        ]);
         let lflag = u32::from_le_bytes([
             self.termios[TERMIOS_LFLAG],
             self.termios[TERMIOS_LFLAG + 1],
@@ -311,13 +325,19 @@ impl PtyState {
             self.termios[TERMIOS_LFLAG + 3],
         ]);
         let isig = lflag & LFLAG_ISIG != 0;
+        let canonical = lflag & LFLAG_ICANON != 0;
+        let echo = lflag & LFLAG_ECHO != 0;
         let mut written = 0;
         for byte in input {
-            let signal = if isig && Some(*byte) == control_char(&self.termios, VINTR) {
+            let mut byte = *byte;
+            if byte == b'\r' && iflag & IFLAG_ICRNL != 0 {
+                byte = b'\n';
+            }
+            let signal = if isig && Some(byte) == control_char(&self.termios, VINTR) {
                 Some(crate::signal::Signal::Int)
-            } else if isig && Some(*byte) == control_char(&self.termios, VQUIT) {
+            } else if isig && Some(byte) == control_char(&self.termios, VQUIT) {
                 Some(crate::signal::Signal::Quit)
-            } else if isig && Some(*byte) == control_char(&self.termios, VSUSP) {
+            } else if isig && Some(byte) == control_char(&self.termios, VSUSP) {
                 Some(crate::signal::Signal::Tstp)
             } else {
                 None
@@ -327,10 +347,51 @@ impl PtyState {
                 written += 1;
                 continue;
             }
-            if self.master_to_slave.len() == self.capacity {
-                break;
+
+            if canonical {
+                if Some(byte) == control_char(&self.termios, VERASE) || byte == 0x08 {
+                    if !self.input_line.is_empty() {
+                        self.input_line.pop();
+                        if echo {
+                            let _ = push_pty_output(&mut self.slave_to_master, self.capacity, 0x08);
+                            let _ = push_pty_output(&mut self.slave_to_master, self.capacity, b' ');
+                            let _ = push_pty_output(&mut self.slave_to_master, self.capacity, 0x08);
+                        }
+                    }
+                    written += 1;
+                    continue;
+                }
+                if Some(byte) == control_char(&self.termios, VEOF) {
+                    if !self.input_line.is_empty() {
+                        commit_pty_line(
+                            &mut self.master_to_slave,
+                            &mut self.input_line,
+                            self.capacity,
+                        );
+                    }
+                    written += 1;
+                    continue;
+                }
+                if self.input_line.len() == self.capacity {
+                    break;
+                }
+                self.input_line.push(byte);
+                if echo {
+                    let _ = push_pty_output(&mut self.slave_to_master, self.capacity, byte);
+                }
+                if byte == b'\n' {
+                    commit_pty_line(
+                        &mut self.master_to_slave,
+                        &mut self.input_line,
+                        self.capacity,
+                    );
+                }
+            } else {
+                if self.master_to_slave.len() == self.capacity {
+                    break;
+                }
+                self.master_to_slave.push_back(byte);
             }
-            self.master_to_slave.push_back(*byte);
             written += 1;
         }
         if written == 0 {
@@ -338,6 +399,24 @@ impl PtyState {
         }
         Ok(written)
     }
+}
+
+fn push_pty_output(queue: &mut VecDeque<u8>, capacity: usize, byte: u8) -> Result<(), VfsError> {
+    if queue.len() == capacity {
+        return Err(VfsError::WouldBlock);
+    }
+    queue.push_back(byte);
+    Ok(())
+}
+
+fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize) {
+    while !line.is_empty() && queue.len() < capacity {
+        queue.push_back(line.remove(0));
+    }
+    if line.is_empty() {
+        return;
+    }
+    line.clear();
 }
 
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
@@ -2868,6 +2947,16 @@ pub fn self_test() {
     set_pty_locked(master, false).expect("unlock pty failed");
     let slave_path = format!("/dev/pts/{}", pty);
     let slave = open(&slave_path).expect("open pty slave failed");
+    let mut raw_termios = crate::tty::default_termios_bytes();
+    let mut lflag = u32::from_le_bytes([
+        raw_termios[12],
+        raw_termios[13],
+        raw_termios[14],
+        raw_termios[15],
+    ]);
+    lflag &= !(0x1 | 0x2 | 0x8 | 0x8000);
+    raw_termios[12..16].copy_from_slice(&lflag.to_le_bytes());
+    set_pty_termios_bytes(master, &raw_termios).expect("set pty raw termios failed");
     write(master, b"abc").expect("write pty master failed");
     let mut slave_bytes = [0; 3];
     read(slave, &mut slave_bytes).expect("read pty slave failed");
