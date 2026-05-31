@@ -70,6 +70,7 @@ The current Linux-like syscall surface is:
 | 11 | `munmap` | Unmaps page-aligned mmap ranges. |
 | 12 | `brk` | Process heap break used by the in-tree malloc. |
 | 13 | `rt_sigaction` | Installs one handler pointer per signal. |
+| 14 | `rt_sigprocmask` | Reads and updates the current process signal mask. |
 | 15 | `rt_sigreturn` | Returns from a delivered signal frame. |
 | 16 | `ioctl` | TTY-oriented requests currently implemented by the kernel. |
 | 21 | `access` | Checks read, write, and execute permissions. |
@@ -157,8 +158,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Entropy: `getrandom`; `/dev/random` and `/dev/urandom` are backed by the
   same kernel ChaCha DRBG, seeded from CPU/time sources and mixed with keyboard
   interrupt timing.
-- Signals: `signal`, `raise`, kernel-backed handler delivery, and
-  `rt_sigreturn`.
+- Signals: `signal`, `raise`, `sigprocmask`, kernel-backed handler delivery,
+  and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
   `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads

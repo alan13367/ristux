@@ -938,6 +938,13 @@ pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
     let pid = current_pid()?;
     let status = with_table(|table| {
         let process = table.get_mut(pid)?;
+        let status = process.pending_signal_status?;
+        if status >= 128 {
+            let signal = (status - 128) as u64;
+            if signal < 64 && process.signal_mask & (1 << signal) != 0 {
+                return None;
+            }
+        }
         let status = process.pending_signal_status.take()?;
         process.pending_signals = 0;
         Some(status)
@@ -948,6 +955,19 @@ pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
         0
     };
     Some((pid, signum, status))
+}
+
+pub fn current_signal_mask() -> Option<u64> {
+    with_current_read(|p| p.signal_mask)
+}
+
+pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
+    const UNBLOCKABLE: u64 = 1 << crate::signal::Signal::Kill.number();
+    with_current(|p| {
+        let old = p.signal_mask;
+        p.signal_mask = mask & !UNBLOCKABLE;
+        old
+    })
 }
 
 pub fn pids_in_pgrp(pgrp: Pid) -> Vec<Pid> {

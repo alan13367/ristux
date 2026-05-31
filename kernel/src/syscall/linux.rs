@@ -36,6 +36,7 @@ pub const NR_mprotect: u64 = 10;
 pub const NR_munmap: u64 = 11;
 pub const NR_brk: u64 = 12;
 pub const NR_rt_sigaction: u64 = 13;
+pub const NR_rt_sigprocmask: u64 = 14;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
 pub const NR_writev: u64 = 20;
@@ -286,6 +287,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setresgid => linux_setresgid(a0, a1, a2),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
+        NR_rt_sigprocmask => {
+            linux_rt_sigprocmask(a0 as i32, a1 as usize, a2 as usize, a3 as usize)
+        }
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
@@ -2198,6 +2202,42 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
             process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
         out.copy_from_slice(&old.to_le_bytes());
     }
+    Ok(0)
+}
+
+fn linux_rt_sigprocmask(
+    how: i32,
+    set_ptr: usize,
+    oldset_ptr: usize,
+    sigset_size: usize,
+) -> Result<u64, i64> {
+    const SIG_BLOCK: i32 = 0;
+    const SIG_UNBLOCK: i32 = 1;
+    const SIG_SETMASK: i32 = 2;
+
+    if sigset_size != core::mem::size_of::<u64>() {
+        return Err(EINVAL);
+    }
+    let old = process::current_signal_mask().ok_or(ESRCH)?;
+    if oldset_ptr != 0 {
+        let out = process::write_user_buffer(oldset_ptr, core::mem::size_of::<u64>())
+            .ok_or(EFAULT)?;
+        out.copy_from_slice(&old.to_le_bytes());
+    }
+    if set_ptr == 0 {
+        return Ok(0);
+    }
+    let bytes = process::read_user(set_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
+    let mut raw = [0u8; core::mem::size_of::<u64>()];
+    raw.copy_from_slice(bytes);
+    let set = u64::from_le_bytes(raw);
+    match how {
+        SIG_BLOCK => process::set_current_signal_mask(old | set),
+        SIG_UNBLOCK => process::set_current_signal_mask(old & !set),
+        SIG_SETMASK => process::set_current_signal_mask(set),
+        _ => return Err(EINVAL),
+    }
+    .ok_or(ESRCH)?;
     Ok(0)
 }
 

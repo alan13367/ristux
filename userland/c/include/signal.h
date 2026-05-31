@@ -42,6 +42,10 @@ typedef unsigned long sigset_t;
 
 #define SA_NOCLDSTOP 0x00000001
 
+#define SIG_BLOCK 0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
 struct sigaction {
     sighandler_t sa_handler;
     sigset_t sa_mask;
@@ -57,5 +61,6 @@ int sigaddset(sigset_t *set, int signum);
 int sigdelset(sigset_t *set, int signum);
 int sigismember(const sigset_t *set, int signum);
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 
 #endif

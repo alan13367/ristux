@@ -52,6 +52,7 @@
 #define SYS_MUNMAP 11
 #define SYS_BRK 12
 #define SYS_RT_SIGACTION 13
+#define SYS_RT_SIGPROCMASK 14
 #define SYS_RT_SIGRETURN 15
 #define SYS_IOCTL 16
 #define SYS_WRITEV 20
@@ -1779,6 +1780,16 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
         return -1;
     }
     return 0;
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    return (int)syscall_ret(syscall4(
+        SYS_RT_SIGPROCMASK,
+        how,
+        (long)set,
+        (long)oldset,
+        sizeof(sigset_t)
+    ));
 }
 
 sighandler_t signal(int signum, sighandler_t handler) {
