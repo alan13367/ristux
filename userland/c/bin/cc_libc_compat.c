@@ -209,6 +209,26 @@ static int check_getopt(void) {
     return 0;
 }
 
+static int check_sysconf(void) {
+    if (getpagesize() != 4096 ||
+        sysconf(_SC_PAGESIZE) != 4096 ||
+        sysconf(_SC_PAGE_SIZE) != 4096 ||
+        sysconf(_SC_OPEN_MAX) != OPEN_MAX ||
+        sysconf(_SC_CLK_TCK) != CLOCKS_PER_SEC ||
+        sysconf(_SC_NPROCESSORS_CONF) < 1 ||
+        sysconf(_SC_NPROCESSORS_ONLN) < 1) {
+        puts("cc_libc_compat: sysconf values failed");
+        return 1;
+    }
+    errno = 0;
+    if (sysconf(99999) != -1 || errno != EINVAL) {
+        puts("cc_libc_compat: sysconf invalid failed");
+        return 1;
+    }
+    puts("cc_libc_compat: sysconf ok");
+    return 0;
+}
+
 static int check_resource_syslog(void) {
     struct rlimit lim;
     if (getrlimit(RLIMIT_CORE, &lim) < 0 || lim.rlim_cur != 0 || lim.rlim_max != 0 ||
@@ -504,6 +524,7 @@ int main(void) {
         check_format() != 0 ||
         check_path() != 0 ||
         check_getopt() != 0 ||
+        check_sysconf() != 0 ||
         check_resource_syslog() != 0 ||
         check_uname() != 0 ||
         check_time_format() != 0 ||

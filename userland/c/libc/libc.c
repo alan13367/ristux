@@ -474,6 +474,27 @@ int getopt(int argc, char *const argv[], const char *optstring) {
     return leading_colon ? ':' : '?';
 }
 
+long sysconf(int name) {
+    switch (name) {
+    case _SC_CLK_TCK:
+        return CLOCKS_PER_SEC;
+    case _SC_OPEN_MAX:
+        return OPEN_MAX;
+    case _SC_PAGESIZE:
+        return 4096;
+    case _SC_NPROCESSORS_CONF:
+    case _SC_NPROCESSORS_ONLN:
+        return 1;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+int getpagesize(void) {
+    return 4096;
+}
+
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
     return (int)syscall_ret(syscall6(SYS_SELECT, nfds, (long)readfds, (long)writefds, (long)exceptfds, (long)timeout, 0));
 }

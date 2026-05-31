@@ -23,6 +23,13 @@ extern int optopt;
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define _SC_CLK_TCK 2
+#define _SC_OPEN_MAX 4
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE _SC_PAGESIZE
+#define _SC_NPROCESSORS_CONF 83
+#define _SC_NPROCESSORS_ONLN 84
+
 ssize_t read(int fd, void *buf, size_t len);
 ssize_t write(int fd, const void *buf, size_t len);
 ssize_t pread(int fd, void *buf, size_t len, off_t offset);
@@ -87,6 +94,8 @@ void *sbrk(long increment);
 int daemon(int nochdir, int noclose);
 unsigned int sleep(unsigned int seconds);
 int getopt(int argc, char *const argv[], const char *optstring);
+long sysconf(int name);
+int getpagesize(void);
 long syscall(long number, ...);
 void _exit(int status) __attribute__((noreturn));
 
