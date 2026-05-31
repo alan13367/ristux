@@ -204,7 +204,9 @@ TINYCC_PORT_STAMP := build/ports/tinycc/.port-stamp
 TINYCC_INCLUDE_DIR := build/ports/tinycc/root/lib/tcc/include
 ROOTFS_TINYCC_PROJECT_DIR := rootfs/testdata/tinycc-project
 ROOTFS_TINYCC_PROJECT_INPUTS := $(shell find $(ROOTFS_TINYCC_PROJECT_DIR) -type f 2>/dev/null | sort)
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc rootfs/testdata/ristuxpkg.patch rootfs/testdata/tinycc-hello.c userland/c/linker.ld $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(USER_C_LIBC_A) $(TINYCC_PORT_STAMP) $(ROOTFS_TINYCC_PROJECT_INPUTS) $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(ROOTFS_NATIVEPKG_ARCHIVE)
+ROOTFS_MAKE_IMPLICIT_DIR := rootfs/testdata/make-implicit
+ROOTFS_MAKE_IMPLICIT_INPUTS := $(shell find $(ROOTFS_MAKE_IMPLICIT_DIR) -type f 2>/dev/null | sort)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc rootfs/testdata/ristuxpkg.patch rootfs/testdata/tinycc-hello.c userland/c/linker.ld $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(USER_C_LIBC_A) $(TINYCC_PORT_STAMP) $(ROOTFS_TINYCC_PROJECT_INPUTS) $(ROOTFS_MAKE_IMPLICIT_INPUTS) $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(ROOTFS_NATIVEPKG_ARCHIVE)
 
 .PHONY: all build rootfs disk dropbear-port newlib-port-check newlib-sysroot check-multiboot iso run run-headless smoke quick quick-% debug test clean
 

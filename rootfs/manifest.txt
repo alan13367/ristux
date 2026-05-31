@@ -139,6 +139,7 @@ file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
 package-tree tcc 0.9.28rc ../build/ports/tinycc/root/lib/tcc /lib/tcc deps=libc,libc-dev
+package-tree make-implicit-fixture 0.1.0 testdata/make-implicit /usr/share/testdata/make-implicit deps=make,tcc,toolchain-frontends
 package-tree tinycc-build-fixture 0.1.0 testdata/tinycc-project /usr/share/testdata/tinycc-project deps=tcc,make
 package native-build-fixture 0.1.0 /usr/share/testdata/ristux-hello-0.1.tar.gz deps=tcc,make,tar,gzip,install
 package ansi_demo 0.1.0 /bin/ansi_demo

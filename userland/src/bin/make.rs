@@ -4,7 +4,7 @@
 extern crate alloc;
 extern crate ristux_userland;
 
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 use core::ptr;
 use ristux_userland::sys;
 
@@ -16,6 +16,7 @@ struct Var {
     value: Vec<u8>,
 }
 
+#[derive(Clone)]
 struct Rule {
     target: Vec<u8>,
     deps: Vec<Vec<u8>>,
@@ -213,6 +214,14 @@ impl BuildFile {
             default_target: None,
         };
         file.set_var(b"CC", b"cc");
+        file.set_var(b"CPP", b"cpp");
+        file.set_var(b"AS", b"as");
+        file.set_var(b"LD", b"ld");
+        file.set_var(b"CPPFLAGS", b"");
+        file.set_var(b"CFLAGS", b"");
+        file.set_var(b"ASFLAGS", b"");
+        file.set_var(b"LDFLAGS", b"");
+        file.set_var(b"LDLIBS", b"");
         file.set_var(b"AR", b"ar");
         file.set_var(b"RM", b"rm");
         file.set_var(b"SHELL", b"/bin/sh");
@@ -444,6 +453,77 @@ fn contains_name(names: &[Vec<u8>], name: &[u8]) -> bool {
     names.iter().any(|existing| existing.as_slice() == name)
 }
 
+fn with_suffix(stem: &[u8], suffix: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(stem.len() + suffix.len());
+    out.extend_from_slice(stem);
+    out.extend_from_slice(suffix);
+    out
+}
+
+fn strip_suffix<'a>(bytes: &'a [u8], suffix: &[u8]) -> Option<&'a [u8]> {
+    if bytes.ends_with(suffix) {
+        Some(&bytes[..bytes.len() - suffix.len()])
+    } else {
+        None
+    }
+}
+
+fn implicit_rule(file: &BuildFile, target: &[u8]) -> Option<Rule> {
+    if let Some(stem) = strip_suffix(target, b".o") {
+        let source = with_suffix(stem, b".c");
+        if path_exists(&source) {
+            return Some(Rule {
+                target: target.to_vec(),
+                deps: vec![source],
+                commands: vec![b"$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@".to_vec()],
+            });
+        }
+
+        let source = with_suffix(stem, b".s");
+        if path_exists(&source) {
+            return Some(Rule {
+                target: target.to_vec(),
+                deps: vec![source],
+                commands: vec![b"$(AS) $(ASFLAGS) $< -o $@".to_vec()],
+            });
+        }
+    }
+
+    let source = with_suffix(target, b".c");
+    if path_exists(&source) {
+        return Some(Rule {
+            target: target.to_vec(),
+            deps: vec![source],
+            commands: vec![b"$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@".to_vec()],
+        });
+    }
+
+    let object = with_suffix(target, b".o");
+    if path_exists(&object) {
+        return Some(Rule {
+            target: target.to_vec(),
+            deps: vec![object],
+            commands: vec![b"$(CC) $< $(LDFLAGS) $(LDLIBS) -o $@".to_vec()],
+        });
+    }
+
+    if let Some(index) = file.find_rule(target) {
+        let explicit = &file.rules[index];
+        if explicit.commands.is_empty()
+            && !explicit.deps.is_empty()
+            && explicit.deps.iter().all(|dep| dep.ends_with(b".o"))
+        {
+            return Some(Rule {
+                target: explicit.target.clone(),
+                deps: explicit.deps.clone(),
+                commands: vec![b"$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@".to_vec()],
+            });
+        }
+    }
+
+    None
+}
+
 fn build_target(
     file: &BuildFile,
     target: &[u8],
@@ -459,17 +539,28 @@ fn build_target(
         return false;
     }
 
-    let Some(index) = file.find_rule(target) else {
-        if path_exists(target) {
-            built.push(target.to_vec());
-            return true;
+    let rule = if let Some(index) = file.find_rule(target) {
+        let explicit = file.rules[index].clone();
+        if explicit.commands.is_empty() {
+            implicit_rule(file, target).unwrap_or(explicit)
+        } else {
+            explicit
         }
-        print_error(b"no rule to make target ", target);
-        return false;
+    } else {
+        match implicit_rule(file, target) {
+            Some(rule) => rule,
+            None => {
+                if path_exists(target) {
+                    built.push(target.to_vec());
+                    return true;
+                }
+                print_error(b"no rule to make target ", target);
+                return false;
+            }
+        }
     };
 
     visiting.push(target.to_vec());
-    let rule = &file.rules[index];
     for dep in &rule.deps {
         if !build_target(file, dep, visiting, built, silent_mode) {
             let _ = visiting.pop();
