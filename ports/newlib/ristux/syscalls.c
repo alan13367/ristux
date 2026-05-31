@@ -37,6 +37,7 @@ typedef int ristux_clockid_t;
 #define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGPROCMASK 14
 #define SYS_RT_SIGRETURN 15
+#define SYS_IOCTL 16
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
 #define SYS_DUP 32
@@ -469,6 +470,14 @@ int getdents(int fd, void *dirp, int count) {
 
 int getdents64(int fd, void *dirp, int count) {
     return getdents(fd, dirp, count);
+}
+
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void *argp = va_arg(ap, void *);
+    va_end(ap);
+    return public_syscall_ret(ristux_syscall3(SYS_IOCTL, fd, (long)request, (long)argp));
 }
 
 char *getcwd(char *buf, size_t size) {

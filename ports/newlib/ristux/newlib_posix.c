@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -85,6 +86,12 @@ int main(void) {
     if (expect(unlink("dir_item") == 0, "dir item unlink")) {
         return 1;
     }
+
+    struct winsize ws;
+    if (expect(ioctl(0, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0, "ioctl winsize")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: ioctl ok");
 
     mode_t old_mask = umask(0022);
     (void)umask(old_mask);

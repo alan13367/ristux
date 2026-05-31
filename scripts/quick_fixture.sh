@@ -364,6 +364,7 @@ case "$SCENARIO" in
       "^cc_newlib_hello: done$"
       "TTY canonical line ready: cc_newlib_posix"
       "^cc_newlib_posix: cwd dirs ok$"
+      "^cc_newlib_posix: ioctl ok$"
       "^cc_newlib_posix: links ok$"
       "^cc_newlib_posix: pipes ok$"
       "^cc_newlib_posix: signals ok$"
