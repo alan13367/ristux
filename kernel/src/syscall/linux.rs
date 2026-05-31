@@ -220,7 +220,6 @@ static HOSTNAME: SpinLock<HostnameState> = SpinLock::new(HostnameState {
     bytes: [0; HOSTNAME_MAX],
     len: 0,
 });
-
 /// Entry from `linux_syscall_entry` assembly. The frame holds saved user
 /// registers and the SYSV-style return state for `iretq`.
 #[unsafe(no_mangle)]
@@ -269,7 +268,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
         NR_connect => linux_connect(a0 as usize, a1 as usize, a2 as usize),
-        NR_accept => linux_accept(a0 as usize, a1 as usize, a2 as usize),
+        NR_accept => linux_accept(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_sendto => linux_sendto(
             a0 as usize,
             a1 as usize,
@@ -1087,7 +1086,10 @@ fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
 fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> Result<(), i64> {
     match deadline_ms {
         Some(deadline_ms) => process::block_current(process::BlockReason::WaitIoUntil(deadline_ms)),
-        None => process::block_current(process::BlockReason::WaitIo),
+        None => {
+            let poll_deadline = crate::time::uptime_millis().saturating_add(25);
+            process::block_current(process::BlockReason::WaitIoUntil(poll_deadline));
+        }
     }
     if !crate::syscall::yield_blocked(frame) {
         return Err(CONTEXT_SWITCHED);
@@ -1172,7 +1174,7 @@ fn read_timespec_millis(addr: usize) -> Result<u64, i64> {
     Ok(sec_ms.saturating_add(nsec_ms))
 }
 
-const SELECT_FD_SETSIZE: usize = 1024;
+const SELECT_FD_SETSIZE: usize = 4096;
 const SELECT_FDSET_BYTES: usize = SELECT_FD_SETSIZE / 8;
 
 struct SelectInterest {
@@ -1482,26 +1484,48 @@ fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
     }
 }
 
-fn linux_accept(fd: usize, addr: usize, addrlen_ptr: usize) -> Result<u64, i64> {
+fn linux_accept(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    addr: usize,
+    addrlen_ptr: usize,
+) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
-    let (accepted, peer) = crate::net::socket::with_sockets(|table| {
-        let accepted = table.accept(handle)?;
-        let peer = table.peer_addr(accepted)?;
-        Ok((accepted, peer))
+    let nonblocking = crate::net::socket::with_sockets(|table| {
+        table
+            .status_flags(handle)
+            .map(|flags| flags & O_NONBLOCK != 0)
     })
     .map_err(map_socket_error)?;
-    if process::install_socket_handle(accepted).is_err() {
-        let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
-        return Err(EMFILE);
+    loop {
+        match crate::net::socket::with_sockets(|table| {
+            let accepted = table.accept(handle)?;
+            let peer = table.peer_addr(accepted)?;
+            Ok((accepted, peer))
+        }) {
+            Ok((accepted, peer)) => {
+                if process::install_socket_handle(accepted).is_err() {
+                    let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
+                    return Err(EMFILE);
+                }
+                if addr != 0 {
+                    let peer = peer.unwrap_or(crate::net::socket::SocketAddress {
+                        ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
+                        port: 8080,
+                    });
+                    write_sockaddr_in(addr, addrlen_ptr, peer.ip.0, peer.port)?;
+                }
+                return Ok((SOCKET_FD_BASE + accepted) as u64);
+            }
+            Err(crate::net::socket::SocketError::WouldBlock) => {
+                if nonblocking {
+                    return Err(EAGAIN);
+                }
+                block_for_io(frame, None)?;
+            }
+            Err(err) => return Err(map_socket_error(err)),
+        }
     }
-    if addr != 0 {
-        let peer = peer.unwrap_or(crate::net::socket::SocketAddress {
-            ip: crate::net::Ipv4Addr([10, 0, 2, 2]),
-            port: 8080,
-        });
-        write_sockaddr_in(addr, addrlen_ptr, peer.ip.0, peer.port)?;
-    }
-    Ok((SOCKET_FD_BASE + accepted) as u64)
 }
 
 fn linux_sendto(

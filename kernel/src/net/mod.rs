@@ -390,8 +390,7 @@ impl NetworkStack {
     }
 
     fn handle_tcp(&mut self, packet: Ipv4Packet) {
-        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload)
-        else {
+        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload) else {
             return;
         };
         self.tcp_inbox.push(tcp_packet);
@@ -478,6 +477,26 @@ pub fn init() {
 
 pub fn stats() -> NetStats {
     *NET_STATS.lock()
+}
+
+pub fn poll_devices() {
+    let received = {
+        let mut guard = NET_STACK.lock();
+        let Some(stack) = guard.as_mut() else {
+            return;
+        };
+        let before = stack.rx_frames;
+        stack.poll();
+        let received = stack.rx_frames != before;
+        if received {
+            *NET_STATS.lock() = stack.stats();
+        }
+        received
+    };
+    if received {
+        socket::drive_tcp();
+        crate::process::wake_io_waiters();
+    }
 }
 
 pub fn udp_bind(local_port: u16) -> Option<usize> {
@@ -642,7 +661,9 @@ pub fn udp_recv(socket: usize, output: &mut [u8]) -> Option<usize> {
 
 pub fn drive_tcp(tcp_stack: &mut tcp::TcpStack) -> bool {
     let mut made_progress = false;
+    let mut rounds = 0usize;
     loop {
+        rounds += 1;
         if tcp_stack.poll_retransmit(crate::time::monotonic_ticks()) {
             made_progress = true;
         }
@@ -673,7 +694,7 @@ pub fn drive_tcp(tcp_stack: &mut tcp::TcpStack) -> bool {
                 }
             }
         }
-        if !sent_outbound {
+        if !sent_outbound || rounds >= 4 {
             break;
         }
     }
@@ -697,6 +718,10 @@ fn build_arp(
     target_ip: Ipv4Addr,
 ) -> Vec<u8> {
     let mut payload = Vec::new();
+    payload.extend_from_slice(&1u16.to_be_bytes());
+    payload.extend_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+    payload.push(6);
+    payload.push(4);
     payload.extend_from_slice(&opcode.to_be_bytes());
     payload.extend_from_slice(&sender_mac.0);
     payload.extend_from_slice(&sender_ip.0);
@@ -706,14 +731,19 @@ fn build_arp(
 }
 
 fn parse_arp(payload: &[u8]) -> Option<ArpPacket> {
-    if payload.len() < 22 {
+    if payload.len() < 28 {
+        return None;
+    }
+    let htype = u16::from_be_bytes([payload[0], payload[1]]);
+    let ptype = u16::from_be_bytes([payload[2], payload[3]]);
+    if htype != 1 || ptype != ETHERTYPE_IPV4 || payload[4] != 6 || payload[5] != 4 {
         return None;
     }
     Some(ArpPacket {
-        opcode: u16::from_be_bytes([payload[0], payload[1]]),
-        sender_mac: MacAddr(payload[2..8].try_into().ok()?),
-        sender_ip: Ipv4Addr(payload[8..12].try_into().ok()?),
-        target_ip: Ipv4Addr(payload[18..22].try_into().ok()?),
+        opcode: u16::from_be_bytes([payload[6], payload[7]]),
+        sender_mac: MacAddr(payload[8..14].try_into().ok()?),
+        sender_ip: Ipv4Addr(payload[14..18].try_into().ok()?),
+        target_ip: Ipv4Addr(payload[24..28].try_into().ok()?),
     })
 }
 
@@ -762,14 +792,15 @@ fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
         return None;
     }
     let ihl = (payload[0] & 0x0f) as usize * 4;
-    if payload.len() < ihl {
+    let total_len = u16::from_be_bytes([payload[2], payload[3]]) as usize;
+    if payload.len() < ihl || total_len < ihl || payload.len() < total_len {
         return None;
     }
     Some(Ipv4Packet {
         protocol: payload[9],
         src: Ipv4Addr(payload[12..16].try_into().ok()?),
         dst: Ipv4Addr(payload[16..20].try_into().ok()?),
-        payload: Vec::from(&payload[ihl..]),
+        payload: Vec::from(&payload[ihl..total_len]),
     })
 }
 

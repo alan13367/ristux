@@ -134,11 +134,9 @@ pub fn current_cpu_id() -> usize {
 pub fn enqueue(pid: Pid) {
     let cpu_id = current_cpu_id();
     // User process context switching is driven by `yield_from_syscall`, which
-    // can only resume frames on the CPU currently handling the syscall. AP idle
-    // loops may observe run queues for diagnostics, but they do not enter user
-    // mode, so keep process work on the local CPU until cross-CPU user dispatch
-    // exists.
-    let target = cpu_id;
+    // currently only resumes frames on the bootstrap CPU. AP idle loops may
+    // observe run queues for diagnostics, but they do not enter user mode.
+    let target = 0;
     with_cpu_state_mut(target, |state| {
         if !state.run_queue.contains(&pid) {
             state.run_queue.push(pid);
@@ -165,7 +163,8 @@ pub fn dispatch_local() -> Option<Pid> {
     let cpu_id = current_cpu_id();
     with_cpu_state_mut(cpu_id, |state| {
         state.reschedule_pending = false;
-        while let Some(pid) = state.run_queue.pop() {
+        while !state.run_queue.is_empty() {
+            let pid = state.run_queue.remove(0);
             if process::is_runnable(pid) {
                 state.current_pid = Some(pid);
                 state.dispatches += 1;
@@ -181,23 +180,23 @@ pub fn dispatch_local() -> Option<Pid> {
 /// Returns the pid whose saved syscall frame has been restored into `frame`.
 pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
     let self_pid = process::current_pid();
+    if let Some(pid) = self_pid {
+        let mut restart = *frame;
+        restart.rip = restart.rip.saturating_sub(2);
+        process::save_syscall_frame(pid, &restart);
+    }
 
     loop {
         if let Some(pid) = self_pid {
             if process::is_runnable(pid) {
-                process::set_current(pid);
-                return Some(pid);
+                enqueue(pid);
             }
         }
 
         if let Some(next) = dispatch_local() {
             if Some(next) == self_pid {
-                continue;
-            }
-            if let Some(pid) = self_pid {
-                let mut restart = *frame;
-                restart.rip = restart.rip.saturating_sub(2);
-                process::save_syscall_frame(pid, &restart);
+                process::set_current(next);
+                return Some(next);
             }
             if process::restore_syscall_frame(next, frame) {
                 process::set_current(next);

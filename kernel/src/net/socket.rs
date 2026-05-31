@@ -675,6 +675,12 @@ pub fn with_sockets<T>(f: impl FnOnce(&mut SocketTable) -> T) -> T {
         .expect("socket table used before initialization"))
 }
 
+pub fn drive_tcp() {
+    if let Some(table) = SOCKETS.lock().as_mut() {
+        super::drive_tcp(&mut table.tcp);
+    }
+}
+
 pub fn self_test() {
     with_sockets(|table| {
         let fd = table
