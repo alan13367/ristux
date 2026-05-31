@@ -94,7 +94,9 @@ pub const NR_getpgrp: u64 = 111;
 pub const NR_setsid: u64 = 112;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
+pub const NR_getresuid: u64 = 118;
 pub const NR_setresgid: u64 = 119;
+pub const NR_getresgid: u64 = 120;
 pub const NR_rt_sigpending: u64 = 127;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
@@ -285,7 +287,9 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_setuid => linux_setuid(a0 as u32),
         NR_setgid => linux_setgid(a0 as u32),
         NR_setresuid => linux_setresuid(a0, a1, a2),
+        NR_getresuid => linux_getresuid(a0 as usize, a1 as usize, a2 as usize),
         NR_setresgid => linux_setresgid(a0, a1, a2),
+        NR_getresgid => linux_getresgid(a0 as usize, a1 as usize, a2 as usize),
         NR_setgroups => linux_setgroups(a0 as usize, a1 as usize),
         NR_rt_sigaction => linux_rt_sigaction(a0 as usize, a1 as usize, a2 as usize),
         NR_rt_sigprocmask => {
@@ -1643,6 +1647,14 @@ fn linux_setresuid(ruid: u64, euid: u64, suid: u64) -> Result<u64, i64> {
         .map_err(|_| EACCES)
 }
 
+fn linux_getresuid(ruid_ptr: usize, euid_ptr: usize, suid_ptr: usize) -> Result<u64, i64> {
+    let (ruid, euid, suid) = process::current_resuid().ok_or(ESRCH)?;
+    write_user_u32(ruid_ptr, ruid)?;
+    write_user_u32(euid_ptr, euid)?;
+    write_user_u32(suid_ptr, suid)?;
+    Ok(0)
+}
+
 fn linux_setresgid(rgid: u64, egid: u64, sgid: u64) -> Result<u64, i64> {
     let is_no_change = |id: u64| id == u64::MAX || id == u32::MAX as u64;
     let rgid = if is_no_change(rgid) {
@@ -1663,6 +1675,20 @@ fn linux_setresgid(rgid: u64, egid: u64, sgid: u64) -> Result<u64, i64> {
     process::set_current_resgid(rgid, egid, sgid)
         .map(|_| 0)
         .map_err(|_| EACCES)
+}
+
+fn linux_getresgid(rgid_ptr: usize, egid_ptr: usize, sgid_ptr: usize) -> Result<u64, i64> {
+    let (rgid, egid, sgid) = process::current_resgid().ok_or(ESRCH)?;
+    write_user_u32(rgid_ptr, rgid)?;
+    write_user_u32(egid_ptr, egid)?;
+    write_user_u32(sgid_ptr, sgid)?;
+    Ok(0)
+}
+
+fn write_user_u32(ptr: usize, value: u32) -> Result<(), i64> {
+    let out = process::write_user_buffer(ptr, core::mem::size_of::<u32>()).ok_or(EFAULT)?;
+    out.copy_from_slice(&value.to_le_bytes());
+    Ok(())
 }
 
 fn linux_setgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {

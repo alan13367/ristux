@@ -1862,6 +1862,14 @@ pub fn current_egid() -> u32 {
     with_current_read(|p| p.credentials.egid).unwrap_or(0)
 }
 
+pub fn current_resuid() -> Option<(u32, u32, u32)> {
+    with_current_read(|p| (p.credentials.uid, p.credentials.euid, p.credentials.suid))
+}
+
+pub fn current_resgid() -> Option<(u32, u32, u32)> {
+    with_current_read(|p| (p.credentials.gid, p.credentials.egid, p.credentials.sgid))
+}
+
 pub fn set_current_uid(uid: u32) -> Result<(), ()> {
     with_current(|p| {
         if p.credentials.is_superuser() {

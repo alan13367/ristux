@@ -15,6 +15,23 @@ int main(void) {
         puts("cc_cred: id mismatch");
         return 1;
     }
+    uid_t ruid = 99;
+    uid_t reuid = 99;
+    uid_t suid = 99;
+    gid_t rgid = 99;
+    gid_t regid = 99;
+    gid_t sgid = 99;
+    if (getresuid(&ruid, &reuid, &suid) < 0 ||
+        getresgid(&rgid, &regid, &sgid) < 0 ||
+        ruid != uid ||
+        reuid != euid ||
+        suid != uid ||
+        rgid != gid ||
+        regid != egid ||
+        sgid != gid) {
+        puts("cc_cred: res ids failed");
+        return 1;
+    }
     puts("cc_cred: ids ok");
 
     if (setuid(uid) < 0 || setgid(gid) < 0) {
@@ -29,6 +46,13 @@ int main(void) {
         puts("cc_cred: setresuid changed wrong ids");
         return 1;
     }
+    if (getresuid(&ruid, &reuid, &suid) < 0 ||
+        ruid != uid ||
+        reuid != euid ||
+        suid != uid) {
+        puts("cc_cred: getresuid after set failed");
+        return 1;
+    }
     if (seteuid(euid) < 0) {
         puts("cc_cred: seteuid failed");
         return 1;
@@ -39,6 +63,13 @@ int main(void) {
     }
     if (getgid() != gid || getegid() != egid) {
         puts("cc_cred: setresgid changed wrong ids");
+        return 1;
+    }
+    if (getresgid(&rgid, &regid, &sgid) < 0 ||
+        rgid != gid ||
+        regid != egid ||
+        sgid != gid) {
+        puts("cc_cred: getresgid after set failed");
         return 1;
     }
     gid_t groups[4];

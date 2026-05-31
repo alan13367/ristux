@@ -123,6 +123,9 @@ The current Linux-like syscall surface is:
 | 112 | `setsid` | Create a new session/process group when not already a process-group leader. |
 | 116 | `setgroups` | Root-only group-list update. |
 | 117 | `setresuid` | Real/effective/saved uid update. |
+| 118 | `getresuid` | Reads real/effective/saved uid. |
+| 119 | `setresgid` | Real/effective/saved gid update. |
+| 120 | `getresgid` | Reads real/effective/saved gid. |
 | 127 | `rt_sigpending` | Reads the current pending signal mask. |
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
@@ -139,7 +142,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `getppid`, `setsid`, `getenv`, `putenv`, `setenv`, `unsetenv`, and
   `clearenv`.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
-  `setresuid`, `setgroups`, and libc user/group database helpers
+  `setresuid`, `getresuid`, `setresgid`, `getresgid`, `setgroups`, and libc
+  user/group database helpers
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
   `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
 - File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,

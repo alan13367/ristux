@@ -109,7 +109,9 @@
 #define SYS_SETSID 112
 #define SYS_SETGROUPS 116
 #define SYS_SETRESUID 117
+#define SYS_GETRESUID 118
 #define SYS_SETRESGID 119
+#define SYS_GETRESGID 120
 #define SYS_RT_SIGPENDING 127
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
@@ -1032,8 +1034,16 @@ int setresuid(uid_t ruid, uid_t euid, uid_t suid) {
     return (int)syscall_ret(syscall3(SYS_SETRESUID, ruid, euid, suid));
 }
 
+int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid) {
+    return (int)syscall_ret(syscall3(SYS_GETRESUID, (long)ruid, (long)euid, (long)suid));
+}
+
 int setresgid(gid_t rgid, gid_t egid, gid_t sgid) {
     return (int)syscall_ret(syscall3(SYS_SETRESGID, rgid, egid, sgid));
+}
+
+int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid) {
+    return (int)syscall_ret(syscall3(SYS_GETRESGID, (long)rgid, (long)egid, (long)sgid));
 }
 
 int setegid(gid_t egid) {
