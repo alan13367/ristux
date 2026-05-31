@@ -1,10 +1,13 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pty.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -15,6 +18,55 @@ static int expect_bytes(int fd, const char *expected, size_t len) {
     }
     ssize_t got = read(fd, buf, len);
     return got == (ssize_t)len && memcmp(buf, expected, len) == 0;
+}
+
+static int wait_for_exit(pid_t child, int expected_status) {
+    int status = 0;
+    for (int i = 0; i < 100; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            return WIFEXITED(status) && WEXITSTATUS(status) == expected_status;
+        }
+        if (waited < 0) {
+            return 0;
+        }
+        syscall(SYS_sched_yield);
+    }
+    return 0;
+}
+
+static int check_signal_chars(int master, int slave) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_pty: signal fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(master);
+        setpgid(0, 0);
+        char byte;
+        for (;;) {
+            read(slave, &byte, 1);
+        }
+    }
+
+    setpgid(child, child);
+    int foreground = (int)child;
+    if (ioctl(slave, TIOCSPGRP, &foreground) < 0) {
+        puts("cc_pty: signal foreground failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+    char intr = 0x03;
+    if (write(master, &intr, 1) != 1 || !wait_for_exit(child, 128 + SIGINT)) {
+        puts("cc_pty: signal char failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+    puts("cc_pty: signal char ok");
+    return 0;
 }
 
 static int check_openpty(void) {
@@ -141,6 +193,10 @@ int main(void) {
         return 1;
     }
     puts("cc_pty: slave-to-master ok");
+
+    if (check_signal_chars(master, slave) != 0) {
+        return 1;
+    }
 
     close(slave);
     close(master);

@@ -219,7 +219,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
   and slave descriptors are pollable byte streams with hangup/error readiness
   when their peer closes. Each PTY stores its own `termios`, window size, and
-  foreground process group for `openpty`, SSH, and login-session setup.
+  foreground process group for `openpty`, SSH, and login-session setup. PTY
+  master input honors `ISIG` control characters such as VINTR, VQUIT, and VSUSP
+  by signaling the foreground process group instead of delivering them as bytes.
 - Shell: `/bin/sh` supports pipelines, redirects, background jobs, stopped jobs
   via Ctrl-Z/`SIGTSTP`, `jobs`, `fg`, `bg`, `SIGCONT` resume, `cd`,
   quote-aware tokenization, unquoted `*`/`?` globbing, `$name` and `$?`

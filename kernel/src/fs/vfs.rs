@@ -11,6 +11,8 @@ use crate::{
 use super::ext2;
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
+static PTY_SIGNALS: SpinLock<Vec<(crate::process::Pid, crate::signal::Signal)>> =
+    SpinLock::new(Vec::new());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
@@ -276,7 +278,7 @@ impl PtyState {
     }
 
     fn write_master(&mut self, input: &[u8]) -> Result<usize, VfsError> {
-        write_queue(&mut self.master_to_slave, self.capacity, self.slaves, input)
+        self.write_master_input(input)
     }
 
     fn write_slave(&mut self, input: &[u8]) -> Result<usize, VfsError> {
@@ -286,6 +288,76 @@ impl PtyState {
             self.masters,
             input,
         )
+    }
+
+    fn write_master_input(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        const LFLAG_ISIG: u32 = 0x1;
+        const VINTR: usize = 0;
+        const VQUIT: usize = 1;
+        const VSUSP: usize = 10;
+        const TERMIOS_LFLAG: usize = 12;
+
+        if input.is_empty() {
+            return Ok(0);
+        }
+        if self.slaves == 0 {
+            return Err(VfsError::BadFd);
+        }
+
+        let lflag = u32::from_le_bytes([
+            self.termios[TERMIOS_LFLAG],
+            self.termios[TERMIOS_LFLAG + 1],
+            self.termios[TERMIOS_LFLAG + 2],
+            self.termios[TERMIOS_LFLAG + 3],
+        ]);
+        let isig = lflag & LFLAG_ISIG != 0;
+        let mut written = 0;
+        for byte in input {
+            let signal = if isig && Some(*byte) == control_char(&self.termios, VINTR) {
+                Some(crate::signal::Signal::Int)
+            } else if isig && Some(*byte) == control_char(&self.termios, VQUIT) {
+                Some(crate::signal::Signal::Quit)
+            } else if isig && Some(*byte) == control_char(&self.termios, VSUSP) {
+                Some(crate::signal::Signal::Tstp)
+            } else {
+                None
+            };
+            if let Some(signal) = signal {
+                queue_pty_signal(self.foreground_pgrp, signal);
+                written += 1;
+                continue;
+            }
+            if self.master_to_slave.len() == self.capacity {
+                break;
+            }
+            self.master_to_slave.push_back(*byte);
+            written += 1;
+        }
+        if written == 0 {
+            return Err(VfsError::WouldBlock);
+        }
+        Ok(written)
+    }
+}
+
+fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
+    const TERMIOS_CC: usize = 17;
+    let byte = *termios.get(TERMIOS_CC + index)?;
+    if byte == 0 {
+        None
+    } else {
+        Some(byte)
+    }
+}
+
+fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {
+    PTY_SIGNALS.lock().push((pgrp, signal));
+}
+
+fn deliver_pty_signals() {
+    let signals = core::mem::take(&mut *PTY_SIGNALS.lock());
+    for (pgrp, signal) in signals {
+        let _ = crate::signal::send_pgrp(pgrp, signal);
     }
 }
 
@@ -2329,7 +2401,9 @@ pub fn read(fd: usize, output: &mut [u8]) -> Result<usize, VfsError> {
 }
 
 pub fn write(fd: usize, input: &[u8]) -> Result<usize, VfsError> {
-    with_vfs(|vfs| vfs.write(fd, input))
+    let result = with_vfs(|vfs| vfs.write(fd, input));
+    deliver_pty_signals();
+    result
 }
 
 pub fn truncate_fd(fd: usize, len: usize) -> Result<(), VfsError> {
