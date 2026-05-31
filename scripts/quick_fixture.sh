@@ -871,6 +871,39 @@ case "$SCENARIO" in
       "^  /bin/rm$"
     )
     ;;
+  mv)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/mvcheck"
+      "cd /tmp/mvcheck"
+      "echo alpha > one.txt"
+      "echo beta > two.txt"
+      "mkdir dest"
+      "mv one.txt two.txt dest"
+      "cat dest/one.txt"
+      "cat dest/two.txt"
+      "echo old > target.txt"
+      "echo new > replacement.txt"
+      "mv -f replacement.txt target.txt"
+      "cat target.txt"
+      "mkdir dirsrc"
+      "echo inside > dirsrc/file.txt"
+      "mv dirsrc dirdest"
+      "cat dirdest/file.txt"
+      "pkg info mv"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: mv one.txt two.txt dest"
+      "^alpha$"
+      "^beta$"
+      "TTY canonical line ready: mv -f replacement.txt target.txt"
+      "^new$"
+      "TTY canonical line ready: mv dirsrc dirdest"
+      "^inside$"
+      "^name: mv$"
+      "^  /bin/mv$"
+    )
+    ;;
   chmod)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -2510,7 +2543,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac

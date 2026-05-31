@@ -16,6 +16,11 @@ const O_TRUNC: i32 = 0o1000;
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 
+struct Options {
+    force: bool,
+    paths_start: usize,
+}
+
 fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
         let n = sys::write(fd, bytes);
@@ -133,20 +138,79 @@ fn copy_file(src: &[u8], dest: &[u8]) -> bool {
     ok
 }
 
+fn move_path(src: &[u8], dest: &[u8], options: &Options) -> bool {
+    if rename_path(src, dest) {
+        return true;
+    }
+    if options.force && !is_dir(dest) {
+        let _ = unlink_path(dest);
+        if rename_path(src, dest) {
+            return true;
+        }
+    }
+    if copy_file(src, dest) && unlink_path(src) {
+        return true;
+    }
+    false
+}
+
+fn usage() {
+    let _ = write_all(2, b"usage: mv [-f] SOURCE... DEST\n");
+}
+
+fn parse_options(args: &[&[u8]]) -> Option<Options> {
+    let mut options = Options {
+        force: false,
+        paths_start: 1,
+    };
+    let mut index = 1usize;
+    while let Some(arg) = args.get(index) {
+        if *arg == b"--" {
+            index += 1;
+            break;
+        }
+        if *arg == b"-" || !arg.starts_with(b"-") {
+            break;
+        }
+        for flag in &arg[1..] {
+            match *flag {
+                b'f' => options.force = true,
+                _ => return None,
+            }
+        }
+        index += 1;
+    }
+    options.paths_start = index;
+    Some(options)
+}
+
 fn main(args: &[&[u8]]) -> i32 {
-    if args.len() != 3 {
-        let _ = write_all(2, b"usage: mv SOURCE DEST\n");
+    let Some(options) = parse_options(args) else {
+        usage();
+        return 2;
+    };
+    let operands = &args[options.paths_start..];
+    if operands.len() < 2 {
+        usage();
         return 2;
     }
-    let dest = destination_path(args[1], args[2]);
-    if rename_path(args[1], &dest) {
-        return 0;
+    let dest_root = operands[operands.len() - 1];
+    if operands.len() > 2 && !is_dir(dest_root) {
+        let _ = write_all(2, b"mv: destination must be a directory\n");
+        return 1;
     }
-    if copy_file(args[1], &dest) && unlink_path(args[1]) {
-        return 0;
+
+    let mut status = 0;
+    for src in &operands[..operands.len() - 1] {
+        let dest = destination_path(src, dest_root);
+        if !move_path(src, &dest, &options) {
+            let _ = write_all(2, b"mv: failed: ");
+            let _ = write_all(2, src);
+            let _ = write_all(2, b"\n");
+            status = 1;
+        }
     }
-    let _ = write_all(2, b"mv: failed\n");
-    1
+    status
 }
 
 ristux_userland::program_main!(main);
