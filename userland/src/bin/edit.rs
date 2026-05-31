@@ -134,7 +134,7 @@ fn print_lines(lines: &[Vec<u8>]) {
     }
 }
 
-fn append_mode(lines: &mut Vec<Vec<u8>>, insert_at: Option<usize>) {
+fn append_mode(lines: &mut Vec<Vec<u8>>, insert_at: Option<usize>) -> usize {
     let _ = write_all(1, b"edit: enter text, . alone to finish\n");
     let mut offset = 0usize;
     while let Some(line) = read_line(0) {
@@ -149,6 +149,30 @@ fn append_mode(lines: &mut Vec<Vec<u8>>, insert_at: Option<usize>) {
         }
     }
     let _ = write_all(1, b"edit: appended\n");
+    offset
+}
+
+fn save_command(path: &[u8], lines: &[Vec<u8>], dirty: &mut bool) -> bool {
+    if save_file(path, lines) {
+        *dirty = false;
+        let _ = write_all(1, b"edit: wrote ");
+        let _ = write_all(1, lines.len().to_string().as_bytes());
+        let _ = write_all(1, b" line(s)\n");
+        true
+    } else {
+        let _ = write_all(2, b"edit: write failed\n");
+        false
+    }
+}
+
+fn quit_command(dirty: bool, force: bool) -> Option<i32> {
+    if dirty && !force {
+        let _ = write_all(1, b"edit: unsaved changes, use w then q\n");
+        None
+    } else {
+        let _ = write_all(1, b"edit: done\n");
+        Some(0)
+    }
 }
 
 fn main(args: &[&[u8]]) -> i32 {
@@ -163,6 +187,7 @@ fn main(args: &[&[u8]]) -> i32 {
 
     let mut lines = load_file(path);
     let mut dirty = false;
+    let mut cursor = if lines.is_empty() { 0 } else { lines.len() - 1 };
     loop {
         let _ = write_all(1, b": ");
         let Some(command) = read_line(0) else {
@@ -170,43 +195,78 @@ fn main(args: &[&[u8]]) -> i32 {
         };
         match command.as_slice() {
             b"a" => {
-                append_mode(&mut lines, None);
+                let inserted = append_mode(&mut lines, None);
+                if inserted > 0 {
+                    cursor = lines.len().saturating_sub(1);
+                }
                 dirty = true;
             }
             b"p" => print_lines(&lines),
-            b"w" => {
-                if save_file(path, &lines) {
-                    dirty = false;
-                    let _ = write_all(1, b"edit: wrote ");
-                    let _ = write_all(1, lines.len().to_string().as_bytes());
-                    let _ = write_all(1, b" line(s)\n");
-                } else {
-                    let _ = write_all(2, b"edit: write failed\n");
+            b"w" | b":w" | b":write" => {
+                let _ = save_command(path, &lines, &mut dirty);
+            }
+            b"q" | b":q" | b":quit" => {
+                if let Some(status) = quit_command(dirty, false) {
+                    return status;
                 }
             }
-            b"q" => {
-                if dirty {
-                    let _ = write_all(1, b"edit: unsaved changes, use w then q\n");
-                } else {
-                    let _ = write_all(1, b"edit: done\n");
-                    return 0;
+            b":q!" => return quit_command(dirty, true).unwrap_or(0),
+            b":wq" | b":x" => {
+                if save_command(path, &lines, &mut dirty) {
+                    return quit_command(false, false).unwrap_or(0);
                 }
             }
             b"h" => {
                 let _ = write_all(
                     1,
-                    b"a append, i N insert, d N delete, p print, w write, q quit\n",
+                    b"a append, i/I insert, o open, d N/dd delete, p print, w/:w write, q/:q quit\n",
                 );
+            }
+            b"i" | b"I" => {
+                let index = cursor.min(lines.len());
+                let inserted = append_mode(&mut lines, Some(index));
+                if inserted > 0 {
+                    cursor = cursor.min(lines.len().saturating_sub(1));
+                    dirty = true;
+                }
+            }
+            b"o" | b"O" => {
+                let index = if command.as_slice() == b"O" {
+                    cursor.min(lines.len())
+                } else {
+                    cursor.saturating_add(1).min(lines.len())
+                };
+                let inserted = append_mode(&mut lines, Some(index));
+                if inserted > 0 {
+                    cursor = index
+                        .saturating_add(inserted - 1)
+                        .min(lines.len().saturating_sub(1));
+                    dirty = true;
+                }
+            }
+            b"dd" => {
+                if lines.is_empty() {
+                    let _ = write_all(2, b"edit: no such line\n");
+                } else {
+                    lines.remove(cursor.min(lines.len() - 1));
+                    cursor = cursor.min(lines.len().saturating_sub(1));
+                    dirty = true;
+                    let _ = write_all(1, b"edit: deleted\n");
+                }
             }
             _ if command.starts_with(b"i ") => {
                 let index = parse_number(&command[2..]).unwrap_or(1).saturating_sub(1);
-                append_mode(&mut lines, Some(index));
-                dirty = true;
+                let inserted = append_mode(&mut lines, Some(index));
+                if inserted > 0 {
+                    cursor = index.min(lines.len().saturating_sub(1));
+                    dirty = true;
+                }
             }
             _ if command.starts_with(b"d ") => {
                 if let Some(index) = parse_number(&command[2..]) {
                     if index > 0 && index <= lines.len() {
                         lines.remove(index - 1);
+                        cursor = index.saturating_sub(1).min(lines.len().saturating_sub(1));
                         dirty = true;
                         let _ = write_all(1, b"edit: deleted\n");
                     } else {
@@ -214,6 +274,18 @@ fn main(args: &[&[u8]]) -> i32 {
                     }
                 } else {
                     let _ = write_all(2, b"edit: bad line number\n");
+                }
+            }
+            _ if parse_number(&command).is_some() => {
+                let index = parse_number(&command).unwrap_or(1);
+                if index > 0 && index <= lines.len() {
+                    cursor = index - 1;
+                    let _ = write_all(1, (cursor + 1).to_string().as_bytes());
+                    let _ = write_all(1, b"\t");
+                    let _ = write_all(1, &lines[cursor]);
+                    let _ = write_all(1, b"\n");
+                } else {
+                    let _ = write_all(2, b"edit: no such line\n");
                 }
             }
             _ => {

@@ -230,7 +230,16 @@ case "$SCENARIO" in
       "q"
       "vi /tmp/editcheck.txt"
       "p"
-      "q"
+      "o"
+      "gamma"
+      "."
+      "dd"
+      ":wq"
+      "vi /tmp/editcheck.txt"
+      "i"
+      "scratch"
+      "."
+      ":q!"
       "cat /tmp/editcheck.txt"
       "which vi"
       "pkg info vi"
@@ -243,6 +252,7 @@ case "$SCENARIO" in
       "^edit: done$"
       "^1.alpha$"
       "^2.beta$"
+      "^edit: deleted$"
       "^alpha$"
       "^beta$"
       "^/bin/vi$"
@@ -2101,6 +2111,7 @@ send_text() {
       '"') printf 'sendkey shift-apostrophe\n' ;;
       '`') printf 'sendkey grave_accent\n' ;;
       '#') printf 'sendkey shift-3\n' ;;
+      '!') printf 'sendkey shift-1\n' ;;
       '.') printf 'sendkey dot\n' ;;
       ',') printf 'sendkey comma\n' ;;
       '-') printf 'sendkey minus\n' ;;
