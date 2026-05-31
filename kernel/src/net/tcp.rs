@@ -14,6 +14,7 @@ pub const TCP_FLAG_ACK: u8 = 0x10;
 
 const TCP_RETRANSMIT_TICKS: u64 = 25;
 const TCP_MAX_RETRANSMITS: u8 = 3;
+const TCP_RECV_WINDOW: u16 = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TcpState {
@@ -90,7 +91,7 @@ impl TcpSocket {
             state: TcpState::Closed,
             seq: 1,
             ack: 0,
-            window: 4096,
+            window: TCP_RECV_WINDOW,
             rx_buffer: VecDeque::new(),
             error: None,
         }
@@ -102,6 +103,14 @@ impl TcpSocket {
 
     fn established(&self) -> bool {
         self.state == TcpState::Established
+    }
+
+    fn recv_window_available(&self) -> usize {
+        usize::from(self.window).saturating_sub(self.rx_buffer.len())
+    }
+
+    fn advertised_window(&self) -> u16 {
+        self.recv_window_available().min(u16::MAX as usize) as u16
     }
 
     fn matches_packet(&self, packet: &TcpPacket) -> bool {
@@ -567,8 +576,11 @@ fn handle_established_like(
     let mut ack_needed = false;
     if !packet.payload.is_empty() {
         if packet.seq == socket.ack {
-            socket.ack = packet.seq.wrapping_add(packet.payload.len() as u32);
-            socket.rx_buffer.extend(packet.payload.iter().copied());
+            let accepted = packet.payload.len().min(socket.recv_window_available());
+            if accepted > 0 {
+                socket.ack = packet.seq.wrapping_add(accepted as u32);
+                socket.rx_buffer.extend(packet.payload[..accepted].iter().copied());
+            }
         }
         ack_needed = true;
     }
@@ -658,7 +670,7 @@ pub fn build_tcp_segment(socket: &TcpSocket, flags: u8, payload: &[u8]) -> Vec<u
         socket.remote_port,
         socket.seq,
         socket.ack,
-        socket.window,
+        socket.advertised_window(),
         flags,
         payload,
     )
@@ -766,6 +778,46 @@ pub fn self_test() {
     });
     if !stack.established(socket) {
         panic!("tcp handshake self-test failed");
+    }
+    let _ = stack.pop_outbound();
+
+    let mut oversized = Vec::new();
+    oversized.resize(TCP_RECV_WINDOW as usize + 16, b'x');
+    stack.handle_packet(TcpPacket {
+        src_ip: Ipv4Addr([10, 0, 2, 2]),
+        dst_ip: Ipv4Addr([10, 0, 2, 15]),
+        src_port: 80,
+        dst_port: syn_packet.src_port,
+        seq: 1001,
+        ack: syn_packet.seq + 1,
+        flags: TCP_FLAG_ACK | TCP_FLAG_PSH,
+        payload: oversized,
+    });
+    let window_ack = stack
+        .pop_outbound()
+        .and_then(|outbound| {
+            parse_tcp_packet(Ipv4Addr([10, 0, 2, 15]), outbound.dst_ip, &outbound.segment)
+        })
+        .expect("tcp window ACK missing");
+    if window_ack.ack != 1001 + TCP_RECV_WINDOW as u32 || !window_ack.payload.is_empty() {
+        panic!("tcp receive window self-test failed");
+    }
+    if stack.sockets[socket].advertised_window() != 0 {
+        panic!("tcp zero-window self-test failed");
+    }
+    let mut drained = 0usize;
+    let mut drain = [0u8; 128];
+    while drained < TCP_RECV_WINDOW as usize {
+        let read = stack.recv(socket, &mut drain).expect("tcp window drain failed");
+        if read == 0 {
+            break;
+        }
+        drained += read;
+    }
+    if drained != TCP_RECV_WINDOW as usize
+        || stack.sockets[socket].advertised_window() != TCP_RECV_WINDOW
+    {
+        panic!("tcp receive window reopen self-test failed");
     }
     let _ = stack.send(socket, b"GET / HTTP/1.0\r\n\r\n");
     crate::println!(
