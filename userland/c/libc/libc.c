@@ -110,6 +110,7 @@
 #define SYS_SETGROUPS 116
 #define SYS_SETRESUID 117
 #define SYS_SETRESGID 119
+#define SYS_RT_SIGPENDING 127
 #define SYS_TIME 201
 #define SYS_GETDENTS64 217
 #define SYS_CLOCK_GETTIME 228
@@ -1790,6 +1791,10 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
         (long)oldset,
         sizeof(sigset_t)
     ));
+}
+
+int sigpending(sigset_t *set) {
+    return (int)syscall_ret(syscall2(SYS_RT_SIGPENDING, (long)set, sizeof(sigset_t)));
 }
 
 sighandler_t signal(int signum, sighandler_t handler) {

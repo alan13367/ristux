@@ -961,6 +961,10 @@ pub fn current_signal_mask() -> Option<u64> {
     with_current_read(|p| p.signal_mask)
 }
 
+pub fn current_pending_signals() -> Option<u64> {
+    with_current_read(|p| p.pending_signals)
+}
+
 pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
     const UNBLOCKABLE: u64 = 1 << crate::signal::Signal::Kill.number();
     with_current(|p| {

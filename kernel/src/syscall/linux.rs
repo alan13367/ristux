@@ -95,6 +95,7 @@ pub const NR_setsid: u64 = 112;
 pub const NR_setgroups: u64 = 116;
 pub const NR_setresuid: u64 = 117;
 pub const NR_setresgid: u64 = 119;
+pub const NR_rt_sigpending: u64 = 127;
 pub const NR_time: u64 = 201;
 pub const NR_getdents64: u64 = 217;
 pub const NR_clock_gettime: u64 = 228;
@@ -290,6 +291,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_rt_sigprocmask => {
             linux_rt_sigprocmask(a0 as i32, a1 as usize, a2 as usize, a3 as usize)
         }
+        NR_rt_sigpending => linux_rt_sigpending(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         _ => {
             crate::println!("Unhandled Linux syscall {} (rip {:#x})", nr, frame.rip);
@@ -2238,6 +2240,16 @@ fn linux_rt_sigprocmask(
         _ => return Err(EINVAL),
     }
     .ok_or(ESRCH)?;
+    Ok(0)
+}
+
+fn linux_rt_sigpending(set_ptr: usize, sigset_size: usize) -> Result<u64, i64> {
+    if sigset_size != core::mem::size_of::<u64>() {
+        return Err(EINVAL);
+    }
+    let pending = process::current_pending_signals().ok_or(ESRCH)?;
+    let out = process::write_user_buffer(set_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
+    out.copy_from_slice(&pending.to_le_bytes());
     Ok(0)
 }
 

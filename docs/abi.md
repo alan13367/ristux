@@ -123,6 +123,7 @@ The current Linux-like syscall surface is:
 | 112 | `setsid` | Create a new session/process group when not already a process-group leader. |
 | 116 | `setgroups` | Root-only group-list update. |
 | 117 | `setresuid` | Real/effective/saved uid update. |
+| 127 | `rt_sigpending` | Reads the current pending signal mask. |
 | 201 | `time` | Seconds since Unix epoch. |
 | 217 | `getdents64` | Directory iteration. |
 | 228 | `clock_gettime` | Realtime and monotonic clocks. |
@@ -158,8 +159,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Entropy: `getrandom`; `/dev/random` and `/dev/urandom` are backed by the
   same kernel ChaCha DRBG, seeded from CPU/time sources and mixed with keyboard
   interrupt timing.
-- Signals: `signal`, `raise`, `sigprocmask`, kernel-backed handler delivery,
-  and `rt_sigreturn`.
+- Signals: `signal`, `raise`, `sigprocmask`, `sigpending`, kernel-backed
+  handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
   `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads

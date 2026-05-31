@@ -56,8 +56,17 @@ int main(void) {
         puts("cc_signal: blocked delivery failed");
         return 1;
     }
+    sigset_t pending;
+    if (sigpending(&pending) < 0 || sigismember(&pending, SIGUSR1) != 1) {
+        puts("cc_signal: pending failed");
+        return 1;
+    }
     if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0 || !saw_usr1) {
         puts("cc_signal: unblock delivery failed");
+        return 1;
+    }
+    if (sigpending(&pending) < 0 || sigismember(&pending, SIGUSR1) != 0) {
+        puts("cc_signal: pending clear failed");
         return 1;
     }
     puts("cc_signal: mask ok");
