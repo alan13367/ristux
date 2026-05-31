@@ -73,6 +73,8 @@ The current Linux-like syscall surface is:
 | 14 | `rt_sigprocmask` | Reads and updates the current process signal mask. |
 | 15 | `rt_sigreturn` | Returns from a delivered signal frame. |
 | 16 | `ioctl` | TTY-oriented requests currently implemented by the kernel. |
+| 19 | `readv` | Scatter read over regular descriptors and sockets. |
+| 20 | `writev` | Gather write over regular descriptors and sockets. |
 | 21 | `access` | Checks read, write, and execute permissions. |
 | 23 | `select` | `fd_set` readiness over the same TTY, pipe, file, and socket backend as `poll`. |
 | 22 | `pipe` | Returns two descriptors in an `int[2]`. |
@@ -146,8 +148,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   user/group database helpers
   `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
   `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
-- File descriptors: `read`, `write`, `open`, `close`, `lseek`, `pipe`, `dup`,
-  `dup2`, `fcntl`, `poll`, `select`.
+- File descriptors: `read`, `write`, `readv`, `writev`, `open`, `close`,
+  `lseek`, `pipe`, `dup`, `dup2`, `fcntl`, `poll`, `select`.
 - Filesystem: `stat`, `fstat`, `lstat`, `mkdir`, `unlink`, `rmdir`, `rename`,
   `access`, `chmod`, `chown`, `umask`, `getdents64`, `link`, `symlink`,
   `readlink`, `chdir`, `getcwd`.

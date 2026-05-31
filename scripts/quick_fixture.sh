@@ -358,9 +358,9 @@ case "$SCENARIO" in
   uio)
     COMMANDS=("cc_uio")
     EXPECTS=(
-      "cc_uio: file writev ok"
-      "cc_uio: pipe writev ok"
-      "cc_uio: socket readwrite ok"
+      "cc_uio: file readwritev ok"
+      "cc_uio: pipe readwritev ok"
+      "cc_uio: socket readwritev ok"
       "cc_uio: done"
     )
     ;;

@@ -55,6 +55,7 @@
 #define SYS_RT_SIGPROCMASK 14
 #define SYS_RT_SIGRETURN 15
 #define SYS_IOCTL 16
+#define SYS_READV 19
 #define SYS_WRITEV 20
 #define SYS_ACCESS 21
 #define SYS_PIPE 22
@@ -240,6 +241,10 @@ ssize_t write(int fd, const void *buf, size_t len) {
 
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
     return (ssize_t)syscall_ret(syscall3(SYS_WRITEV, fd, (long)iov, iovcnt));
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
+    return (ssize_t)syscall_ret(syscall3(SYS_READV, fd, (long)iov, iovcnt));
 }
 
 int open(const char *path, int flags, ...) {

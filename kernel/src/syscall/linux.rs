@@ -39,6 +39,7 @@ pub const NR_rt_sigaction: u64 = 13;
 pub const NR_rt_sigprocmask: u64 = 14;
 pub const NR_rt_sigreturn: u64 = 15;
 pub const NR_ioctl: u64 = 16;
+pub const NR_readv: u64 = 19;
 pub const NR_writev: u64 = 20;
 pub const NR_access: u64 = 21;
 pub const NR_pipe: u64 = 22;
@@ -174,6 +175,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let result: Result<u64, i64> = match nr {
         NR_write => linux_write(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_read => linux_read(frame, a0 as usize, a1 as usize, a2 as usize),
+        NR_readv => linux_readv(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_writev => linux_writev(a0 as usize, a1 as usize, a2 as usize),
         NR_open => linux_open(a0 as usize, a1 as i32, a2 as u32),
         NR_close => linux_close(a0 as usize),
@@ -542,6 +544,43 @@ fn linux_writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> Result<u64, i64> {
                     return Ok(total as u64);
                 }
             }
+            Err(_) if total > 0 => return Ok(total as u64),
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(total as u64)
+}
+
+fn linux_readv(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    iov_ptr: usize,
+    iovcnt: usize,
+) -> Result<u64, i64> {
+    if iovcnt > IOV_MAX {
+        return Err(EINVAL);
+    }
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    let iov_bytes = iovcnt.checked_mul(iovec_size()).ok_or(EINVAL)?;
+    process::read_user(iov_ptr, iov_bytes).ok_or(EFAULT)?;
+
+    let mut total = 0usize;
+    for index in 0..iovcnt {
+        let (base, len) = read_iovec(iov_ptr, index)?;
+        if len == 0 {
+            continue;
+        }
+        process::write_user_buffer(base, len).ok_or(EFAULT)?;
+        match linux_read(frame, fd, base, len) {
+            Ok(read) => {
+                total = total.checked_add(read as usize).ok_or(EINVAL)?;
+                if read == 0 || read < len as u64 {
+                    return Ok(total as u64);
+                }
+            }
+            Err(CONTEXT_SWITCHED) if total > 0 => return Ok(total as u64),
             Err(_) if total > 0 => return Ok(total as u64),
             Err(err) => return Err(err),
         }

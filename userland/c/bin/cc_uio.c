@@ -37,14 +37,20 @@ static int check_file_writev(void) {
         return 1;
     }
 
-    char buf[8];
-    ssize_t n = read(fd, buf, sizeof(buf));
-    if (n != 7 || memcmp(buf, "vector\n", 7) != 0) {
-        puts("cc_uio: file readback failed");
+    char first[4];
+    char second[4];
+    struct iovec read_iov[2];
+    read_iov[0].iov_base = first;
+    read_iov[0].iov_len = sizeof(first);
+    read_iov[1].iov_base = second;
+    read_iov[1].iov_len = 3;
+    ssize_t n = readv(fd, read_iov, 2);
+    if (n != 7 || memcmp(first, "vect", 4) != 0 || memcmp(second, "or\n", 3) != 0) {
+        puts("cc_uio: file readv failed");
         return 1;
     }
     close(fd);
-    puts("cc_uio: file writev ok");
+    puts("cc_uio: file readwritev ok");
     return 0;
 }
 
@@ -64,15 +70,21 @@ static int check_pipe_writev(void) {
         return 1;
     }
 
-    char buf[4];
-    ssize_t n = read(pipefd[0], buf, sizeof(buf));
-    if (n != 4 || memcmp(buf, "pipe", 4) != 0) {
-        puts("cc_uio: pipe readback failed");
+    char left[2];
+    char right[2];
+    struct iovec read_iov[2];
+    read_iov[0].iov_base = left;
+    read_iov[0].iov_len = sizeof(left);
+    read_iov[1].iov_base = right;
+    read_iov[1].iov_len = sizeof(right);
+    ssize_t n = readv(pipefd[0], read_iov, 2);
+    if (n != 4 || memcmp(left, "pi", 2) != 0 || memcmp(right, "pe", 2) != 0) {
+        puts("cc_uio: pipe readv failed");
         return 1;
     }
     close(pipefd[0]);
     close(pipefd[1]);
-    puts("cc_uio: pipe writev ok");
+    puts("cc_uio: pipe readwritev ok");
     return 0;
 }
 
@@ -110,18 +122,30 @@ static int check_socket_read_write(void) {
         return 1;
     }
 
-    char buf[8];
-    ssize_t n = read(server, buf, sizeof(buf));
-    if (n != 6 || memcmp(buf, "ssh-io", 6) != 0) {
-        puts("cc_uio: socket read failed");
+    char head[3];
+    char tail[3];
+    struct iovec read_iov[2];
+    read_iov[0].iov_base = head;
+    read_iov[0].iov_len = sizeof(head);
+    read_iov[1].iov_base = tail;
+    read_iov[1].iov_len = sizeof(tail);
+    ssize_t n = readv(server, read_iov, 2);
+    if (n != 6 || memcmp(head, "ssh", 3) != 0 || memcmp(tail, "-io", 3) != 0) {
+        puts("cc_uio: socket readv failed");
         return 1;
     }
     if (write(server, "ok", 2) != 2) {
         puts("cc_uio: socket write failed");
         return 1;
     }
-    n = read(client, buf, sizeof(buf));
-    if (n != 2 || memcmp(buf, "ok", 2) != 0) {
+    char reply_a[1];
+    char reply_b[1];
+    read_iov[0].iov_base = reply_a;
+    read_iov[0].iov_len = sizeof(reply_a);
+    read_iov[1].iov_base = reply_b;
+    read_iov[1].iov_len = sizeof(reply_b);
+    n = readv(client, read_iov, 2);
+    if (n != 2 || reply_a[0] != 'o' || reply_b[0] != 'k') {
         puts("cc_uio: socket reply failed");
         return 1;
     }
@@ -129,7 +153,7 @@ static int check_socket_read_write(void) {
     close(client);
     close(server);
     close(listener);
-    puts("cc_uio: socket readwrite ok");
+    puts("cc_uio: socket readwritev ok");
     return 0;
 }
 
