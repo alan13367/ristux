@@ -3210,6 +3210,9 @@ fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {
     let mut args = Vec::new();
     let mut index = 0usize;
     loop {
+        if index >= process::MAX_USER_ARGS {
+            break;
+        }
         let ptr_bytes = process::read_user(argv_ptr + index * 8, 8)?;
         let arg_ptr = u64::from_le_bytes(ptr_bytes.try_into().ok()?) as usize;
         if arg_ptr == 0 {
@@ -3217,9 +3220,6 @@ fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {
         }
         args.push(read_user_cstr(arg_ptr)?);
         index += 1;
-        if index > 32 {
-            break;
-        }
     }
     Some(args)
 }
@@ -3231,6 +3231,9 @@ fn read_user_envp(envp_ptr: usize) -> Option<Vec<alloc::string::String>> {
     }
     let mut index = 0usize;
     loop {
+        if index >= process::MAX_USER_ENVS {
+            break;
+        }
         let ptr_bytes = process::read_user(envp_ptr + index * 8, 8)?;
         let entry_ptr = u64::from_le_bytes(ptr_bytes.try_into().ok()?) as usize;
         if entry_ptr == 0 {
@@ -3238,9 +3241,6 @@ fn read_user_envp(envp_ptr: usize) -> Option<Vec<alloc::string::String>> {
         }
         env.push(read_user_cstr(entry_ptr)?);
         index += 1;
-        if index > 16 {
-            break;
-        }
     }
     Some(env)
 }

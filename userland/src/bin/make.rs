@@ -224,6 +224,7 @@ impl BuildFile {
         file.set_var(b"LDLIBS", b"");
         file.set_var(b"AR", b"ar");
         file.set_var(b"RM", b"rm");
+        file.set_var(b"MAKE", b"make");
         file.set_var(b"SHELL", b"/bin/sh");
         file
     }
@@ -381,7 +382,24 @@ fn command_prefixes(command: &[u8]) -> (bool, bool, &[u8]) {
     (silent, ignore, command)
 }
 
-fn run_shell(command: &[u8]) -> i32 {
+fn env_from_vars(vars: &[Var]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for var in vars {
+        let mut entry = Vec::with_capacity(var.name.len() + var.value.len() + 2);
+        entry.extend_from_slice(&var.name);
+        entry.push(b'=');
+        entry.extend_from_slice(&var.value);
+        entry.push(0);
+        out.push(entry);
+    }
+    out
+}
+
+fn run_shell(command: &[u8], vars: &[Var]) -> i32 {
+    let env_entries = env_from_vars(vars);
+    let mut envp: Vec<*const u8> = env_entries.iter().map(|entry| entry.as_ptr()).collect();
+    envp.push(ptr::null());
+
     let mut pipe_fds = [0i32; 2];
     if sys::pipe(pipe_fds.as_mut_ptr()) < 0 {
         let _ = write_all(2, b"make: pipe failed\n");
@@ -403,7 +421,6 @@ fn run_shell(command: &[u8]) -> i32 {
         let shell = cstr(b"/bin/sh");
         let arg0 = cstr(b"sh");
         let argv = [arg0.as_ptr(), ptr::null()];
-        let envp = [ptr::null()];
         let _ = sys::execve(shell.as_ptr(), argv.as_ptr(), envp.as_ptr());
         let _ = write_all(2, b"make: exec /bin/sh failed\n");
         sys::exit(127);
@@ -441,7 +458,7 @@ fn run_command(
         let _ = write_all(1, command);
         let _ = write_all(1, b"\n");
     }
-    let status = run_shell(command);
+    let status = run_shell(command, vars);
     if ignore {
         0
     } else {
@@ -597,13 +614,15 @@ fn load_makefile(path: Option<&[u8]>) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 fn usage() {
-    let _ = write_all(2, b"usage: make [-s] [-f file] [target...]\n");
+    let _ = write_all(2, b"usage: make [-s] [-C dir] [-f file] [VAR=value] [target...]\n");
 }
 
 fn main(args: &[&[u8]]) -> i32 {
     let mut makefile_path = None;
     let mut silent_mode = false;
     let mut targets: Vec<&[u8]> = Vec::new();
+    let mut cli_vars: Vec<(&[u8], &[u8])> = Vec::new();
+    let mut chdirs: Vec<&[u8]> = Vec::new();
     let mut index = 1usize;
     while index < args.len() {
         match args[index] {
@@ -623,6 +642,14 @@ fn main(args: &[&[u8]]) -> i32 {
                 makefile_path = Some(args[index + 1]);
                 index += 2;
             }
+            b"-C" => {
+                if index + 1 >= args.len() {
+                    usage();
+                    return 2;
+                }
+                chdirs.push(args[index + 1]);
+                index += 2;
+            }
             b"--file" => {
                 if index + 1 >= args.len() {
                     usage();
@@ -631,13 +658,31 @@ fn main(args: &[&[u8]]) -> i32 {
                 makefile_path = Some(args[index + 1]);
                 index += 2;
             }
+            b"--directory" => {
+                if index + 1 >= args.len() {
+                    usage();
+                    return 2;
+                }
+                chdirs.push(args[index + 1]);
+                index += 2;
+            }
             arg if arg.starts_with(b"-f") && arg.len() > 2 => {
                 makefile_path = Some(&arg[2..]);
+                index += 1;
+            }
+            arg if arg.starts_with(b"-C") && arg.len() > 2 => {
+                chdirs.push(&arg[2..]);
                 index += 1;
             }
             arg if arg.starts_with(b"-") => {
                 usage();
                 return 2;
+            }
+            arg if assignment(arg).is_some() => {
+                if let Some((name, value)) = assignment(arg) {
+                    cli_vars.push((name, value));
+                }
+                index += 1;
             }
             arg => {
                 targets.push(arg);
@@ -646,11 +691,22 @@ fn main(args: &[&[u8]]) -> i32 {
         }
     }
 
+    for dir in chdirs {
+        let dir_c = cstr(dir);
+        if sys::chdir(dir_c.as_ptr()) < 0 {
+            print_error(b"cannot enter directory ", dir);
+            return 1;
+        }
+    }
+
     let Some((_path, bytes)) = load_makefile(makefile_path) else {
         let _ = write_all(2, b"make: no Makefile found\n");
         return 1;
     };
-    let file = parse_makefile(&bytes);
+    let mut file = parse_makefile(&bytes);
+    for (name, value) in cli_vars {
+        file.set_var(name, value);
+    }
     if targets.is_empty() {
         let Some(default) = file.default_target.as_deref() else {
             let _ = write_all(2, b"make: no targets\n");
