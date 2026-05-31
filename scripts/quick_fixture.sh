@@ -871,6 +871,37 @@ case "$SCENARIO" in
       "^  /bin/rm$"
     )
     ;;
+  chmod)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "mkdir /tmp/chmodcheck"
+      "cd /tmp/chmodcheck"
+      "echo mode > file.txt"
+      "chmod 600 file.txt"
+      "stat -c %a file.txt"
+      "chmod +x file.txt"
+      "stat -c %a file.txt"
+      "chmod go-rwx file.txt"
+      "stat -c %a file.txt"
+      "mkdir -p tree/sub"
+      "echo leaf > tree/sub/leaf.txt"
+      "chmod -R a+x tree"
+      "stat -c %a tree/sub/leaf.txt"
+      "pkg info chmod"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: chmod 600 file.txt"
+      "^600$"
+      "TTY canonical line ready: chmod [+]x file.txt"
+      "^711$"
+      "TTY canonical line ready: chmod go-rwx file.txt"
+      "^700$"
+      "TTY canonical line ready: chmod -R a[+]x tree"
+      "^755$"
+      "^name: chmod$"
+      "^  /bin/chmod$"
+    )
+    ;;
   grep)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -2479,7 +2510,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, command)" >&2
     exit 2
     ;;
 esac
