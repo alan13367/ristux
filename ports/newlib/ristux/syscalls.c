@@ -7,14 +7,17 @@
 #include <sys/time.h>
 #include <sys/times.h>
 #include <sys/types.h>
+#include <time.h>
 
 #ifndef RISTUX_NEWLIB_STANDALONE
 #include <reent.h>
+typedef clockid_t ristux_clockid_t;
 #else
 struct _reent {
     int _errno;
 };
 typedef void (*_sig_func_ptr)(int);
+typedef int ristux_clockid_t;
 #endif
 
 #ifndef NULL
@@ -50,11 +53,22 @@ typedef void (*_sig_func_ptr)(int);
 #define SYS_RMDIR 84
 #define SYS_LINK 86
 #define SYS_UNLINK 87
+#define SYS_SYMLINK 88
+#define SYS_READLINK 89
 #define SYS_CHMOD 90
 #define SYS_CHOWN 92
+#define SYS_UMASK 95
 #define SYS_GETTIMEOFDAY 96
 #define SYS_TIMES 100
+#define SYS_GETUID 102
+#define SYS_GETGID 104
+#define SYS_SETUID 105
+#define SYS_SETGID 106
+#define SYS_GETEUID 107
+#define SYS_GETEGID 108
 #define SYS_RT_SIGPENDING 127
+#define SYS_TIME 201
+#define SYS_CLOCK_GETTIME 228
 
 #define WNOHANG 1
 #define ECHILD 10
@@ -351,6 +365,22 @@ int _gettimeofday_r(struct _reent *r, struct timeval *tv, void *tz) {
     return (int)syscall_ret(r, ristux_syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)tz));
 }
 
+time_t time(time_t *tloc) {
+    long ret = syscall_ret(NULL, ristux_syscall1(SYS_TIME, (long)tloc));
+    if (ret < 0) {
+        return (time_t)-1;
+    }
+    return (time_t)ret;
+}
+
+int clock_gettime(ristux_clockid_t clockid, struct timespec *tp) {
+    return public_syscall_ret(ristux_syscall2(SYS_CLOCK_GETTIME, clockid, (long)tp));
+}
+
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    return public_syscall_ret(ristux_syscall2(SYS_NANOSLEEP, (long)req, (long)rem));
+}
+
 int _isatty_r(struct _reent *r, int fd) {
     struct stat st;
     if (_fstat_r(r, fd, &st) < 0) {
@@ -361,6 +391,14 @@ int _isatty_r(struct _reent *r, int fd) {
 
 int _link_r(struct _reent *r, const char *old_path, const char *new_path) {
     return (int)syscall_ret(r, ristux_syscall2(SYS_LINK, (long)old_path, (long)new_path));
+}
+
+int symlink(const char *target, const char *link_path) {
+    return public_syscall_ret(ristux_syscall2(SYS_SYMLINK, (long)target, (long)link_path));
+}
+
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall_ret(NULL, ristux_syscall3(SYS_READLINK, (long)path, (long)buf, (long)bufsiz));
 }
 
 int _kill_r(struct _reent *r, int pid, int sig) {
@@ -429,6 +467,44 @@ int mkdir(const char *path, mode_t mode) {
 
 int rmdir(const char *path) {
     return public_syscall_ret(ristux_syscall1(SYS_RMDIR, (long)path));
+}
+
+mode_t umask(mode_t mask) {
+    return (mode_t)ristux_syscall1(SYS_UMASK, mask);
+}
+
+uid_t getuid(void) {
+    return (uid_t)ristux_syscall0(SYS_GETUID);
+}
+
+uid_t geteuid(void) {
+    return (uid_t)ristux_syscall0(SYS_GETEUID);
+}
+
+gid_t getgid(void) {
+    return (gid_t)ristux_syscall0(SYS_GETGID);
+}
+
+gid_t getegid(void) {
+    return (gid_t)ristux_syscall0(SYS_GETEGID);
+}
+
+int setuid(uid_t uid) {
+    return public_syscall_ret(ristux_syscall1(SYS_SETUID, uid));
+}
+
+int setgid(gid_t gid) {
+    return public_syscall_ret(ristux_syscall1(SYS_SETGID, gid));
+}
+
+uid_t _getuid_r(struct _reent *r) {
+    (void)r;
+    return getuid();
+}
+
+gid_t _getgid_r(struct _reent *r) {
+    (void)r;
+    return getgid();
 }
 
 static int translate_sigprocmask_how(int how) {

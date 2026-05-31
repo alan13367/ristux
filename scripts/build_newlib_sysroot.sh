@@ -129,6 +129,27 @@ LIB_DIR="$TARGET_SYSROOT/lib"
 INCLUDE_DIR="$TARGET_SYSROOT/include"
 mkdir -p "$LIB_DIR"
 
+python3 - "$INCLUDE_DIR/sys/features.h" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+marker = "/* Ristux POSIX option macros. */"
+if marker not in text:
+    text += f"""
+
+{marker}
+#ifndef _POSIX_TIMERS
+#define _POSIX_TIMERS 200809L
+#endif
+#ifndef _POSIX_CLOCK_SELECTION
+#define _POSIX_CLOCK_SELECTION 200809L
+#endif
+"""
+    path.write_text(text)
+PY
+
 "$CLANG" --target=x86_64-unknown-none-elf \
     -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone \
     -nostdinc -isystem "$RESOURCE_INCLUDE" -isystem "$INCLUDE_DIR" \

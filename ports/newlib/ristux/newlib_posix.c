@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static int expect(int condition, const char *message) {
@@ -55,7 +56,28 @@ int main(void) {
     if (expect(access(".", R_OK | W_OK | X_OK) == 0, "access")) {
         return 1;
     }
+
+    mode_t old_mask = umask(0022);
+    (void)umask(old_mask);
+    if (expect(getuid() == geteuid() && getgid() == getegid(), "uid gid")) {
+        return 1;
+    }
     puts("cc_newlib_posix: cwd dirs ok");
+
+    const char *target = "newlib symlink target";
+    if (expect(symlink(target, "link0") == 0, "symlink")) {
+        return 1;
+    }
+    char link_buf[64];
+    memset(link_buf, 0, sizeof(link_buf));
+    ssize_t link_len = readlink("link0", link_buf, sizeof(link_buf) - 1);
+    if (expect(link_len == (ssize_t)strlen(target) && strcmp(link_buf, target) == 0, "readlink")) {
+        return 1;
+    }
+    if (expect(unlink("link0") == 0, "unlink symlink")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: links ok");
 
     int fds[2];
     if (expect(pipe(fds) == 0, "pipe")) {
@@ -131,6 +153,21 @@ int main(void) {
         return 1;
     }
     puts("cc_newlib_posix: signals ok");
+
+    time_t stored = 0;
+    time_t now = time(&stored);
+    if (expect(now != (time_t)-1 && stored == now, "time")) {
+        return 1;
+    }
+    struct timespec ts;
+    if (expect(clock_gettime(CLOCK_REALTIME, &ts) == 0 && ts.tv_sec > 0, "clock realtime")) {
+        return 1;
+    }
+    struct timespec zero = { 0, 0 };
+    if (expect(nanosleep(&zero, NULL) == 0, "nanosleep")) {
+        return 1;
+    }
+    puts("cc_newlib_posix: time ok");
 
     if (expect(chdir("/tmp") == 0, "chdir tmp")) {
         return 1;
