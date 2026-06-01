@@ -288,11 +288,11 @@ fn self_test() {
         || stats.windows_drawn < 2
         || stats.fb0_writes == 0
     {
-        panic!("framebuffer graphics self-test failed");
+        panic!("framebuffer console self-test failed");
     }
 
     crate::println!(
-        "Framebuffer graphics self-test passed: {}x{}x{}, linear {}, {} glyph(s), {} terminal line(s), {} window(s).",
+        "Framebuffer console self-test passed: {}x{}x{}, linear {}, {} glyph(s), {} terminal line(s), {} window(s).",
         stats.width,
         stats.height,
         stats.bpp,

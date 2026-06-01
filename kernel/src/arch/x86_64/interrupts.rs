@@ -39,7 +39,7 @@ pub fn timer_tick() {
     crate::process::wake_expired_io_waiters(crate::time::uptime_millis());
     crate::net::poll_devices();
     if tick == 1 || tick % config::LOG_TIMER_EVERY_TICKS == 0 {
-        crate::println!("timer tick {}", tick);
+        crate::serial_println!("timer tick {}", tick);
     }
     unsafe {
         end_of_interrupt(0);
@@ -52,7 +52,7 @@ pub fn keyboard_interrupt() {
     crate::drivers::keyboard::push_scancode(scancode);
     crate::tty::input_scancode(scancode);
     crate::process::wake_io_waiters();
-    crate::println!("keyboard scancode {:#04x}", scancode);
+    crate::serial_println!("keyboard scancode {:#04x}", scancode);
     unsafe {
         end_of_interrupt(1);
     }

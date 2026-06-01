@@ -92,6 +92,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
     // Phase A: hand control to ring 3. /bin/init is responsible for spawning
     // /bin/sh and reaping zombies forever; once we enter user mode the kernel
     // only runs again via syscalls and interrupts.
+    drivers::vga::clear_screen();
     println!("init: spawning /bin/init");
     let _ = userspace::run_user_program("/bin/init", 1);
 

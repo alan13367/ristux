@@ -371,8 +371,8 @@ pub fn input_scancode(scancode: u8) {
                 let line = tty.pending_line().unwrap_or(&[]);
                 let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
                 match str::from_utf8(trimmed) {
-                    Ok(text) => crate::println!("TTY canonical line ready: {}", text),
-                    Err(_) => crate::println!("TTY canonical line ready: <binary>"),
+                    Ok(text) => crate::serial_println!("TTY canonical line ready: {}", text),
+                    Err(_) => crate::serial_println!("TTY canonical line ready: <binary>"),
                 }
             }
 
@@ -386,7 +386,7 @@ pub fn input_scancode(scancode: u8) {
     };
 
     if let Some((pgrp, signal)) = signal_target {
-        crate::println!(
+        crate::serial_println!(
             "TTY delivered signal {} to foreground pgrp {}.",
             signal.number(),
             pgrp

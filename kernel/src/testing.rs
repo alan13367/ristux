@@ -23,11 +23,11 @@ fn run() -> KernelResult<()> {
     let framebuffer = drivers::framebuffer::stats();
     ensure(
         framebuffer.initialized && framebuffer.backbuffer_presented,
-        "framebuffer graphics path did not initialize",
+        "framebuffer console path did not initialize",
     )?;
     ensure(
         framebuffer.terminal_lines >= 4 && framebuffer.windows_drawn >= 2,
-        "graphical terminal/window path did not run",
+        "framebuffer console self-test did not run",
     )?;
     let scheduler = task::scheduler::stats();
     ensure(
