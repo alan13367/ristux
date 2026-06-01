@@ -6,7 +6,7 @@
 
 static void reset_sane(struct termios *term) {
     term->c_iflag |= ICRNL;
-    term->c_oflag |= OPOST;
+    term->c_oflag |= OPOST | ONLCR;
     term->c_cflag |= CREAD | CS8;
     term->c_lflag |= ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
     term->c_cc[VINTR] = 0x03;

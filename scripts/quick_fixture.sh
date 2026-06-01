@@ -222,6 +222,7 @@ case "$SCENARIO" in
       "cc_pty: open ok"
       "cc_pty: line discipline ok"
       "cc_pty: master-to-slave ok"
+      "cc_pty: output processing ok"
       "cc_pty: slave-to-master ok"
       "cc_pty: signal char ok"
       "cc_pty: openpty ok"

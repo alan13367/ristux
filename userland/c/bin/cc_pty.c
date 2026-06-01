@@ -95,7 +95,7 @@ static int check_line_discipline(int master, int slave) {
         puts("cc_pty: canonical premature read failed");
         return 1;
     }
-    if (write(master, "c\n", 2) != 2 || !expect_bytes(master, "c\n", 2)) {
+    if (write(master, "c\n", 2) != 2 || !expect_bytes(master, "c\r\n", 3)) {
         puts("cc_pty: newline echo failed");
         return 1;
     }
@@ -238,6 +238,27 @@ int main(void) {
         return 1;
     }
     puts("cc_pty: master-to-slave ok");
+
+    struct termios cooked;
+    if (tcgetattr(slave, &cooked) < 0) {
+        puts("cc_pty: cooked termios get failed");
+        return 1;
+    }
+    cooked.c_oflag |= OPOST | ONLCR;
+    if (tcsetattr(slave, TCSANOW, &cooked) < 0) {
+        puts("cc_pty: cooked termios set failed");
+        return 1;
+    }
+    if (write(slave, "nl\n", 3) != 3 || !expect_bytes(master, "nl\r\n", 4)) {
+        puts("cc_pty: output newline translation failed");
+        return 1;
+    }
+    puts("cc_pty: output processing ok");
+
+    if (!set_raw(slave)) {
+        puts("cc_pty: raw mode restore failed");
+        return 1;
+    }
 
     if (write(slave, "xyz", 3) != 3) {
         puts("cc_pty: slave write failed");

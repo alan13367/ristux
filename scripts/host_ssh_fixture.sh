@@ -157,6 +157,7 @@ SSH_OUTPUT="$(
     -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=none \
     -p "$SSH_PORT" root@127.0.0.1 2>&1 || true
 )"
+SSH_OUTPUT="$(printf '%s' "$SSH_OUTPUT" | tr -d '\r')"
 if ! grep -q "host_ssh_check" <<<"$SSH_OUTPUT"; then
   kill "$QEMU_PID" 2>/dev/null || true
   echo "host_ssh_fixture: forwarded SSH session failed" >&2

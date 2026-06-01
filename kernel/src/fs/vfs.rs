@@ -284,12 +284,45 @@ impl PtyState {
     }
 
     fn write_slave(&mut self, input: &[u8]) -> Result<usize, VfsError> {
-        write_queue(
-            &mut self.slave_to_master,
-            self.capacity,
-            self.masters,
-            input,
-        )
+        self.write_slave_output(input)
+    }
+
+    fn write_slave_output(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        const OFLAG_OPOST: u32 = 0x1;
+        const OFLAG_ONLCR: u32 = 0x4;
+        const TERMIOS_OFLAG: usize = 4;
+
+        if input.is_empty() {
+            return Ok(0);
+        }
+        if self.masters == 0 {
+            return Err(VfsError::BadFd);
+        }
+
+        let oflag = u32::from_le_bytes([
+            self.termios[TERMIOS_OFLAG],
+            self.termios[TERMIOS_OFLAG + 1],
+            self.termios[TERMIOS_OFLAG + 2],
+            self.termios[TERMIOS_OFLAG + 3],
+        ]);
+        let translate_newline = oflag & (OFLAG_OPOST | OFLAG_ONLCR) == (OFLAG_OPOST | OFLAG_ONLCR);
+
+        let mut written = 0usize;
+        for byte in input {
+            let required = if translate_newline && *byte == b'\n' { 2 } else { 1 };
+            if self.slave_to_master.len().saturating_add(required) > self.capacity {
+                break;
+            }
+            if translate_newline && *byte == b'\n' {
+                self.slave_to_master.push_back(b'\r');
+            }
+            self.slave_to_master.push_back(*byte);
+            written += 1;
+        }
+        if written == 0 {
+            return Err(VfsError::WouldBlock);
+        }
+        Ok(written)
     }
 
     fn write_master_input(&mut self, input: &[u8]) -> Result<usize, VfsError> {
@@ -377,7 +410,7 @@ impl PtyState {
                 }
                 self.input_line.push(byte);
                 if echo {
-                    let _ = push_pty_output(&mut self.slave_to_master, self.capacity, byte);
+                    let _ = self.write_slave_output(core::slice::from_ref(&byte));
                 }
                 if byte == b'\n' {
                     commit_pty_line(
@@ -460,32 +493,6 @@ fn read_queue(
         return Err(VfsError::WouldBlock);
     }
     Ok(read)
-}
-
-fn write_queue(
-    queue: &mut VecDeque<u8>,
-    capacity: usize,
-    readers: usize,
-    input: &[u8],
-) -> Result<usize, VfsError> {
-    if input.is_empty() {
-        return Ok(0);
-    }
-    if readers == 0 {
-        return Err(VfsError::BadFd);
-    }
-    let mut written = 0;
-    for byte in input {
-        if queue.len() == capacity {
-            break;
-        }
-        queue.push_back(*byte);
-        written += 1;
-    }
-    if written == 0 && !input.is_empty() {
-        return Err(VfsError::WouldBlock);
-    }
-    Ok(written)
 }
 
 pub struct Vfs {

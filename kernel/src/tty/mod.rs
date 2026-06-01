@@ -20,6 +20,7 @@ const VSUSP: usize = 10;
 
 const IFLAG_ICRNL: u32 = 0x100;
 const OFLAG_OPOST: u32 = 0x1;
+const OFLAG_ONLCR: u32 = 0x4;
 const CFLAG_CREAD: u32 = 0x80;
 const CFLAG_CS8: u32 = 0x30;
 const LFLAG_ISIG: u32 = 0x1;
@@ -70,7 +71,7 @@ impl Termios {
         cc[VSUSP] = 0x1a;
         Self {
             iflag: IFLAG_ICRNL,
-            oflag: OFLAG_OPOST,
+            oflag: OFLAG_OPOST | OFLAG_ONLCR,
             cflag: CFLAG_CREAD | CFLAG_CS8,
             lflag: LFLAG_ISIG
                 | LFLAG_ICANON
