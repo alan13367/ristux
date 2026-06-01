@@ -5,6 +5,7 @@ GRUB_FILE ?= $(shell command -v grub-file 2>/dev/null || command -v i686-elf-gru
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v i686-elf-grub-mkrescue 2>/dev/null || command -v x86_64-elf-grub-mkrescue 2>/dev/null || printf grub-mkrescue)
 QEMU ?= qemu-system-x86_64
 QEMU_FLAGS ?= -m 256M -smp 4
+QEMU_DISPLAY ?= $(shell if $(QEMU) -display help 2>/dev/null | grep -qx cocoa; then printf '%s' '-display cocoa,zoom-to-fit=on,full-screen=on'; fi)
 RUST_HOST := $(shell $(RUSTC) -vV | sed -n 's/^host: //p')
 RUST_LLD ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/$(RUST_HOST)/bin/rust-lld
 HOST_AR ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/$(RUST_HOST)/bin/llvm-ar
@@ -617,7 +618,7 @@ iso: check-multiboot $(ISO_INITRD) $(DISK_IMAGE)
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_DIR)
 
 run: iso disk
-	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS) -drive file=$(DISK_IMAGE),if=none,id=hd0,format=raw -device virtio-blk-pci,drive=hd0 -no-reboot -no-shutdown
+	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS) $(QEMU_DISPLAY) -drive file=$(DISK_IMAGE),if=none,id=hd0,format=raw -device virtio-blk-pci,drive=hd0 -no-reboot -no-shutdown
 
 run-headless: iso
 	scripts/run_qemu.sh --headless

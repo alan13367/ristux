@@ -1,11 +1,13 @@
 use core::{fmt, fmt::Write, ptr};
 
-use crate::sync::spinlock::SpinLock;
+use crate::{arch::x86_64::port, sync::spinlock::SpinLock};
 
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 const BUFFER_CELLS: usize = BUFFER_HEIGHT * BUFFER_WIDTH;
 const VGA_BUFFER: *mut VgaChar = 0xb8000 as *mut VgaChar;
+const VGA_CRTC_INDEX: u16 = 0x3d4;
+const VGA_CRTC_DATA: u16 = 0x3d5;
 const DEFAULT_COLOR: u8 = 0x0f;
 const CSI_MAX_PARAMS: usize = 8;
 
@@ -194,6 +196,26 @@ impl VgaWriter {
         }
         self.column = 0;
         self.row = 0;
+    }
+
+    fn init_cursor(&self) {
+        unsafe {
+            port::outb(VGA_CRTC_INDEX, 0x0a);
+            port::outb(VGA_CRTC_DATA, 0x0e);
+            port::outb(VGA_CRTC_INDEX, 0x0b);
+            port::outb(VGA_CRTC_DATA, 0x0f);
+        }
+        self.update_cursor();
+    }
+
+    fn update_cursor(&self) {
+        let pos = (self.row * BUFFER_WIDTH + self.column.min(BUFFER_WIDTH - 1)) as u16;
+        unsafe {
+            port::outb(VGA_CRTC_INDEX, 0x0f);
+            port::outb(VGA_CRTC_DATA, pos as u8);
+            port::outb(VGA_CRTC_INDEX, 0x0e);
+            port::outb(VGA_CRTC_DATA, (pos >> 8) as u8);
+        }
     }
 
     fn reset_terminal(&mut self) {
@@ -456,12 +478,19 @@ impl Write for VgaWriter {
         for byte in s.bytes() {
             self.write_byte(byte);
         }
+        self.update_cursor();
         Ok(())
     }
 }
 
+pub fn init_cursor() {
+    WRITER.lock().init_cursor();
+}
+
 pub fn clear_screen() {
-    WRITER.lock().clear();
+    let mut writer = WRITER.lock();
+    writer.clear();
+    writer.update_cursor();
 }
 
 pub fn write_fmt(args: fmt::Arguments<'_>) -> fmt::Result {

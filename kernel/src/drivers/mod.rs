@@ -43,6 +43,7 @@ const REGISTERED_DRIVERS: &[DriverInfo] = &[
 pub fn init() {
     serial::init();
     vga::clear_screen();
+    vga::init_cursor();
 }
 
 pub fn registered_drivers() -> &'static [DriverInfo] {

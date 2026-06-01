@@ -42,6 +42,11 @@ pub enum ReadOutcome {
     WaitUntil(u64),
 }
 
+enum TtyEcho {
+    Text(&'static str),
+    Byte(u8),
+}
+
 #[derive(Clone, Copy)]
 struct TtyWaiter {
     pid: Pid,
@@ -255,6 +260,14 @@ impl Tty {
         self.termios.lflag & LFLAG_ISIG != 0
     }
 
+    fn echo_enabled(&self) -> bool {
+        self.termios.lflag & LFLAG_ECHO != 0
+    }
+
+    fn erase_echo_enabled(&self) -> bool {
+        self.termios.lflag & LFLAG_ECHOE != 0
+    }
+
     fn control_char(&self, index: usize) -> Option<u8> {
         let byte = self.termios.cc.get(index).copied().unwrap_or(0);
         if byte == 0 {
@@ -360,12 +373,12 @@ pub fn input_scancode(scancode: u8) {
         return;
     };
 
-    let (waiters, signal_target) = {
+    let (waiters, signal_target, echo) = {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
+        let echo = tty_echo_for_input(tty, byte);
         if let Some(signal) = tty.input(byte) {
-            let target = tty.foreground_pgrp();
-            (Vec::new(), Some((target, signal)))
+            (Vec::new(), Some((tty.foreground_pgrp(), signal)), None)
         } else {
             if byte == b'\n' {
                 let line = tty.pending_line().unwrap_or(&[]);
@@ -381,9 +394,20 @@ pub fn input_scancode(scancode: u8) {
             } else {
                 Vec::new()
             };
-            (waiters, None)
+            (waiters, None, echo)
         }
     };
+
+    match echo {
+        Some(TtyEcho::Text(text)) => crate::log::write_str(text),
+        Some(TtyEcho::Byte(byte)) => {
+            let bytes = [byte];
+            if let Ok(text) = str::from_utf8(&bytes) {
+                crate::log::write_str(text);
+            }
+        }
+        None => {}
+    }
 
     if let Some((pgrp, signal)) = signal_target {
         crate::serial_println!(
@@ -397,6 +421,32 @@ pub fn input_scancode(scancode: u8) {
 
     for pid in waiters {
         crate::process::wake_io_waiters_for(pid);
+    }
+}
+
+fn tty_echo_for_input(tty: &Tty, byte: u8) -> Option<TtyEcho> {
+    if !tty.echo_enabled() {
+        return None;
+    }
+    if tty.signal_chars_enabled()
+        && (tty.control_char(VINTR) == Some(byte) || tty.control_char(VSUSP) == Some(byte))
+    {
+        return None;
+    }
+    if tty.canonical_enabled() {
+        if tty.control_char(VEOF) == Some(byte) {
+            return None;
+        }
+        if tty.control_char(VERASE) == Some(byte) || byte == 0x08 {
+            return (tty.erase_echo_enabled() && !tty.line.is_empty())
+                .then_some(TtyEcho::Text("\x08 \x08"));
+        }
+    }
+    match byte {
+        b'\n' => Some(TtyEcho::Text("\n")),
+        b'\t' => Some(TtyEcho::Text("\t")),
+        0x20..=0x7e => Some(TtyEcho::Byte(byte)),
+        _ => None,
     }
 }
 
