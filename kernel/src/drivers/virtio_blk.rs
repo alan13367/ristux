@@ -578,7 +578,10 @@ impl LegacyVirtQueue {
             let idx_ptr = self.mem.add(avail + 2) as *mut u16;
             let idx = ptr::read_volatile(idx_ptr);
             let slot = idx % self.size;
-            ptr::write_volatile(self.mem.add(avail + 4 + slot as usize * 2) as *mut u16, head);
+            ptr::write_volatile(
+                self.mem.add(avail + 4 + slot as usize * 2) as *mut u16,
+                head,
+            );
             compiler_fence(Ordering::SeqCst);
             ptr::write_volatile(idx_ptr, idx.wrapping_add(1));
         }

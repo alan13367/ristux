@@ -9,9 +9,16 @@ use ristux_userland::sys;
 
 fn parse_target(arg: &[u8]) -> Option<([u8; 4], &[u8])> {
     let rest = arg.strip_prefix(b"http://").unwrap_or(arg);
-    let slash = rest.iter().position(|byte| *byte == b'/').unwrap_or(rest.len());
+    let slash = rest
+        .iter()
+        .position(|byte| *byte == b'/')
+        .unwrap_or(rest.len());
     let host = &rest[..slash];
-    let path = if slash < rest.len() { &rest[slash..] } else { b"/" };
+    let path = if slash < rest.len() {
+        &rest[slash..]
+    } else {
+        b"/"
+    };
     Some((parse_ipv4(host)?, path))
 }
 

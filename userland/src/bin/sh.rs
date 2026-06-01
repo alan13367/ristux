@@ -1936,11 +1936,7 @@ fn open_redirect(path: &[u8], write: bool, append: bool) -> i32 {
         O_RDONLY
     };
     let fd = sys::open(path.as_ptr(), flags, 0o644);
-    if fd < 0 {
-        -1
-    } else {
-        fd as i32
-    }
+    if fd < 0 { -1 } else { fd as i32 }
 }
 
 fn spawn_stage(

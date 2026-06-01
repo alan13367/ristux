@@ -103,11 +103,7 @@ fn main(_args: &[&[u8]]) -> i32 {
         if sys::connect(fd as i32, &addr) >= 0 {
             let flags = sys::fcntl(fd as i32, sys::F_GETFL, 0);
             if flags < 0
-                || sys::fcntl(
-                    fd as i32,
-                    sys::F_SETFL,
-                    flags | sys::O_NONBLOCK as isize,
-                ) < 0
+                || sys::fcntl(fd as i32, sys::F_SETFL, flags | sys::O_NONBLOCK as isize) < 0
             {
                 let _ = sys::write(2, b"ssh_banner: fcntl failed\n");
                 let _ = sys::close(fd as i32);
