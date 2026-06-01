@@ -57,6 +57,23 @@ if [[ "$ENABLE_NET" == "1" || -n "$SSH_FORWARD_PORT" ]]; then
 fi
 
 if [[ "$HEADLESS" == "1" ]]; then
+  if [[ -n "$SSH_FORWARD_PORT" ]]; then
+    cat <<EOF
+Ristux is booting headless with SSH forwarded to localhost:${SSH_FORWARD_PORT}.
+
+Leave this QEMU monitor running. In another terminal, connect with:
+  ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=none -p ${SSH_FORWARD_PORT} root@127.0.0.1
+
+Type 'quit' in this QEMU monitor to stop the VM.
+EOF
+  else
+    cat <<EOF
+Ristux is booting headless.
+
+This terminal is the QEMU monitor, not the OS shell. Type 'quit' here to stop the VM.
+Serial output is written to ${RISTUX_SERIAL_LOG:-/tmp/ristux-serial.log}.
+EOF
+  fi
   exec "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
     -serial "file:${RISTUX_SERIAL_LOG:-/tmp/ristux-serial.log}" -monitor stdio
 fi
