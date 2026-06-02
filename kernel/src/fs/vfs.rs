@@ -839,7 +839,7 @@ impl Vfs {
                         fs.truncate_file(path).map_err(map_ext2_error)?;
                     }
                     Err(ext2::Ext2Error::NotFound) => {
-                        let parent_path = parent_path(path);
+                        let parent_path = parent_path(path)?;
                         let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
                         if parent.kind != ext2::Ext2NodeKind::Directory {
                             return Err(VfsError::NotFile);
@@ -1092,7 +1092,7 @@ impl Vfs {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
         if Self::use_root_ext2(path) {
-            let parent_path = parent_path(path);
+            let parent_path = parent_path(path)?;
             if let Some(fs) = self.root_ext2_mut() {
                 if fs.metadata(path).is_ok() {
                     return Err(VfsError::AlreadyExists);
@@ -1137,7 +1137,7 @@ impl Vfs {
             return Err(VfsError::PermissionDenied);
         }
         if Self::use_root_ext2(path) {
-            let parent_path = parent_path(path);
+            let parent_path = parent_path(path)?;
             if let Some(fs) = self.root_ext2_mut() {
                 let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
                 if parent.kind != ext2::Ext2NodeKind::Directory {
@@ -1152,10 +1152,13 @@ impl Vfs {
             }
         }
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
-        if self.nodes.iter().any(|node| {
-            !node.path.is_empty() && node.path != path && parent_path(&node.path) == path
-        }) {
-            return Err(VfsError::PermissionDenied);
+        for node in &self.nodes {
+            if node.path.is_empty() || node.path == path {
+                continue;
+            }
+            if parent_path(&node.path)? == path {
+                return Err(VfsError::PermissionDenied);
+            }
         }
         let node = self
             .nodes
@@ -1179,7 +1182,7 @@ impl Vfs {
         let normalized = normalize_path(path)?;
         let path = normalized.as_str();
         if Self::use_root_ext2(path) {
-            let parent_path = parent_path(path);
+            let parent_path = parent_path(path)?;
             if let Some(fs) = self.root_ext2_mut() {
                 let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
                 if parent.kind != ext2::Ext2NodeKind::Directory {
@@ -1223,8 +1226,8 @@ impl Vfs {
             if !Self::use_root_ext2(old_path) || !Self::use_root_ext2(new_path) {
                 return Err(VfsError::NotFound);
             }
-            let old_parent_path = parent_path(old_path);
-            let new_parent_path = parent_path(new_path);
+            let old_parent_path = parent_path(old_path)?;
+            let new_parent_path = parent_path(new_path)?;
             if let Some(fs) = self.root_ext2_mut() {
                 let old_parent = fs.metadata(&old_parent_path).map_err(map_ext2_error)?;
                 let new_parent = fs.metadata(&new_parent_path).map_err(map_ext2_error)?;
@@ -1250,18 +1253,33 @@ impl Vfs {
             .iter()
             .position(|node| node.path == old_path)
             .ok_or(VfsError::NotFound)?;
-        if let Some(new_index) = self.nodes.iter().position(|node| node.path == new_path) {
-            if new_index != old_index {
-                self.nodes[new_index].path.clear();
+        let replaced_index = self
+            .nodes
+            .iter()
+            .position(|node| node.path == new_path)
+            .filter(|index| *index != old_index);
+        let old_prefix = child_path_prefix(old_path)?;
+        let new_prefix = child_path_prefix(new_path)?;
+        let renamed_path = try_string_from(new_path)?;
+        let mut child_rewrites: Vec<(usize, String)> = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if Some(index) == replaced_index {
+                continue;
+            }
+            if node.path.starts_with(&old_prefix) {
+                let rewritten = replace_path_prefix(&node.path, &old_prefix, &new_prefix)?;
+                child_rewrites
+                    .try_reserve_exact(1)
+                    .map_err(|_| VfsError::OutOfMemory)?;
+                child_rewrites.push((index, rewritten));
             }
         }
-        let old_prefix = format!("{}/", old_path.trim_end_matches('/'));
-        let new_prefix = format!("{}/", new_path.trim_end_matches('/'));
-        self.nodes[old_index].path = String::from(new_path);
-        for node in &mut self.nodes {
-            if node.path.starts_with(&old_prefix) {
-                node.path = format!("{}{}", new_prefix, &node.path[old_prefix.len()..]);
-            }
+        if let Some(new_index) = replaced_index {
+            self.nodes[new_index].path.clear();
+        }
+        self.nodes[old_index].path = renamed_path;
+        for (index, rewritten) in child_rewrites {
+            self.nodes[index].path = rewritten;
         }
         Ok(())
     }
@@ -1275,7 +1293,7 @@ impl Vfs {
         let normalized_link = normalize_path(link_path)?;
         let link_path = normalized_link.as_str();
         if Self::use_root_ext2(link_path) {
-            let parent_path = parent_path(link_path);
+            let parent_path = parent_path(link_path)?;
             if let Some(fs) = self.root_ext2_mut() {
                 if fs.lstat_metadata(link_path).is_ok() {
                     return Err(VfsError::AlreadyExists);
@@ -1328,7 +1346,7 @@ impl Vfs {
             if !Self::use_root_ext2(old_path) || !Self::use_root_ext2(new_path) {
                 return Err(VfsError::NotFound);
             }
-            let parent_path = parent_path(new_path);
+            let parent_path = parent_path(new_path)?;
             let fs = self.root_ext2_mut().ok_or(VfsError::NotFound)?;
             let parent = fs.metadata(&parent_path).map_err(map_ext2_error)?;
             if parent.kind != ext2::Ext2NodeKind::Directory {
@@ -2426,11 +2444,12 @@ impl Vfs {
             }
             let target = str::from_utf8(&node.data).map_err(|_| VfsError::Utf8)?;
             let next = if target.starts_with('/') {
-                String::from(target)
+                normalize_path(target)?
             } else {
-                join_path(&parent_path(&current), target)
+                let parent = parent_path(&current)?;
+                join_path(&parent, target)?
             };
-            current = normalize_path(&next)?;
+            current = next;
         }
         Err(VfsError::NotFound)
     }
@@ -2490,7 +2509,7 @@ impl Vfs {
                 if node.kind != NodeKind::Directory {
                     return Err(VfsError::NotFile);
                 }
-                Ok((self.node_directory_entries(&node.path), *offset))
+                Ok((self.node_directory_entries(&node.path)?, *offset))
             }
             OpenHandle::Ext2Dir { path, offset } => {
                 Ok((self.ext2_directory_entries(path)?, *offset))
@@ -2525,49 +2544,46 @@ impl Vfs {
         }
     }
 
-    fn node_directory_entries(&self, path: &str) -> Vec<DirectoryEntry> {
+    fn node_directory_entries(&self, path: &str) -> Result<Vec<DirectoryEntry>, VfsError> {
         let mut entries = Vec::new();
         for child in &self.nodes {
             if child.path.is_empty() || child.path == path {
                 continue;
             }
-            if parent_path(&child.path) != path {
+            if parent_path(&child.path)? != path {
                 continue;
             }
-            entries.push(DirectoryEntry {
-                name: file_name(&child.path),
-                kind: child.kind,
-            });
+            push_entry(&mut entries, file_name(&child.path)?, child.kind)?;
         }
         if path == "/proc" {
-            push_unique_entry(&mut entries, "meminfo", NodeKind::File);
-            push_unique_entry(&mut entries, "mounts", NodeKind::File);
-            push_unique_entry(&mut entries, "self", NodeKind::Directory);
-            push_unique_entry(&mut entries, "stat", NodeKind::File);
-            push_unique_entry(&mut entries, "uptime", NodeKind::File);
+            push_unique_entry(&mut entries, "meminfo", NodeKind::File)?;
+            push_unique_entry(&mut entries, "mounts", NodeKind::File)?;
+            push_unique_entry(&mut entries, "self", NodeKind::Directory)?;
+            push_unique_entry(&mut entries, "stat", NodeKind::File)?;
+            push_unique_entry(&mut entries, "uptime", NodeKind::File)?;
             let mut cursor = 0;
             while let Some(pid) = crate::process::next_process_pid_after(cursor) {
                 cursor = pid;
-                push_unique_entry(&mut entries, &format!("{}", pid), NodeKind::Directory);
+                push_unique_entry_owned(&mut entries, try_u64_string(pid)?, NodeKind::Directory)?;
             }
         } else if proc_existing_process_dir_pid(path).is_some() {
-            push_unique_entry(&mut entries, "status", NodeKind::File);
+            push_unique_entry(&mut entries, "status", NodeKind::File)?;
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
-        entries
+        Ok(entries)
     }
 
     fn ext2_directory_entries(&self, path: &str) -> Result<Vec<DirectoryEntry>, VfsError> {
         let fs = self.root_ext2().ok_or(VfsError::NotFound)?;
         let mut entries = Vec::new();
         for name in fs.list_dir(path).map_err(map_ext2_error)? {
-            let full = join_path(path, &name);
+            let full = join_path(path, &name)?;
             let kind = match fs.lstat_metadata(&full).map_err(map_ext2_error)?.kind {
                 ext2::Ext2NodeKind::File => NodeKind::File,
                 ext2::Ext2NodeKind::Directory => NodeKind::Directory,
                 ext2::Ext2NodeKind::Symlink => NodeKind::Symlink,
             };
-            entries.push(DirectoryEntry { name, kind });
+            push_entry(&mut entries, name, kind)?;
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(entries)
@@ -2918,35 +2934,80 @@ fn canonical_node_index(nodes: &[Node], index: usize) -> usize {
     current
 }
 
-fn parent_path(path: &str) -> String {
-    let normalized = normalize_path(path).unwrap_or_else(|_| String::from(path));
+fn parent_path(path: &str) -> Result<String, VfsError> {
+    let normalized = normalize_path(path)?;
     let path = normalized.as_str();
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
-        Some(0) | None => String::from("/"),
-        Some(index) => String::from(&trimmed[..index]),
+        Some(0) | None => try_string_from("/"),
+        Some(index) => try_string_from(&trimmed[..index]),
     }
 }
 
-fn file_name(path: &str) -> String {
-    let normalized = normalize_path(path).unwrap_or_else(|_| String::from(path));
+fn file_name(path: &str) -> Result<String, VfsError> {
+    let normalized = normalize_path(path)?;
     let path = normalized.as_str();
-    path.trim_end_matches('/')
+    let name = path
+        .trim_end_matches('/')
         .rsplit('/')
         .next()
-        .unwrap_or(path)
-        .into()
+        .unwrap_or(path);
+    try_string_from(name)
 }
 
-fn join_path(parent: &str, name: &str) -> String {
-    let joined = if name.starts_with('/') {
-        String::from(name)
-    } else if parent == "/" {
-        format!("/{}", name)
+fn join_path(parent: &str, name: &str) -> Result<String, VfsError> {
+    if name.starts_with('/') {
+        return normalize_path(name);
+    }
+    let parent = parent.trim_end_matches('/');
+    let len = if parent.is_empty() || parent == "/" {
+        name.len().checked_add(1).ok_or(VfsError::OutOfMemory)?
     } else {
-        format!("{}/{}", parent.trim_end_matches('/'), name)
+        parent
+            .len()
+            .checked_add(1)
+            .and_then(|len| len.checked_add(name.len()))
+            .ok_or(VfsError::OutOfMemory)?
     };
-    normalize_path(&joined).unwrap_or(joined)
+    let mut joined = String::new();
+    joined
+        .try_reserve_exact(len)
+        .map_err(|_| VfsError::OutOfMemory)?;
+    if parent.is_empty() || parent == "/" {
+        joined.push('/');
+    } else {
+        joined.push_str(parent);
+        joined.push('/');
+    }
+    joined.push_str(name);
+    normalize_path(&joined)
+}
+
+fn child_path_prefix(path: &str) -> Result<String, VfsError> {
+    let trimmed = path.trim_end_matches('/');
+    let len = trimmed.len().checked_add(1).ok_or(VfsError::OutOfMemory)?;
+    let mut prefix = String::new();
+    prefix
+        .try_reserve_exact(len)
+        .map_err(|_| VfsError::OutOfMemory)?;
+    prefix.push_str(trimmed);
+    prefix.push('/');
+    Ok(prefix)
+}
+
+fn replace_path_prefix(path: &str, old_prefix: &str, new_prefix: &str) -> Result<String, VfsError> {
+    let suffix = path.get(old_prefix.len()..).ok_or(VfsError::NotFound)?;
+    let len = new_prefix
+        .len()
+        .checked_add(suffix.len())
+        .ok_or(VfsError::OutOfMemory)?;
+    let mut rewritten = String::new();
+    rewritten
+        .try_reserve_exact(len)
+        .map_err(|_| VfsError::OutOfMemory)?;
+    rewritten.push_str(new_prefix);
+    rewritten.push_str(suffix);
+    Ok(rewritten)
 }
 
 fn fill_random(output: &mut [u8]) {
@@ -3158,14 +3219,60 @@ fn read_proc_text(text: &String, offset: usize, output: &mut [u8]) -> Result<usi
     Ok(count)
 }
 
-fn push_unique_entry(entries: &mut Vec<DirectoryEntry>, name: &str, kind: NodeKind) {
-    if entries.iter().any(|entry| entry.name == name) {
-        return;
+fn push_entry(
+    entries: &mut Vec<DirectoryEntry>,
+    name: String,
+    kind: NodeKind,
+) -> Result<(), VfsError> {
+    entries
+        .try_reserve_exact(1)
+        .map_err(|_| VfsError::OutOfMemory)?;
+    entries.push(DirectoryEntry { name, kind });
+    Ok(())
+}
+
+fn push_unique_entry(
+    entries: &mut Vec<DirectoryEntry>,
+    name: &str,
+    kind: NodeKind,
+) -> Result<(), VfsError> {
+    if entries
+        .iter()
+        .any(|entry| entry.name.as_bytes() == name.as_bytes())
+    {
+        return Ok(());
     }
-    entries.push(DirectoryEntry {
-        name: String::from(name),
-        kind,
-    });
+    push_entry(entries, try_string_from(name)?, kind)
+}
+
+fn push_unique_entry_owned(
+    entries: &mut Vec<DirectoryEntry>,
+    name: String,
+    kind: NodeKind,
+) -> Result<(), VfsError> {
+    if entries
+        .iter()
+        .any(|entry| entry.name.as_bytes() == name.as_bytes())
+    {
+        return Ok(());
+    }
+    push_entry(entries, name, kind)
+}
+
+fn try_u64_string(value: u64) -> Result<String, VfsError> {
+    let mut digits = [0u8; 20];
+    let mut pos = digits.len();
+    let mut remaining = value;
+    loop {
+        pos -= 1;
+        digits[pos] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    let text = str::from_utf8(&digits[pos..]).map_err(|_| VfsError::Utf8)?;
+    try_string_from(text)
 }
 
 pub fn self_test() {
