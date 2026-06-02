@@ -95,12 +95,22 @@ impl AddressSpace {
         Ok(())
     }
 
+    fn reserve_user_mapping_entries(&mut self, additional: usize) -> Result<(), PagingError> {
+        self.user_mappings
+            .try_reserve_exact(additional)
+            .map_err(|_| PagingError::OutOfFrames)?;
+        self.user_protections
+            .try_reserve_exact(additional)
+            .map_err(|_| PagingError::OutOfFrames)
+    }
+
     pub unsafe fn map_owned_user_page(
         &mut self,
         virt: usize,
         frame: Frame,
         protection: UserProtection,
     ) -> Result<(), PagingError> {
+        self.reserve_user_mapping_entries(1)?;
         unsafe { self.map_user_page(virt, frame.start, protection.page_flags())? };
         self.user_mappings.push((virt, frame));
         self.user_protections.push((virt, protection));
@@ -116,6 +126,7 @@ impl AddressSpace {
         virt: usize,
         protection: UserProtection,
     ) -> Result<(), PagingError> {
+        self.reserve_user_mapping_entries(1)?;
         let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
         unsafe {
             ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
@@ -210,17 +221,9 @@ impl AddressSpace {
 
     pub fn clone_full_copy(&self) -> Result<Self, PagingError> {
         let mut clone = Self::new_kernel_clone()?;
-        if clone
-            .user_mappings
-            .try_reserve_exact(self.user_mappings.len())
-            .is_err()
-            || clone
-                .user_protections
-                .try_reserve_exact(self.user_protections.len())
-                .is_err()
-        {
+        if let Err(err) = clone.reserve_user_mapping_entries(self.user_mappings.len()) {
             clone.destroy();
-            return Err(PagingError::OutOfFrames);
+            return Err(err);
         }
         for &(virt, frame) in &self.user_mappings {
             let protection = match self.protection_for_page(virt) {
@@ -277,6 +280,11 @@ impl AddressSpace {
         let len = paging::checked_align_up(len, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         let base = self.reserve_mmap_addr(hint, len)?;
         let mut mapped = Vec::new();
+        let page_count = len / FRAME_SIZE;
+        mapped
+            .try_reserve_exact(page_count)
+            .map_err(|_| PagingError::OutOfFrames)?;
+        self.reserve_user_mapping_entries(page_count)?;
         let end = base.checked_add(len).ok_or(PagingError::NotMapped)?;
         for page in (base..end).step_by(FRAME_SIZE) {
             if let Err(err) = self.map_zero_page_with_protection(page, protection) {
@@ -308,8 +316,13 @@ impl AddressSpace {
         if addr < USER_MMAP_START || end > USER_MMAP_END || addr >= end {
             return Err(PagingError::NotMapped);
         }
-        self.unmap_user_range(addr, len)?;
         let mut mapped = Vec::new();
+        let page_count = len / FRAME_SIZE;
+        mapped
+            .try_reserve_exact(page_count)
+            .map_err(|_| PagingError::OutOfFrames)?;
+        self.reserve_user_mapping_entries(page_count)?;
+        self.unmap_user_range(addr, len)?;
         for page in (addr..end).step_by(FRAME_SIZE) {
             if let Err(err) = self.map_zero_page_with_protection(page, protection) {
                 for mapped_page in mapped {
@@ -427,7 +440,19 @@ impl AddressSpace {
         }
 
         let mut page = old_aligned;
+        let mut pages_to_map = 0usize;
+        while page < aligned {
+            if !self.is_user_mapped(page) {
+                pages_to_map += 1;
+            }
+            page += FRAME_SIZE;
+        }
         let mut mapped = Vec::new();
+        mapped
+            .try_reserve_exact(pages_to_map)
+            .map_err(|_| PagingError::OutOfFrames)?;
+        self.reserve_user_mapping_entries(pages_to_map)?;
+        page = old_aligned;
         while page < aligned {
             if !self.is_user_mapped(page) {
                 if let Err(err) = self.map_zero_page(page) {

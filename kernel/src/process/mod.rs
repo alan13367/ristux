@@ -2434,6 +2434,9 @@ fn map_elf_segment(
         UserProtection::ReadOnly
     };
     let mut mapped = Vec::new();
+    mapped
+        .try_reserve_exact((map_end - map_start) / FRAME_SIZE)
+        .map_err(|_| ExecError::OutOfMemory)?;
 
     for page in (map_start..map_end).step_by(FRAME_SIZE) {
         if address_space.is_user_mapped(page) {
