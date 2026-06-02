@@ -25,6 +25,7 @@ pub const MAX_FDS: usize = 256;
 pub const MAX_USER_ARGS: usize = 64;
 pub const MAX_USER_ENVS: usize = 64;
 pub const FD_CLOEXEC: u32 = 1;
+const MAX_WAKE_PIDS: usize = MAX_FDS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
@@ -63,6 +64,38 @@ struct SharedMapping {
     file_offset: usize,
     vfs_fd: usize,
     writable: bool,
+}
+
+struct WakeList {
+    pids: [Pid; MAX_WAKE_PIDS],
+    len: usize,
+    overflow: bool,
+}
+
+impl WakeList {
+    fn new() -> Self {
+        Self {
+            pids: [0; MAX_WAKE_PIDS],
+            len: 0,
+            overflow: false,
+        }
+    }
+
+    fn push_unique(&mut self, pid: Pid) {
+        if self.pids[..self.len].contains(&pid) {
+            return;
+        }
+        if self.len == self.pids.len() {
+            self.overflow = true;
+            return;
+        }
+        self.pids[self.len] = pid;
+        self.len += 1;
+    }
+
+    fn as_slice(&self) -> &[Pid] {
+        &self.pids[..self.len]
+    }
 }
 
 pub struct Process {
@@ -974,17 +1007,17 @@ impl ProcessTable {
         true
     }
 
-    fn exit(&mut self, pid: Pid, status: i32) -> Vec<Pid> {
+    fn exit(&mut self, pid: Pid, status: i32) -> WakeList {
         self.exit_with_reason(pid, ExitReason::Exited(status))
     }
 
-    fn exit_signaled(&mut self, pid: Pid, signal: u8) -> Vec<Pid> {
+    fn exit_signaled(&mut self, pid: Pid, signal: u8) -> WakeList {
         self.exit_with_reason(pid, ExitReason::Signaled(signal))
     }
 
-    fn exit_with_reason(&mut self, pid: Pid, reason: ExitReason) -> Vec<Pid> {
+    fn exit_with_reason(&mut self, pid: Pid, reason: ExitReason) -> WakeList {
         let was_current = current_pid() == Some(pid);
-        let mut wake = Vec::new();
+        let mut wake = WakeList::new();
         let parent_pid = self.get(pid).and_then(|p| p.parent);
         let waiters = {
             let process = match self.get_mut(pid) {
@@ -1018,8 +1051,8 @@ impl ProcessTable {
         wake
     }
 
-    fn wake_waiters_for(&mut self, pid: Pid) -> Vec<Pid> {
-        let mut wake = Vec::new();
+    fn wake_waiters_for(&mut self, pid: Pid) -> WakeList {
+        let mut wake = WakeList::new();
         let waiters = self
             .get_mut(pid)
             .map(|process| core::mem::take(&mut process.waiters))
@@ -1033,7 +1066,7 @@ impl ProcessTable {
         wake
     }
 
-    fn reparent_children_to_init(&mut self, old_parent: Pid, wake: &mut Vec<Pid>) {
+    fn reparent_children_to_init(&mut self, old_parent: Pid, wake: &mut WakeList) {
         if old_parent == INIT_PID {
             return;
         }
@@ -1066,7 +1099,7 @@ impl ProcessTable {
         }
     }
 
-    fn wake_waiter_for_child(&mut self, waiter: Pid, child: Pid, wake: &mut Vec<Pid>) {
+    fn wake_waiter_for_child(&mut self, waiter: Pid, child: Pid, wake: &mut WakeList) {
         let Some(process) = self.get_mut(waiter) else {
             return;
         };
@@ -1079,15 +1112,13 @@ impl ProcessTable {
             return;
         }
         process.state = ProcessState::Ready;
-        if !wake.contains(&waiter) {
-            wake.push(waiter);
-        }
+        wake.push_unique(waiter);
     }
 
-    fn stop(&mut self, pid: Pid, signal: u8) -> Option<Vec<Pid>> {
+    fn stop(&mut self, pid: Pid, signal: u8) -> Option<WakeList> {
         let process = self.get_mut(pid)?;
         if matches!(process.state, ProcessState::Zombie(_)) {
-            return Some(Vec::new());
+            return Some(WakeList::new());
         }
         process.state = ProcessState::Stopped(signal);
         process.exit_status = None;
@@ -1135,15 +1166,15 @@ impl ProcessTable {
         }
     }
 
-    fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<Vec<Pid>> {
+    fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<WakeList> {
         let process = self.get(pid)?;
         if is_ignored_signal(process, status) {
-            return Some(Vec::new());
+            return Some(WakeList::new());
         }
         if should_queue_signal(process, status, current) {
             let process = self.get_mut(pid)?;
             queue_signal(process, status);
-            Some(Vec::new())
+            Some(WakeList::new())
         } else {
             if status == crate::signal::Signal::Tstp.default_status() {
                 return self.stop(pid, crate::signal::Signal::Tstp.number());
@@ -1569,17 +1600,13 @@ pub fn install_pipe_fds_with_flags(
 pub fn exit(pid: Pid, status: i32) {
     let wake = with_table(|table| table.exit(pid, status));
     wake_io_waiters();
-    for pid in wake {
-        scheduler::wake_blocked(pid);
-    }
+    wake_processes(wake);
 }
 
 pub fn exit_signaled(pid: Pid, signal: u8) {
     let wake = with_table(|table| table.exit_signaled(pid, signal));
     wake_io_waiters();
-    for pid in wake {
-        scheduler::wake_blocked(pid);
-    }
+    wake_processes(wake);
 }
 
 pub fn wait(parent: Pid, child: Pid) -> Option<i32> {
@@ -1590,9 +1617,7 @@ pub fn signal(pid: Pid, status: i32) -> bool {
     let current = current_pid();
     let wake = with_table(|table| table.signal(pid, status, current));
     if let Some(wake) = wake {
-        for pid in wake {
-            scheduler::wake_blocked(pid);
-        }
+        wake_processes(wake);
         true
     } else {
         false
@@ -1602,9 +1627,7 @@ pub fn signal(pid: Pid, status: i32) -> bool {
 pub fn stop_current_signal(pid: Pid, signal: u8) -> bool {
     let wake = with_table(|table| table.stop(pid, signal));
     if let Some(wake) = wake {
-        for pid in wake {
-            scheduler::wake_blocked(pid);
-        }
+        wake_processes(wake);
         true
     } else {
         false
@@ -1617,6 +1640,34 @@ pub fn continue_process(pid: Pid) -> bool {
         scheduler::wake_blocked(pid);
     }
     continued
+}
+
+fn wake_processes(wake: WakeList) {
+    for pid in wake.as_slice() {
+        scheduler::wake_blocked(*pid);
+    }
+    if wake.overflow {
+        wake_all_runnable_processes();
+    }
+}
+
+fn wake_all_runnable_processes() {
+    let mut cursor = 0;
+    while let Some(pid) = next_runnable_pid_after(cursor) {
+        cursor = pid;
+        scheduler::wake_blocked(pid);
+    }
+}
+
+fn next_runnable_pid_after(after: Pid) -> Option<Pid> {
+    with_table(|table| {
+        table
+            .processes
+            .iter()
+            .filter(|process| process.pid > after && matches!(process.state, ProcessState::Ready))
+            .map(|process| process.pid)
+            .min()
+    })
 }
 
 pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
