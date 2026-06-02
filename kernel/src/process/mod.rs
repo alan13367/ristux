@@ -921,9 +921,9 @@ impl ProcessTable {
     }
 
     fn fork(&mut self, parent: Pid) -> Option<Pid> {
+        self.processes.try_reserve_exact(1).ok()?;
         let parent_proc = self.get(parent)?.clone_process()?;
         let pid = self.next_pid;
-        self.next_pid += 1;
         let mut child = parent_proc;
         child.pid = pid;
         child.parent = Some(parent);
@@ -934,6 +934,7 @@ impl ProcessTable {
         child.pending_signals = 0;
         child.pending_signal_status = None;
         self.processes.push(child);
+        self.next_pid += 1;
         crate::sched::on_fork(pid);
         Some(pid)
     }
