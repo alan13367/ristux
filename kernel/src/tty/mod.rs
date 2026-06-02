@@ -53,6 +53,12 @@ enum TtyEcho {
     Byte(u8),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KeyInput {
+    Byte(u8),
+    Bytes(&'static [u8]),
+}
+
 #[derive(Clone, Copy)]
 struct TtyWaiter {
     pid: Pid,
@@ -375,10 +381,21 @@ pub fn init() {
 }
 
 pub fn input_scancode(scancode: u8) {
-    let Some(byte) = translate_set1(scancode) else {
+    let Some(input) = translate_set1(scancode) else {
         return;
     };
 
+    match input {
+        KeyInput::Byte(byte) => input_byte(byte),
+        KeyInput::Bytes(bytes) => {
+            for &byte in bytes {
+                input_byte(byte);
+            }
+        }
+    }
+}
+
+fn input_byte(byte: u8) {
     let (waiters, signal_target, echo) = {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
@@ -386,7 +403,7 @@ pub fn input_scancode(scancode: u8) {
         if let Some(signal) = tty.input(byte) {
             (Vec::new(), Some((tty.foreground_pgrp(), signal)), None)
         } else {
-            if byte == b'\n' {
+            if byte == b'\n' && tty.canonical_enabled() {
                 let line = tty.pending_line().unwrap_or(&[]);
                 let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
                 match str::from_utf8(trimmed) {
@@ -582,12 +599,12 @@ fn keyboard_layout_name(layout: u8) -> &'static str {
     }
 }
 
-fn translate_set1(scancode: u8) -> Option<u8> {
+fn translate_set1(scancode: u8) -> Option<KeyInput> {
     if scancode == 0xe0 {
         EXTENDED_SCANCODE.store(true, Ordering::Relaxed);
         return None;
     }
-    let _extended = EXTENDED_SCANCODE.swap(false, Ordering::Relaxed);
+    let extended = EXTENDED_SCANCODE.swap(false, Ordering::Relaxed);
     match scancode {
         0x2a => {
             LEFT_SHIFT.store(true, Ordering::Relaxed);
@@ -628,6 +645,19 @@ fn translate_set1(scancode: u8) -> Option<u8> {
         return None;
     }
 
+    if extended {
+        return match scancode {
+            0x47 => Some(KeyInput::Bytes(b"\x1b[H")),
+            0x48 => Some(KeyInput::Bytes(b"\x1b[A")),
+            0x4b => Some(KeyInput::Bytes(b"\x1b[D")),
+            0x4d => Some(KeyInput::Bytes(b"\x1b[C")),
+            0x4f => Some(KeyInput::Bytes(b"\x1b[F")),
+            0x50 => Some(KeyInput::Bytes(b"\x1b[B")),
+            0x53 => Some(KeyInput::Bytes(b"\x1b[3~")),
+            _ => None,
+        };
+    }
+
     let shifted = LEFT_SHIFT.load(Ordering::Relaxed) || RIGHT_SHIFT.load(Ordering::Relaxed);
     let alt = ALT.load(Ordering::Relaxed);
     let byte = match KEYBOARD_LAYOUT.load(Ordering::Relaxed) {
@@ -635,9 +665,16 @@ fn translate_set1(scancode: u8) -> Option<u8> {
         _ => translate_us(scancode, shifted),
     }?;
     if CTRL.load(Ordering::Relaxed) && byte.is_ascii_alphabetic() {
-        return Some(byte.to_ascii_lowercase() & 0x1f);
+        return Some(KeyInput::Byte(byte.to_ascii_lowercase() & 0x1f));
     }
-    Some(byte)
+    Some(KeyInput::Byte(byte))
+}
+
+fn translated_byte(scancode: u8) -> Option<u8> {
+    match translate_set1(scancode)? {
+        KeyInput::Byte(byte) => Some(byte),
+        KeyInput::Bytes(_) => None,
+    }
 }
 
 fn translate_us(scancode: u8, shifted: bool) -> Option<u8> {
@@ -796,44 +833,48 @@ fn self_test() {
         panic!("tty ctrl-c self-test failed");
     }
     let layout = KEYBOARD_LAYOUT.load(Ordering::Relaxed);
-    if translate_set1(0x01) != Some(0x1b)
-        || translate_set1(0x1e) != Some(b'a')
-        || translate_set1(0x9e).is_some()
+    if translated_byte(0x01) != Some(0x1b)
+        || translated_byte(0x1e) != Some(b'a')
+        || translated_byte(0x9e).is_some()
     {
         panic!("tty scancode translation self-test failed");
     }
     translate_set1(0x2a);
     let shifted_punctuation = if layout == KEYBOARD_LAYOUT_SPANISH_MAC {
-        translate_set1(0x34) == Some(b':')
+        translated_byte(0x34) == Some(b':')
     } else {
-        translate_set1(0x2b) == Some(b'|')
+        translated_byte(0x2b) == Some(b'|')
     };
     if !shifted_punctuation {
         panic!("tty shifted punctuation self-test failed");
     }
     translate_set1(0xaa);
     if layout == KEYBOARD_LAYOUT_SPANISH_MAC {
-        if translate_set1(0x56) != Some(b'<') {
+        if translated_byte(0x56) != Some(b'<') {
             panic!("tty spanish angle bracket self-test failed");
         }
         translate_set1(0x2a);
-        if translate_set1(0x56) != Some(b'>') {
+        if translated_byte(0x56) != Some(b'>') {
             panic!("tty spanish shifted angle bracket self-test failed");
         }
         translate_set1(0xaa);
         translate_set1(0x38);
-        let mac_symbols = translate_set1(0x1a) == Some(b'[')
-            && translate_set1(0x1b) == Some(b']')
-            && translate_set1(0x28) == Some(b'{')
-            && translate_set1(0x2b) == Some(b'}');
-        let pc_symbols = translate_set1(0x09) == Some(b'[')
-            && translate_set1(0x0a) == Some(b']')
-            && translate_set1(0x08) == Some(b'{')
-            && translate_set1(0x0b) == Some(b'}');
+        let mac_symbols = translated_byte(0x1a) == Some(b'[')
+            && translated_byte(0x1b) == Some(b']')
+            && translated_byte(0x28) == Some(b'{')
+            && translated_byte(0x2b) == Some(b'}');
+        let pc_symbols = translated_byte(0x09) == Some(b'[')
+            && translated_byte(0x0a) == Some(b']')
+            && translated_byte(0x08) == Some(b'{')
+            && translated_byte(0x0b) == Some(b'}');
         if !mac_symbols || !pc_symbols {
             panic!("tty spanish bracket self-test failed");
         }
         translate_set1(0xb8);
+    }
+    translate_set1(0xe0);
+    if translate_set1(0x4b) != Some(KeyInput::Bytes(b"\x1b[D")) {
+        panic!("tty left arrow translation self-test failed");
     }
     tty.input(0x04);
     if tty.read_available() != Some(Vec::new()) {

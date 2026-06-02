@@ -29,6 +29,7 @@ pub enum DeviceKind {
     Random,
     URandom,
     Console,
+    Serial,
     Keyboard,
     Tty,
     Ptmx,
@@ -536,6 +537,7 @@ impl Vfs {
         vfs.add_device("/dev/random", DeviceKind::Random);
         vfs.add_device("/dev/urandom", DeviceKind::URandom);
         vfs.add_device("/dev/console", DeviceKind::Console);
+        vfs.add_device("/dev/serial", DeviceKind::Serial);
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
         vfs.add_device("/dev/tty", DeviceKind::Tty);
         vfs.add_device("/dev/ptmx", DeviceKind::Ptmx);
@@ -1461,7 +1463,7 @@ impl Vfs {
                         NodeKind::Device(DeviceKind::Ptmx | DeviceKind::PtySlave(_)) => {
                             Err(VfsError::BadFd)
                         }
-                        NodeKind::Device(DeviceKind::Console) => Ok(0),
+                        NodeKind::Device(DeviceKind::Console | DeviceKind::Serial) => Ok(0),
                         NodeKind::Device(DeviceKind::Framebuffer) => Ok(0),
                         NodeKind::Directory => Err(VfsError::NotFile),
                         NodeKind::Symlink => Err(VfsError::NotFile),
@@ -1575,6 +1577,11 @@ impl Vfs {
                         NodeKind::Device(DeviceKind::Console) => {
                             let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
                             crate::log::write_str(text);
+                            Ok(input.len())
+                        }
+                        NodeKind::Device(DeviceKind::Serial) => {
+                            let text = str::from_utf8(input).map_err(|_| VfsError::Utf8)?;
+                            crate::log::serial_print(format_args!("{}", text));
                             Ok(input.len())
                         }
                         NodeKind::Device(DeviceKind::Framebuffer) => {
@@ -1981,7 +1988,7 @@ impl Vfs {
                         write: rights.write,
                         ..PollReady::default()
                     },
-                    NodeKind::Device(DeviceKind::Console) => PollReady {
+                    NodeKind::Device(DeviceKind::Console | DeviceKind::Serial) => PollReady {
                         write: rights.write,
                         ..PollReady::default()
                     },

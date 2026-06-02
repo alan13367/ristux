@@ -26,6 +26,62 @@ case "$SCENARIO" in
     COMMANDS=("true")
     EXPECTS=("Kernel self-test harness passed" "TTY canonical line ready: true")
     ;;
+  autocomplete)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "__text ec"
+      "__sendkey tab"
+      "__text autocomplete-command-ok"
+      "__sendkey ret"
+      "echo auto-data > /tmp/auto_file"
+      "__text cat /tmp/auto_f"
+      "__sendkey tab"
+      "__sendkey ret"
+      "__text cat /et"
+      "__sendkey tab"
+      "__text os-release"
+      "__sendkey ret"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: echo autocomplete-command-ok"
+      "^autocomplete-command-ok$"
+      "TTY canonical line ready: echo auto-data > /tmp/auto_file"
+      "TTY canonical line ready: cat /tmp/auto_file"
+      "^auto-data$"
+      "TTY canonical line ready: cat /etc/os-release"
+      "^NAME=ristux$"
+    )
+    ;;
+  line-edit)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-0.5}"
+    COMMANDS=(
+      "__text echo ab"
+      "__sendkey left"
+      "__sendkey right"
+      "__text c"
+      "__sendkey ret"
+      "__text echo hllo"
+      "__sendkey left"
+      "__sendkey left"
+      "__sendkey left"
+      "__text e"
+      "__sendkey ret"
+      "__sendkey up"
+      "__sendkey ret"
+      "__sendkey up"
+      "__sendkey down"
+      "__text echo down-ok"
+      "__sendkey ret"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: echo abc"
+      "^abc$"
+      "TTY canonical line ready: echo hello"
+      "^hello$"
+      "TTY canonical line ready: echo down-ok"
+      "^down-ok$"
+    )
+    ;;
   dns)
     COMMANDS=("cc_dns")
     EXPECTS=(
@@ -2659,7 +2715,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-c, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-c, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
     exit 2
     ;;
 esac
@@ -2764,7 +2820,7 @@ check_log() {
 }
 
 if [[ "$REBUILD" != "0" || ! -f "$ISO_IMAGE" || ! -f "$DISK_IMAGE" ]]; then
-  make iso
+  make iso ISO_IMAGE="$ISO_IMAGE" DISK_IMAGE="$DISK_IMAGE"
 fi
 
 rm -f "$SERIAL_LOG"

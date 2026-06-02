@@ -15,9 +15,43 @@ const FD_STDIN: i32 = 0;
 const FD_STDOUT: i32 = 1;
 const FD_STDERR: i32 = 2;
 const TIOCSPGRP: usize = 0x5410;
+const TCGETS: usize = 0x5401;
+const TCSETS: usize = 0x5402;
+const TERMIOS_SIZE: usize = 60;
+const TERMIOS_LFLAG: usize = 12;
+const TERMIOS_CC: usize = 17;
+const VTIME: usize = 5;
+const VMIN: usize = 6;
+const ISIG: u32 = 0x0001;
+const ICANON: u32 = 0x0002;
+const ECHO: u32 = 0x0008;
+const IEXTEN: u32 = 0x8000;
 const WUNTRACED: i32 = 2;
 const STOPPED_STATUS: i32 = 0x7f;
 const SIGCONT: u8 = 18;
+const S_IFMT: u32 = 0o170000;
+const S_IFDIR: u32 = 0o040000;
+const SERIAL_LOG_PATH: &[u8] = b"/dev/serial";
+const HISTORY_LIMIT: usize = 64;
+
+const BUILTIN_NAMES: [&[u8]; 16] = [
+    b"exit",
+    b"cd",
+    b".",
+    b"source",
+    b"return",
+    b"unset",
+    b"export",
+    b"read",
+    b"shift",
+    b"set",
+    b"jobs",
+    b"fg",
+    b"bg",
+    b"command",
+    b":",
+    b"type",
+];
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum JobState {
@@ -1528,6 +1562,686 @@ fn external_command_exists(name: &[u8], env: &ShellEnv) -> bool {
     external_command_path(name, env).is_some()
 }
 
+#[derive(Clone)]
+struct CompletionCandidate {
+    replacement: Vec<u8>,
+    display: Vec<u8>,
+    is_dir: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CompletionKind {
+    Command,
+    Path,
+}
+
+struct CompletionContext<'a> {
+    token_start: usize,
+    token: &'a [u8],
+    kind: CompletionKind,
+}
+
+struct PromptTerminal {
+    original: [u8; TERMIOS_SIZE],
+}
+
+enum PromptKey {
+    Byte(u8),
+    Backspace,
+    Delete,
+    Down,
+    End,
+    Enter,
+    Home,
+    Left,
+    Right,
+    Tab,
+    Up,
+}
+
+impl PromptTerminal {
+    fn enter() -> Option<Self> {
+        let mut original = [0u8; TERMIOS_SIZE];
+        if sys::ioctl(FD_STDIN, TCGETS, original.as_mut_ptr() as usize) < 0 {
+            return None;
+        }
+
+        let mut raw = original;
+        let lflag = read_u32(&raw, TERMIOS_LFLAG) & !(ISIG | ICANON | ECHO | IEXTEN);
+        set_u32(&mut raw, TERMIOS_LFLAG, lflag);
+        raw[TERMIOS_CC + VMIN] = 0;
+        raw[TERMIOS_CC + VTIME] = 1;
+        if sys::ioctl(FD_STDIN, TCSETS, raw.as_ptr() as usize) < 0 {
+            return None;
+        }
+        Some(Self { original })
+    }
+}
+
+impl Drop for PromptTerminal {
+    fn drop(&mut self) {
+        let _ = sys::ioctl(FD_STDIN, TCSETS, self.original.as_ptr() as usize);
+    }
+}
+
+fn read_u32(buf: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
+}
+
+fn set_u32(buf: &mut [u8], offset: usize, value: u32) {
+    buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
+    while !bytes.is_empty() {
+        let n = sys::write(fd, bytes);
+        if n <= 0 {
+            return false;
+        }
+        bytes = &bytes[n as usize..];
+    }
+    true
+}
+
+fn log_interactive_line(line: &[u8]) {
+    if line.is_empty() {
+        return;
+    }
+    let path = cstr(SERIAL_LOG_PATH);
+    let fd = sys::open(path.as_ptr(), O_WRONLY, 0);
+    if fd < 0 {
+        return;
+    }
+    let _ = write_all(fd as i32, b"TTY canonical line ready: ");
+    let _ = write_all(fd as i32, line);
+    let _ = write_all(fd as i32, b"\n");
+    let _ = sys::close(fd as i32);
+}
+
+fn update_completion_state(token: &[u8], expect_command: &mut bool, expect_redir_path: &mut bool) {
+    if token.is_empty() {
+        return;
+    }
+    if *expect_redir_path {
+        *expect_redir_path = false;
+        return;
+    }
+    if *expect_command && parse_assignment(token).is_some() {
+        return;
+    }
+    *expect_command = false;
+}
+
+fn completion_context(line: &[u8]) -> CompletionContext<'_> {
+    let mut quote = 0u8;
+    let mut escaped = false;
+    let mut in_token = false;
+    let mut token_start = line.len();
+    let mut expect_command = true;
+    let mut expect_redir_path = false;
+    let mut index = 0usize;
+
+    while index < line.len() {
+        let byte = line[index];
+        if escaped {
+            escaped = false;
+            if !in_token {
+                in_token = true;
+                token_start = index;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\\' && quote != b'\'' {
+            escaped = true;
+            if !in_token {
+                in_token = true;
+                token_start = index;
+            }
+            index += 1;
+            continue;
+        }
+        if quote != 0 {
+            if byte == quote {
+                quote = 0;
+            }
+            if !in_token {
+                in_token = true;
+                token_start = index;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' => {
+                quote = byte;
+                if !in_token {
+                    in_token = true;
+                    token_start = index;
+                }
+            }
+            b' ' | b'\t' => {
+                if in_token {
+                    update_completion_state(
+                        &line[token_start..index],
+                        &mut expect_command,
+                        &mut expect_redir_path,
+                    );
+                    in_token = false;
+                }
+                token_start = index + 1;
+            }
+            b'<' | b'>' => {
+                if in_token {
+                    update_completion_state(
+                        &line[token_start..index],
+                        &mut expect_command,
+                        &mut expect_redir_path,
+                    );
+                    in_token = false;
+                }
+                expect_redir_path = true;
+                token_start = index + 1;
+                if byte == b'>' && line.get(index + 1) == Some(&b'>') {
+                    index += 1;
+                    token_start = index + 1;
+                }
+            }
+            b';' | b'|' | b'&' => {
+                if in_token {
+                    update_completion_state(
+                        &line[token_start..index],
+                        &mut expect_command,
+                        &mut expect_redir_path,
+                    );
+                    in_token = false;
+                }
+                expect_command = true;
+                expect_redir_path = false;
+                token_start = index + 1;
+                if (byte == b'|' || byte == b'&') && line.get(index + 1) == Some(&byte) {
+                    index += 1;
+                    token_start = index + 1;
+                }
+            }
+            _ => {
+                if !in_token {
+                    in_token = true;
+                    token_start = index;
+                }
+            }
+        }
+        index += 1;
+    }
+
+    let token = if in_token {
+        &line[token_start..]
+    } else {
+        token_start = line.len();
+        &line[line.len()..]
+    };
+    let kind = if expect_redir_path || token.contains(&b'/') || !expect_command {
+        CompletionKind::Path
+    } else {
+        CompletionKind::Command
+    };
+    CompletionContext {
+        token_start,
+        token,
+        kind,
+    }
+}
+
+fn stat_mode(path: &[u8]) -> Option<u32> {
+    let path_c = cstr(path);
+    let mut stat_buf = [0u8; 144];
+    let rc = unsafe {
+        sys::syscall2(
+            sys::NR_STAT,
+            path_c.as_ptr() as usize,
+            stat_buf.as_mut_ptr() as usize,
+        )
+    };
+    if rc < 0 {
+        None
+    } else {
+        Some(u32::from_le_bytes([
+            stat_buf[24],
+            stat_buf[25],
+            stat_buf[26],
+            stat_buf[27],
+        ]))
+    }
+}
+
+fn path_is_dir(path: &[u8]) -> bool {
+    stat_mode(path).is_some_and(|mode| mode & S_IFMT == S_IFDIR)
+}
+
+fn join_dir_entry(dir: &[u8], name: &[u8]) -> Vec<u8> {
+    if dir == b"/" {
+        let mut out = Vec::with_capacity(name.len() + 1);
+        out.push(b'/');
+        out.extend_from_slice(name);
+        return out;
+    }
+    let mut out = Vec::with_capacity(dir.len() + name.len() + 1);
+    out.extend_from_slice(dir);
+    if !out.ends_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(name);
+    out
+}
+
+fn read_dir_names(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let path_c = cstr(path);
+    let fd = sys::open(path_c.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let mut storage = [0u8; 1024];
+    loop {
+        let nread = sys::getdents64(fd as i32, &mut storage);
+        if nread < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if nread == 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        while offset + 19 <= nread as usize {
+            let reclen = u16::from_le_bytes([storage[offset + 16], storage[offset + 17]]) as usize;
+            if reclen == 0 || offset + reclen > nread as usize {
+                break;
+            }
+            let name_start = offset + 19;
+            let name_end = storage[name_start..offset + reclen]
+                .iter()
+                .position(|&byte| byte == 0)
+                .map(|pos| name_start + pos)
+                .unwrap_or(offset + reclen);
+            let name = &storage[name_start..name_end];
+            if !name.is_empty() {
+                out.push(name.to_vec());
+            }
+            offset += reclen;
+        }
+    }
+    let _ = sys::close(fd as i32);
+    out.sort();
+    Some(out)
+}
+
+fn push_completion_candidate(
+    out: &mut Vec<CompletionCandidate>,
+    replacement: Vec<u8>,
+    is_dir: bool,
+) {
+    if out
+        .iter()
+        .any(|candidate| candidate.replacement.as_slice() == replacement.as_slice())
+    {
+        return;
+    }
+    let mut display = replacement.clone();
+    if is_dir {
+        display.push(b'/');
+    }
+    out.push(CompletionCandidate {
+        replacement,
+        display,
+        is_dir,
+    });
+}
+
+fn command_completion_candidates(prefix: &[u8], env: &ShellEnv) -> Vec<CompletionCandidate> {
+    let mut out = Vec::new();
+    for name in BUILTIN_NAMES {
+        if name.starts_with(prefix) {
+            push_completion_candidate(&mut out, name.to_vec(), false);
+        }
+    }
+    for function in &env.functions {
+        if function.name.starts_with(prefix) {
+            push_completion_candidate(&mut out, function.name.clone(), false);
+        }
+    }
+    let path_env = env.get(b"PATH").unwrap_or(b"/bin");
+    for dir in path_env.split(|byte| *byte == b':') {
+        let dir_path: &[u8] = if dir.is_empty() { b"." } else { dir };
+        let Some(names) = read_dir_names(dir_path) else {
+            continue;
+        };
+        for name in names {
+            if !name.starts_with(prefix) {
+                continue;
+            }
+            let path = join_dir_entry(dir_path, &name);
+            if !path_is_dir(&path) {
+                push_completion_candidate(&mut out, name, false);
+            }
+        }
+    }
+    out.sort_by(|left, right| left.display.cmp(&right.display));
+    out
+}
+
+fn split_completion_path(path: &[u8]) -> (Vec<u8>, Vec<u8>, &[u8]) {
+    if let Some(pos) = path.iter().rposition(|&byte| byte == b'/') {
+        let dir = if pos == 0 {
+            b"/".to_vec()
+        } else {
+            path[..pos].to_vec()
+        };
+        let prefix = path[..=pos].to_vec();
+        (dir, prefix, &path[pos + 1..])
+    } else {
+        (b".".to_vec(), Vec::new(), path)
+    }
+}
+
+fn path_completion_candidates(token: &[u8], env: &ShellEnv) -> Vec<CompletionCandidate> {
+    let expanded = expand_tilde(token.to_vec(), env);
+    let (dir, replacement_prefix, name_prefix) = split_completion_path(&expanded);
+    let Some(names) = read_dir_names(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for name in names {
+        if name.starts_with(b".") && !name_prefix.starts_with(b".") {
+            continue;
+        }
+        if !name.starts_with(name_prefix) {
+            continue;
+        }
+        let path = join_dir_entry(&dir, &name);
+        let mut replacement = replacement_prefix.clone();
+        replacement.extend_from_slice(&name);
+        push_completion_candidate(&mut out, replacement, path_is_dir(&path));
+    }
+    out.sort_by(|left, right| left.display.cmp(&right.display));
+    out
+}
+
+fn completion_candidates(ctx: &CompletionContext<'_>, env: &ShellEnv) -> Vec<CompletionCandidate> {
+    if ctx.token.starts_with(b"$") {
+        return Vec::new();
+    }
+    match ctx.kind {
+        CompletionKind::Command => command_completion_candidates(ctx.token, env),
+        CompletionKind::Path => path_completion_candidates(ctx.token, env),
+    }
+}
+
+fn common_replacement(candidates: &[CompletionCandidate]) -> Vec<u8> {
+    let Some(first) = candidates.first() else {
+        return Vec::new();
+    };
+    let mut len = first.replacement.len();
+    for candidate in &candidates[1..] {
+        len = len.min(candidate.replacement.len());
+        let mut index = 0usize;
+        while index < len && first.replacement[index] == candidate.replacement[index] {
+            index += 1;
+        }
+        len = index;
+        if len == 0 {
+            break;
+        }
+    }
+    first.replacement[..len].to_vec()
+}
+
+fn redraw_prompt(prompt: &[u8], line: &[u8], cursor: usize) {
+    let _ = write_all(FD_STDOUT, b"\r");
+    let _ = write_all(FD_STDOUT, prompt);
+    let _ = write_all(FD_STDOUT, line);
+    let _ = write_all(FD_STDOUT, b"\x1b[K");
+    let back = line.len().saturating_sub(cursor);
+    if back > 0 {
+        let seq = alloc::format!("\x1b[{}D", back);
+        let _ = write_all(FD_STDOUT, seq.as_bytes());
+    }
+}
+
+fn replace_current_token(
+    prompt: &[u8],
+    line: &mut Vec<u8>,
+    cursor: &mut usize,
+    token_start: usize,
+    replacement: &[u8],
+) {
+    line.drain(token_start..*cursor);
+    for (offset, byte) in replacement.iter().copied().enumerate() {
+        line.insert(token_start + offset, byte);
+    }
+    *cursor = token_start + replacement.len();
+    redraw_prompt(prompt, line, *cursor);
+}
+
+fn print_completion_candidates(
+    prompt: &[u8],
+    line: &[u8],
+    cursor: usize,
+    candidates: &[CompletionCandidate],
+) {
+    let _ = write_all(FD_STDOUT, b"\n");
+    for (index, candidate) in candidates.iter().enumerate() {
+        if index != 0 {
+            let _ = write_all(FD_STDOUT, b"  ");
+        }
+        let _ = write_all(FD_STDOUT, &candidate.display);
+    }
+    let _ = write_all(FD_STDOUT, b"\n");
+    redraw_prompt(prompt, line, cursor);
+}
+
+fn complete_line(line: &mut Vec<u8>, cursor: &mut usize, prompt: &[u8], env: &ShellEnv) {
+    let ctx = completion_context(&line[..*cursor]);
+    let candidates = completion_candidates(&ctx, env);
+    if candidates.is_empty() {
+        return;
+    }
+    if candidates.len() == 1 {
+        let candidate = &candidates[0];
+        let mut replacement = candidate.replacement.clone();
+        replacement.push(if candidate.is_dir { b'/' } else { b' ' });
+        replace_current_token(prompt, line, cursor, ctx.token_start, &replacement);
+        return;
+    }
+
+    let common = common_replacement(&candidates);
+    if common.len() > ctx.token.len() {
+        replace_current_token(prompt, line, cursor, ctx.token_start, &common);
+    } else {
+        print_completion_candidates(prompt, line, *cursor, &candidates);
+    }
+}
+
+fn read_prompt_byte_once(pending: &mut Vec<u8>) -> Option<Option<u8>> {
+    if !pending.is_empty() {
+        return Some(Some(pending.remove(0)));
+    }
+
+    let mut bytes = [0u8; 16];
+    let n = sys::read(FD_STDIN, &mut bytes);
+    if n < 0 {
+        None
+    } else if n == 0 {
+        Some(None)
+    } else {
+        pending.extend_from_slice(&bytes[1..n as usize]);
+        Some(Some(bytes[0]))
+    }
+}
+
+fn read_prompt_byte_blocking(pending: &mut Vec<u8>) -> Option<u8> {
+    loop {
+        match read_prompt_byte_once(pending)? {
+            Some(byte) => return Some(byte),
+            None => {}
+        }
+    }
+}
+
+fn read_escape_key(pending: &mut Vec<u8>) -> Option<PromptKey> {
+    let Some(second) = read_prompt_byte_once(pending)? else {
+        return None;
+    };
+    if second != b'[' {
+        return None;
+    }
+    let Some(third) = read_prompt_byte_once(pending)? else {
+        return None;
+    };
+    match third {
+        b'A' => Some(PromptKey::Up),
+        b'B' => Some(PromptKey::Down),
+        b'C' => Some(PromptKey::Right),
+        b'D' => Some(PromptKey::Left),
+        b'F' => Some(PromptKey::End),
+        b'H' => Some(PromptKey::Home),
+        b'3' => match read_prompt_byte_once(pending)? {
+            Some(b'~') => Some(PromptKey::Delete),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn read_prompt_key(pending: &mut Vec<u8>) -> Option<PromptKey> {
+    let byte = read_prompt_byte_blocking(pending)?;
+    match byte {
+        b'\n' | b'\r' => Some(PromptKey::Enter),
+        b'\t' => Some(PromptKey::Tab),
+        0x08 | 0x7f => Some(PromptKey::Backspace),
+        0x1b => read_escape_key(pending),
+        byte if byte >= 0x20 || byte == 0x03 || byte == 0x04 => Some(PromptKey::Byte(byte)),
+        _ => None,
+    }
+}
+
+fn mark_history_edit(history_index: &mut usize, history_len: usize) {
+    *history_index = history_len;
+}
+
+fn read_interactive_line(
+    prompt: &[u8],
+    env: &mut ShellEnv,
+    history: &[Vec<u8>],
+) -> Option<(Vec<u8>, bool)> {
+    let Some(_terminal) = PromptTerminal::enter() else {
+        let _ = write_all(FD_STDOUT, prompt);
+        return read_line_buffered(FD_STDIN, &mut env.stdin_pending).map(|line| (line, false));
+    };
+
+    let _ = write_all(FD_STDOUT, prompt);
+    let mut line = Vec::new();
+    let mut cursor = 0usize;
+    let mut history_index = history.len();
+    let mut draft = Vec::new();
+    let mut pending = Vec::new();
+    loop {
+        let Some(key) = read_prompt_key(&mut pending) else {
+            continue;
+        };
+        match key {
+            PromptKey::Enter => {
+                let _ = write_all(FD_STDOUT, b"\n");
+                return Some((line, true));
+            }
+            PromptKey::Tab => {
+                complete_line(&mut line, &mut cursor, prompt, env);
+                mark_history_edit(&mut history_index, history.len());
+            }
+            PromptKey::Backspace => {
+                if cursor > 0 {
+                    cursor -= 1;
+                    line.remove(cursor);
+                    mark_history_edit(&mut history_index, history.len());
+                    redraw_prompt(prompt, &line, cursor);
+                }
+            }
+            PromptKey::Delete => {
+                if cursor < line.len() {
+                    line.remove(cursor);
+                    mark_history_edit(&mut history_index, history.len());
+                    redraw_prompt(prompt, &line, cursor);
+                }
+            }
+            PromptKey::Left => {
+                if cursor > 0 {
+                    cursor -= 1;
+                    let _ = write_all(FD_STDOUT, b"\x1b[D");
+                }
+            }
+            PromptKey::Right => {
+                if cursor < line.len() {
+                    cursor += 1;
+                    let _ = write_all(FD_STDOUT, b"\x1b[C");
+                }
+            }
+            PromptKey::Home => {
+                cursor = 0;
+                redraw_prompt(prompt, &line, cursor);
+            }
+            PromptKey::End => {
+                cursor = line.len();
+                redraw_prompt(prompt, &line, cursor);
+            }
+            PromptKey::Up => {
+                if history.is_empty() || history_index == 0 {
+                    continue;
+                }
+                if history_index == history.len() {
+                    draft = line.clone();
+                }
+                history_index -= 1;
+                line = history[history_index].clone();
+                cursor = line.len();
+                redraw_prompt(prompt, &line, cursor);
+            }
+            PromptKey::Down => {
+                if history_index >= history.len() {
+                    continue;
+                }
+                history_index += 1;
+                if history_index == history.len() {
+                    line = draft.clone();
+                } else {
+                    line = history[history_index].clone();
+                }
+                cursor = line.len();
+                redraw_prompt(prompt, &line, cursor);
+            }
+            PromptKey::Byte(0x03) => {
+                let _ = write_all(FD_STDOUT, b"^C\n");
+                return Some((Vec::new(), true));
+            }
+            PromptKey::Byte(0x04) => {
+                if line.is_empty() {
+                    return None;
+                }
+            }
+            PromptKey::Byte(byte) => {
+                line.insert(cursor, byte);
+                cursor += 1;
+                mark_history_edit(&mut history_index, history.len());
+                redraw_prompt(prompt, &line, cursor);
+            }
+        }
+    }
+}
+
 fn print_command_resolution(name: &[u8], env: &ShellEnv) -> bool {
     if env.function_body(name).is_some() || is_builtin_name(name) {
         let _ = sys::write(FD_STDOUT, name);
@@ -2880,6 +3594,7 @@ fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
     set_tty_foreground(shell_pgrp);
     let mut jobs: Vec<Job> = Vec::new();
     let mut next_job_id = 1usize;
+    let mut history: Vec<Vec<u8>> = Vec::new();
     let mut env = ShellEnv::from_envp(inherited_env);
     let default_arg0 = args.first().copied().unwrap_or(b"sh");
     env.set_positionals(default_arg0, &[]);
@@ -2927,12 +3642,23 @@ fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         return last_status;
     }
     loop {
-        let prompt = env.get(b"PS1").unwrap_or(PS1);
-        let _ = sys::write(FD_STDOUT, prompt);
-        match read_line_buffered(FD_STDIN, &mut env.stdin_pending) {
-            Some(line) => {
+        let prompt = env.get(b"PS1").unwrap_or(PS1).to_vec();
+        match read_interactive_line(&prompt, &mut env, &history) {
+            Some((line, raw_mode)) => {
+                if raw_mode {
+                    log_interactive_line(&line);
+                }
                 if line.is_empty() {
                     continue;
+                }
+                if history
+                    .last()
+                    .is_none_or(|previous| previous.as_slice() != line.as_slice())
+                {
+                    history.push(line.clone());
+                    if history.len() > HISTORY_LIMIT {
+                        history.remove(0);
+                    }
                 }
                 last_status = run_line(&line, &mut jobs, &mut next_job_id, &mut env, last_status);
                 if env.return_status.take().is_some() {
