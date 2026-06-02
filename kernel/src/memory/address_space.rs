@@ -244,9 +244,9 @@ impl AddressSpace {
                     clone_flags &= !paging::WRITABLE_FLAG;
                     clone_flags |= paging::COW_FLAG;
                 }
-                if !super::refcount::try_increment(frame.start) {
+                if let Err(err) = super::refcount::try_increment(frame.start) {
                     clone.destroy();
-                    return Err(PagingError::RefcountOverflow);
+                    return Err(map_refcount_error(err));
                 }
                 if let Err(err) =
                     clone.map_user_page(virt, frame.start, PageFlags::from_raw(clone_flags))
@@ -666,6 +666,14 @@ impl AddressSpace {
             .ok_or(PagingError::NotMapped)?;
         entry.1 = protection;
         Ok(())
+    }
+}
+
+fn map_refcount_error(err: super::refcount::RefcountError) -> PagingError {
+    match err {
+        super::refcount::RefcountError::OutOfMemory
+        | super::refcount::RefcountError::UntrackedFrame => PagingError::RefcountUnavailable,
+        super::refcount::RefcountError::Overflow => PagingError::RefcountOverflow,
     }
 }
 

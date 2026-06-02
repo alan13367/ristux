@@ -2802,9 +2802,9 @@ fn map_elf_segment(
                     let _ = address_space.unmap_user_page(mapped_page);
                 }
                 return match err {
-                    paging::PagingError::OutOfFrames | paging::PagingError::RefcountOverflow => {
-                        Err(ExecError::OutOfMemory)
-                    }
+                    paging::PagingError::OutOfFrames
+                    | paging::PagingError::RefcountOverflow
+                    | paging::PagingError::RefcountUnavailable => Err(ExecError::OutOfMemory),
                     _ => Err(ExecError::InvalidImage),
                 };
             }
@@ -3220,6 +3220,7 @@ fn map_paging_mmap_error(err: paging::PagingError) -> MmapError {
         paging::PagingError::OutOfFrames | paging::PagingError::RefcountOverflow => {
             MmapError::OutOfMemory
         }
+        paging::PagingError::RefcountUnavailable => MmapError::OutOfMemory,
         _ => MmapError::Invalid,
     }
 }

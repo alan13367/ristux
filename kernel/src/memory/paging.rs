@@ -62,6 +62,7 @@ pub enum PagingError {
     NotMapped,
     HugePage,
     RefcountOverflow,
+    RefcountUnavailable,
 }
 
 impl fmt::Display for PagingError {
@@ -72,6 +73,7 @@ impl fmt::Display for PagingError {
             Self::NotMapped => f.write_str("page is not mapped"),
             Self::HugePage => f.write_str("encountered an unsupported huge page"),
             Self::RefcountOverflow => f.write_str("frame reference count overflow"),
+            Self::RefcountUnavailable => f.write_str("frame reference count unavailable"),
         }
     }
 }
