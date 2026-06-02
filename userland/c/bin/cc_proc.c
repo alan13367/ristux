@@ -76,6 +76,28 @@ static int check_exec_vector_limits(void) {
     return 0;
 }
 
+static int check_exec_unterminated_path(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec unterminated fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char path[4096];
+        memset(path, 'x', sizeof(path));
+        char *argv[] = { path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == EFAULT ? 0 : 102);
+    }
+    if (wait_for_zero(child, "cc_proc: exec unterminated path failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec unterminated path ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -125,6 +147,9 @@ int main(void) {
     puts("cc_proc: pipe exec ok");
     puts("cc_proc: wait ok");
     if (check_exec_vector_limits() != 0) {
+        return 1;
+    }
+    if (check_exec_unterminated_path() != 0) {
         return 1;
     }
     puts("cc_proc: done");

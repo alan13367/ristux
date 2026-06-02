@@ -3304,12 +3304,12 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
     while offset < 4096 {
         let slice = process::read_user(addr + offset, 1)?;
         if slice[0] == 0 {
-            break;
+            return String::from_utf8(buf).ok();
         }
         buf.push(slice[0]);
         offset += 1;
     }
-    String::from_utf8(buf).ok()
+    None
 }
 
 fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::string::String, i64> {
