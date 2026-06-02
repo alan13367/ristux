@@ -500,10 +500,12 @@ impl Process {
         }
     }
 
-    fn add_socket_handle(&mut self, handle: usize) {
+    fn add_socket_handle(&mut self, handle: usize) -> Result<(), ()> {
         if !self.socket_handles.contains(&handle) {
+            self.socket_handles.try_reserve_exact(1).map_err(|_| ())?;
             self.socket_handles.push(handle);
         }
+        Ok(())
     }
 
     fn remove_socket_handle(&mut self, handle: usize) -> bool {
@@ -2063,11 +2065,7 @@ pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
 }
 
 pub fn install_socket_handle(handle: usize) -> Result<(), ()> {
-    with_current(|p| {
-        p.add_socket_handle(handle);
-        Ok(())
-    })
-    .unwrap_or(Err(()))
+    with_current(|p| p.add_socket_handle(handle)).unwrap_or(Err(()))
 }
 
 pub fn owns_socket_handle(handle: usize) -> bool {
