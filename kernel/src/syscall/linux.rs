@@ -2232,31 +2232,31 @@ fn linux_setgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
     if size > 8 {
         return Err(EINVAL);
     }
-    let mut groups = Vec::new();
+    let mut groups = [0u32; 8];
     if size > 0 {
         let bytes = process::read_user(list_ptr, size * 4).ok_or(EFAULT)?;
-        for chunk in bytes.chunks_exact(4) {
-            groups.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+            groups[index] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         }
     }
-    process::set_current_groups(&groups)
+    process::set_current_groups(&groups[..size])
         .map(|_| 0)
         .map_err(|_| EACCES)
 }
 
 fn linux_getgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
-    let groups = process::current_groups().ok_or(ESRCH)?;
+    let (groups, group_count) = process::current_groups_snapshot().ok_or(ESRCH)?;
     if size == 0 {
-        return Ok(groups.len() as u64);
+        return Ok(group_count as u64);
     }
-    if size < groups.len() {
+    if size < group_count {
         return Err(EINVAL);
     }
-    let out = process::write_user_buffer(list_ptr, groups.len() * 4).ok_or(EFAULT)?;
-    for (index, group) in groups.iter().copied().enumerate() {
+    let out = process::write_user_buffer(list_ptr, group_count * 4).ok_or(EFAULT)?;
+    for (index, group) in groups[..group_count].iter().copied().enumerate() {
         out[index * 4..index * 4 + 4].copy_from_slice(&group.to_le_bytes());
     }
-    Ok(groups.len() as u64)
+    Ok(group_count as u64)
 }
 
 fn linux_getrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
