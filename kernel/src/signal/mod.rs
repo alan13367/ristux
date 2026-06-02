@@ -87,9 +87,10 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
 }
 
 pub fn send_pgrp(pgrp: process::Pid, signal: Signal) -> bool {
-    let pids = process::pids_in_pgrp(pgrp);
     let mut delivered = false;
-    for pid in pids {
+    let mut cursor = 0;
+    while let Some(pid) = process::next_pid_in_pgrp_after(pgrp, cursor) {
+        cursor = pid;
         delivered |= send(pid, signal);
     }
     delivered

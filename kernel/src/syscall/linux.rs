@@ -3219,54 +3219,81 @@ fn linux_kill(pid: i64, sig: u64) -> Result<u64, i64> {
         let sig = u8::try_from(sig).map_err(|_| EINVAL)?;
         Some(crate::signal::Signal::from_number(sig).ok_or(EINVAL)?)
     };
-    let targets = kill_targets(pid)?;
-    let mut permitted = false;
-    let mut delivered = false;
-    for target in targets {
-        if !process::can_signal_current(target, signal.map(|signal| signal.number()))
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        permitted = true;
-        if let Some(signal) = signal {
-            delivered |= crate::signal::send(target, signal);
+    let mut delivery = KillDelivery::default();
+    if pid < -1 {
+        let pgrp = pid.checked_neg().ok_or(EINVAL)? as process::Pid;
+        deliver_kill_pgrp(pgrp, signal, &mut delivery);
+    } else if pid == -1 {
+        let caller = process::current_pid().ok_or(ESRCH)?;
+        deliver_kill_all(caller, signal, &mut delivery);
+    } else if pid == 0 {
+        let pgrp = process::current_pgrp().ok_or(ESRCH)?;
+        deliver_kill_pgrp(pgrp, signal, &mut delivery);
+    } else {
+        let target = pid as process::Pid;
+        if process::process_exists(target) {
+            deliver_kill_target(target, signal, &mut delivery);
         }
     }
-    if !permitted {
+
+    if !delivery.found {
+        return Err(ESRCH);
+    }
+    if !delivery.permitted {
         return Err(EPERM);
     }
-    if signal.is_some() && !delivered {
+    if signal.is_some() && !delivery.delivered {
         return Err(ESRCH);
     }
     Ok(0)
 }
 
-fn kill_targets(pid: i64) -> Result<Vec<process::Pid>, i64> {
-    let targets = if pid < -1 {
-        let pgrp = pid.checked_neg().ok_or(EINVAL)? as u64;
-        process::pids_in_pgrp(pgrp)
-    } else if pid == -1 {
-        let caller = process::current_pid().ok_or(ESRCH)?;
-        process::list_process_ids()
-            .into_iter()
-            .filter(|candidate| *candidate != caller && *candidate != 1)
-            .collect()
-    } else if pid == 0 {
-        let pgrp = process::current_pgrp().ok_or(ESRCH)?;
-        process::pids_in_pgrp(pgrp)
-    } else {
-        let target = pid as process::Pid;
-        if process::get_process_info(target).is_some() {
-            Vec::from([target])
-        } else {
-            Vec::new()
+#[derive(Default)]
+struct KillDelivery {
+    found: bool,
+    permitted: bool,
+    delivered: bool,
+}
+
+fn deliver_kill_target(
+    target: process::Pid,
+    signal: Option<crate::signal::Signal>,
+    delivery: &mut KillDelivery,
+) {
+    delivery.found = true;
+    if !process::can_signal_current(target, signal.map(|signal| signal.number())).unwrap_or(false) {
+        return;
+    }
+    delivery.permitted = true;
+    if let Some(signal) = signal {
+        delivery.delivered |= crate::signal::send(target, signal);
+    }
+}
+
+fn deliver_kill_pgrp(
+    pgrp: process::Pid,
+    signal: Option<crate::signal::Signal>,
+    delivery: &mut KillDelivery,
+) {
+    let mut cursor = 0;
+    while let Some(target) = process::next_pid_in_pgrp_after(pgrp, cursor) {
+        cursor = target;
+        deliver_kill_target(target, signal, delivery);
+    }
+}
+
+fn deliver_kill_all(
+    caller: process::Pid,
+    signal: Option<crate::signal::Signal>,
+    delivery: &mut KillDelivery,
+) {
+    let mut cursor = 0;
+    while let Some(target) = process::next_process_pid_after(cursor) {
+        cursor = target;
+        if target == caller || target == 1 {
+            continue;
         }
-    };
-    if targets.is_empty() {
-        Err(ESRCH)
-    } else {
-        Ok(targets)
+        deliver_kill_target(target, signal, delivery);
     }
 }
 

@@ -1656,23 +1656,37 @@ pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
     })
 }
 
-pub fn pids_in_pgrp(pgrp: Pid) -> Vec<Pid> {
+pub fn next_pid_in_pgrp_after(pgrp: Pid, after: Pid) -> Option<Pid> {
     with_table(|table| {
         table
             .processes
             .iter()
             .filter(|process| {
-                process.pgrp == pgrp && !matches!(process.state, ProcessState::Zombie(_))
+                process.pid > after
+                    && process.pgrp == pgrp
+                    && !matches!(process.state, ProcessState::Zombie(_))
             })
             .map(|process| process.pid)
-            .collect::<Vec<_>>()
+            .min()
+    })
+}
+
+pub fn next_process_pid_after(after: Pid) -> Option<Pid> {
+    with_table(|table| {
+        table
+            .processes
+            .iter()
+            .filter(|process| process.pid > after)
+            .map(|process| process.pid)
+            .min()
     })
 }
 
 pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
-    let pids = pids_in_pgrp(pgrp);
     let mut delivered = false;
-    for pid in pids {
+    let mut cursor = 0;
+    while let Some(pid) = next_pid_in_pgrp_after(pgrp, cursor) {
+        cursor = pid;
         delivered |= signal(pid, status);
     }
     delivered
@@ -3064,6 +3078,10 @@ pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, 
         let p = table.get(pid)?;
         Some((p.name.clone(), p.state, p.parent, p.exit_status))
     })
+}
+
+pub fn process_exists(pid: Pid) -> bool {
+    with_table(|table| table.get(pid).is_some())
 }
 
 pub fn list_process_ids() -> Vec<Pid> {
