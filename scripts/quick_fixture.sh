@@ -202,6 +202,7 @@ case "$SCENARIO" in
       "^cc_fcntl: nonblock ok$"
       "^cc_fcntl: pipe2 dup3 ok$"
       "^cc_fcntl: cloexec ok$"
+      "^cc_fcntl: fd exhaustion ok$"
       "^cc_fcntl: done$"
       "TTY canonical line ready: cc_futex"
       "^cc_futex: gettid ok$"

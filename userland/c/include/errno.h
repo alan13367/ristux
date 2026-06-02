@@ -19,6 +19,7 @@ extern int errno;
 #define ENODEV 19
 #define ENOTDIR 20
 #define EINVAL 22
+#define EMFILE 24
 #define ENOTTY 25
 #define EROFS 30
 #define EPIPE 32

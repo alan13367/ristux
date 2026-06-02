@@ -5,9 +5,60 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define FD_STRESS_LIMIT 320
+
 static int probe_cloexec(void) {
     errno = 0;
     return fcntl(10, F_GETFD) == -1 && errno == EBADF ? 0 : 1;
+}
+
+static void close_fd_list(int *fds, int count) {
+    for (int i = 0; i < count; i++) {
+        close(fds[i]);
+    }
+}
+
+static int check_fd_exhaustion(void) {
+    int fds[FD_STRESS_LIMIT];
+    int count = 0;
+    while (count < FD_STRESS_LIMIT) {
+        int fd = open("/dev/null", O_RDONLY, 0);
+        if (fd < 0) {
+            break;
+        }
+        fds[count++] = fd;
+    }
+    if (count < 16 || errno != EMFILE) {
+        puts("cc_fcntl: fd exhaustion open failed");
+        close_fd_list(fds, count);
+        return 1;
+    }
+
+    close(fds[--count]);
+    int pipefd[2] = { -1, -1 };
+    errno = 0;
+    if (pipe(pipefd) != -1 || errno != EMFILE) {
+        puts("cc_fcntl: fd exhaustion pipe failed");
+        if (pipefd[0] >= 0) {
+            close(pipefd[0]);
+        }
+        if (pipefd[1] >= 0) {
+            close(pipefd[1]);
+        }
+        close_fd_list(fds, count);
+        return 1;
+    }
+
+    int fd = open("/dev/null", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_fcntl: fd exhaustion cleanup failed");
+        close_fd_list(fds, count);
+        return 1;
+    }
+    close(fd);
+    close_fd_list(fds, count);
+    puts("cc_fcntl: fd exhaustion ok");
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -111,6 +162,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     puts("cc_fcntl: cloexec ok");
+    if (check_fd_exhaustion() != 0) {
+        return 1;
+    }
     puts("cc_fcntl: done");
     return 0;
 }
