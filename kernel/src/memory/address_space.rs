@@ -26,24 +26,30 @@ pub const USER_MMAP_END: usize = 0x5800_0000;
 pub enum UserProtection {
     None,
     ReadOnly,
+    ReadExecute,
     ReadWrite,
 }
 
 impl UserProtection {
-    pub const fn page_flags(self) -> PageFlags {
+    pub fn page_flags(self) -> PageFlags {
         match self {
-            Self::None => PageFlags::USER_NO_ACCESS,
-            Self::ReadOnly => PageFlags::USER_READABLE,
-            Self::ReadWrite => PageFlags::USER_WRITABLE,
+            Self::None => PageFlags::user_no_access(),
+            Self::ReadOnly => PageFlags::user_readable(false),
+            Self::ReadExecute => PageFlags::user_readable(true),
+            Self::ReadWrite => PageFlags::user_writable(),
         }
     }
 
     pub const fn allows_read(self) -> bool {
-        matches!(self, Self::ReadOnly | Self::ReadWrite)
+        matches!(self, Self::ReadOnly | Self::ReadExecute | Self::ReadWrite)
     }
 
     pub const fn allows_write(self) -> bool {
         matches!(self, Self::ReadWrite)
+    }
+
+    pub const fn allows_execute(self) -> bool {
+        matches!(self, Self::ReadExecute)
     }
 }
 
@@ -51,6 +57,7 @@ impl UserProtection {
 pub enum UserAccess {
     Read,
     Write,
+    Execute,
 }
 
 impl AddressSpace {
@@ -463,18 +470,27 @@ impl AddressSpace {
         let mut flags = paging::PRESENT_FLAG;
         match protection {
             UserProtection::None => {
+                if paging::nx_enabled() {
+                    flags |= paging::NX_FLAG;
+                }
                 if was_cow {
                     flags |= paging::COW_FLAG;
                 }
             }
-            UserProtection::ReadOnly => {
+            UserProtection::ReadOnly | UserProtection::ReadExecute => {
                 flags |= paging::USER_FLAG;
+                if !protection.allows_execute() && paging::nx_enabled() {
+                    flags |= paging::NX_FLAG;
+                }
                 if was_cow {
                     flags |= paging::COW_FLAG;
                 }
             }
             UserProtection::ReadWrite => {
                 flags |= paging::USER_FLAG;
+                if paging::nx_enabled() {
+                    flags |= paging::NX_FLAG;
+                }
                 if was_cow || shared {
                     flags |= paging::COW_FLAG;
                 } else {
@@ -496,6 +512,7 @@ impl AddressSpace {
         match access {
             UserAccess::Read if !protection.allows_read() => return false,
             UserAccess::Write if !protection.allows_write() => return false,
+            UserAccess::Execute if !protection.allows_execute() => return false,
             _ => {}
         }
 
@@ -508,6 +525,7 @@ impl AddressSpace {
         match access {
             UserAccess::Read => true,
             UserAccess::Write => *pte & paging::WRITABLE_FLAG != 0 || *pte & paging::COW_FLAG != 0,
+            UserAccess::Execute => !paging::nx_enabled() || *pte & paging::NX_FLAG == 0,
         }
     }
 
@@ -618,6 +636,19 @@ pub fn self_test() {
     if value_a != 0xaaa1 {
         panic!("address space isolation failed: A read {:#x}", value_a);
     }
+    assert_user_page_nx(&space_a, VIRT, true, "writable page");
+    space_a
+        .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadOnly)
+        .expect("address space read-only protection failed");
+    assert_user_page_nx(&space_a, VIRT, true, "read-only page");
+    space_a
+        .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadExecute)
+        .expect("address space executable protection failed");
+    assert_user_page_nx(&space_a, VIRT, false, "executable page");
+    space_a
+        .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadWrite)
+        .expect("address space writable protection restore failed");
+    assert_user_page_nx(&space_a, VIRT, true, "restored writable page");
 
     space_b.activate();
     let value_b = unsafe { ptr::read_volatile(VIRT as *mut u64) };
@@ -632,4 +663,19 @@ pub fn self_test() {
     space_a.destroy();
     space_b.destroy();
     crate::println!("Address space isolation self-test passed.");
+}
+
+fn assert_user_page_nx(space: &AddressSpace, page: usize, expected: bool, label: &str) {
+    if !paging::nx_enabled() {
+        return;
+    }
+    let pte = unsafe { paging::get_pte_mut(space.p4, page) }
+        .unwrap_or_else(|| panic!("address space NX self-test missing {}", label));
+    let actual = *pte & paging::NX_FLAG != 0;
+    if actual != expected {
+        panic!(
+            "address space NX self-test {} expected {}, got {}",
+            label, expected, actual
+        );
+    }
 }

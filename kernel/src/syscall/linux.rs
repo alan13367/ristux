@@ -540,7 +540,9 @@ fn sanitize_linux_saved_frame(saved: &mut process::SavedSyscallFrame) -> Result<
     {
         return Err(EINVAL);
     }
-    process::read_user(saved.rip as usize, 1).ok_or(EFAULT)?;
+    if !process::is_user_executable(saved.rip as usize, 1) {
+        return Err(EFAULT);
+    }
     saved.rflags = (saved.rflags & USER_RFLAGS_MASK) | RFLAGS_FIXED | RFLAGS_IF;
     Ok(())
 }
@@ -2582,10 +2584,17 @@ fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
     if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
         return Err(EINVAL);
     }
+    let writable = prot & PROT_WRITE != 0;
+    let executable = prot & PROT_EXEC != 0;
+    if writable && executable {
+        return Err(EINVAL);
+    }
     if prot == 0 {
         Ok(UserProtection::None)
-    } else if prot & PROT_WRITE != 0 {
+    } else if writable {
         Ok(UserProtection::ReadWrite)
+    } else if executable {
+        Ok(UserProtection::ReadExecute)
     } else {
         Ok(UserProtection::ReadOnly)
     }

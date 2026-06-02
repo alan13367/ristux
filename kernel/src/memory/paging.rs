@@ -1,4 +1,7 @@
-use core::{fmt, ptr};
+use core::{
+    fmt, ptr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use super::frame_allocator::{self, FRAME_SIZE, Frame};
 
@@ -7,7 +10,12 @@ const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
 const USER: u64 = 1 << 2;
 const HUGE_PAGE: u64 = 1 << 7;
+const NX: u64 = 1 << 63;
 pub const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+const IA32_EFER: u32 = 0xc000_0080;
+const EFER_NXE: u64 = 1 << 11;
+
+static NX_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C, align(4096))]
 pub struct PageTable {
@@ -23,9 +31,18 @@ pub struct PageFlags(u64);
 
 impl PageFlags {
     pub const WRITABLE: Self = Self(PRESENT | WRITABLE);
-    pub const USER_NO_ACCESS: Self = Self(PRESENT);
-    pub const USER_READABLE: Self = Self(PRESENT | USER);
-    pub const USER_WRITABLE: Self = Self(PRESENT | WRITABLE | USER);
+
+    pub fn user_no_access() -> Self {
+        Self(PRESENT | nx_bit(false))
+    }
+
+    pub fn user_readable(executable: bool) -> Self {
+        Self(PRESENT | USER | nx_bit(executable))
+    }
+
+    pub fn user_writable() -> Self {
+        Self(PRESENT | WRITABLE | USER | nx_bit(false))
+    }
 
     pub fn from_raw(flags: u64) -> Self {
         Self(flags)
@@ -36,6 +53,7 @@ pub const WRITABLE_FLAG: u64 = WRITABLE;
 pub const PRESENT_FLAG: u64 = PRESENT;
 pub const USER_FLAG: u64 = USER;
 pub const COW_FLAG: u64 = 1 << 9;
+pub const NX_FLAG: u64 = NX;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PagingError {
@@ -59,11 +77,73 @@ impl fmt::Display for PagingError {
 }
 
 pub fn init() {
+    let nx_enabled = enable_nx_if_supported();
     crate::println!(
-        "Active level-4 page table: {:#x}",
-        boot_root_table() as usize
+        "Active level-4 page table: {:#x}; NX {}.",
+        boot_root_table() as usize,
+        if nx_enabled { "enabled" } else { "unsupported" }
     );
     self_test();
+}
+
+pub fn nx_enabled() -> bool {
+    NX_ENABLED.load(Ordering::Relaxed)
+}
+
+fn nx_bit(executable: bool) -> u64 {
+    if executable || !nx_enabled() { 0 } else { NX }
+}
+
+fn enable_nx_if_supported() -> bool {
+    if !cpu_supports_nx() {
+        return false;
+    }
+    let efer = read_msr(IA32_EFER);
+    write_msr(IA32_EFER, efer | EFER_NXE);
+    NX_ENABLED.store(true, Ordering::Relaxed);
+    true
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_supports_nx() -> bool {
+    let max_extended = core::arch::x86_64::__cpuid(0x8000_0000).eax;
+    if max_extended < 0x8000_0001 {
+        return false;
+    }
+    let features = core::arch::x86_64::__cpuid(0x8000_0001);
+    features.edx & (1 << 20) != 0
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_supports_nx() -> bool {
+    false
+}
+
+fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    ((high as u64) << 32) | low as u64
+}
+
+fn write_msr(msr: u32, value: u64) {
+    unsafe {
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
 }
 
 pub fn boot_root_table() -> *mut PageTable {
@@ -249,7 +329,7 @@ fn self_test() {
     let user_frame =
         frame_allocator::allocate_frame().expect("user paging self-test frame allocation failed");
     unsafe {
-        map_page(0x4010_0000, user_frame.start, PageFlags::USER_WRITABLE)
+        map_page(0x4010_0000, user_frame.start, PageFlags::user_writable())
             .unwrap_or_else(|err| panic!("user paging map self-test failed: {}", err));
         let unmapped = unmap_page(0x4010_0000)
             .unwrap_or_else(|err| panic!("user paging unmap self-test failed: {}", err));

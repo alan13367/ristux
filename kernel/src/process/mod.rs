@@ -429,6 +429,11 @@ impl Process {
         self.address_space.allows_user(addr, len, UserAccess::Read)
     }
 
+    fn allows_user_execute(&self, addr: usize, len: usize) -> bool {
+        self.address_space
+            .allows_user(addr, len, UserAccess::Execute)
+    }
+
     fn prepare_user_write(&mut self, addr: usize, len: usize) -> bool {
         if !self.address_space.allows_user(addr, len, UserAccess::Write) {
             return false;
@@ -1608,6 +1613,13 @@ pub fn read_user(addr: usize, len: usize) -> Option<&'static [u8]> {
     })?
 }
 
+pub fn is_user_executable(addr: usize, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    with_current_read(|p| p.allows_user_execute(addr, len)).unwrap_or(false)
+}
+
 pub fn write_user_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
     if len == 0 {
         return Some(&mut []);
@@ -2187,6 +2199,7 @@ fn map_elf_segment(
     address_space: &mut AddressSpace,
     segment: elf::SegmentView<'_>,
 ) -> Result<(), ExecError> {
+    const PF_X: u32 = 0x1;
     const PF_W: u32 = 0x2;
 
     address_space.activate();
@@ -2203,8 +2216,15 @@ fn map_elf_segment(
         .ok_or(ExecError::InvalidImage)?;
     let map_start = paging::align_down(segment_start, FRAME_SIZE);
     let map_end = paging::align_up(segment_end, FRAME_SIZE);
-    let protection = if segment.flags & PF_W != 0 {
+    let writable = segment.flags & PF_W != 0;
+    let executable = segment.flags & PF_X != 0;
+    if writable && executable {
+        return Err(ExecError::InvalidImage);
+    }
+    let protection = if writable {
         UserProtection::ReadWrite
+    } else if executable {
+        UserProtection::ReadExecute
     } else {
         UserProtection::ReadOnly
     };

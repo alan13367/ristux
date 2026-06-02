@@ -3,7 +3,32 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+static int execute_probe_status(void *entry) {
+    pid_t child = fork();
+    if (child < 0) {
+        return -1;
+    }
+    if (child == 0) {
+        void (*fn)(void) = (void (*)(void))entry;
+        fn();
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child) {
+        return -1;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return -1;
+}
 
 int main(void) {
     char *anon = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -68,6 +93,34 @@ int main(void) {
         return 1;
     }
     puts("cc_mmap: munmap ok");
+
+    unsigned char *nx = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (nx == MAP_FAILED) {
+        printf("cc_mmap: nx mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    nx[0] = 0xc3; /* ret */
+    errno = 0;
+    if (mprotect(nx, 4096, PROT_READ | PROT_WRITE | PROT_EXEC) != -1 ||
+        errno != EINVAL) {
+        printf("cc_mmap: wx rejection failed errno=%d\n", errno);
+        return 1;
+    }
+    if (mprotect(nx, 4096, PROT_READ | PROT_EXEC) < 0) {
+        printf("cc_mmap: rx mprotect failed errno=%d\n", errno);
+        return 1;
+    }
+    int rx_status = execute_probe_status(nx);
+    if (rx_status != 0) {
+        printf("cc_mmap: rx execute status=%d\n", rx_status);
+        return 1;
+    }
+    if (munmap(nx, 4096) < 0) {
+        puts("cc_mmap: nx munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: nx wx ok");
 
     char *fixed_base = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
