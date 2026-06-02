@@ -3109,16 +3109,17 @@ pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result
     .ok_or(MmapError::Invalid)?
 }
 
-pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
+pub fn munmap(addr: usize, len: usize) -> Result<(), MmapError> {
     with_current(|p| {
-        p.flush_shared_mappings_range(addr, len).map_err(|_| ())?;
+        p.flush_shared_mappings_range(addr, len)
+            .map_err(MmapError::Vfs)?;
         p.address_space
             .unmap_user_range(addr, len)
-            .map_err(|_| ())?;
+            .map_err(map_paging_mmap_error)?;
         p.discard_shared_mappings_range(addr, len);
         Ok(())
     })
-    .ok_or(())?
+    .ok_or(MmapError::Invalid)?
 }
 
 pub fn register_shared_mapping(

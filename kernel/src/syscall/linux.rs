@@ -2612,7 +2612,9 @@ fn linux_munmap(addr: usize, len: usize) -> Result<u64, i64> {
         return Err(EINVAL);
     }
     let length = page_aligned_len(len)?;
-    process::munmap(addr, length).map(|_| 0).map_err(|_| EINVAL)
+    process::munmap(addr, length)
+        .map(|_| 0)
+        .map_err(map_mmap_error)
 }
 
 fn linux_msync(addr: usize, len: usize, flags: i32) -> Result<u64, i64> {
