@@ -30,7 +30,52 @@ static int execute_probe_status(void *entry) {
     return -1;
 }
 
+static int check_brk_shrink(void) {
+    char *original = sbrk(0);
+    unsigned long page = ((unsigned long)original + 4095UL) & ~4095UL;
+    char *kept = (char *)page;
+    char *freed = kept + 4096;
+
+    if (brk(freed + 4096) < 0) {
+        printf("cc_mmap: brk grow failed errno=%d\n", errno);
+        return 1;
+    }
+    kept[0] = 'h';
+    freed[0] = 'x';
+    if (brk(freed) < 0) {
+        printf("cc_mmap: brk shrink failed errno=%d\n", errno);
+        return 1;
+    }
+    if (kept[0] != 'h') {
+        puts("cc_mmap: brk kept page failed");
+        return 1;
+    }
+
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: brk zero open failed");
+        return 1;
+    }
+    errno = 0;
+    int stale_rejected = read(zero_fd, freed, 1) == -1 && errno == EFAULT;
+    close(zero_fd);
+    if (brk(original) < 0) {
+        printf("cc_mmap: brk restore failed errno=%d\n", errno);
+        return 1;
+    }
+    if (!stale_rejected) {
+        printf("cc_mmap: brk stale page errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_mmap: brk shrink ok");
+    return 0;
+}
+
 int main(void) {
+    if (check_brk_shrink() != 0) {
+        return 1;
+    }
+
     char *anon = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (anon == MAP_FAILED) {
         printf("cc_mmap: anonymous failed errno=%d\n", errno);

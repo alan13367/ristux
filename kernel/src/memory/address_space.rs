@@ -390,7 +390,21 @@ impl AddressSpace {
         if aligned > paging::USER_HEAP_END {
             return Err(PagingError::NotMapped);
         }
-        let mut page = paging::align_up(self.heap_break, FRAME_SIZE);
+
+        let old_aligned = paging::align_up(self.heap_break, FRAME_SIZE);
+        if aligned < old_aligned {
+            let mut page = aligned;
+            while page < old_aligned {
+                if self.is_user_mapped(page) {
+                    self.unmap_user_page(page)?;
+                }
+                page += FRAME_SIZE;
+            }
+            self.heap_break = new_break;
+            return Ok(());
+        }
+
+        let mut page = old_aligned;
         let mut mapped = Vec::new();
         while page < aligned {
             if !self.is_user_mapped(page) {

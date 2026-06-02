@@ -2108,13 +2108,6 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
         }
         if process.address_space.can_grow_stack(fault_addr) {
             process.address_space.grow_stack(fault_addr).is_ok()
-        } else if fault_addr >= paging::USER_HEAP_START
-            && fault_addr < process.address_space.heap_break + FRAME_SIZE
-        {
-            process
-                .address_space
-                .grow_heap(process.address_space.heap_break + FRAME_SIZE)
-                .is_ok()
         } else {
             false
         }
