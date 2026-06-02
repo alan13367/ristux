@@ -855,8 +855,11 @@ impl Process {
         vfs_fd: usize,
         file_offset: usize,
         writable: bool,
-    ) -> Result<(), fs::vfs::VfsError> {
-        let dup = fs::duplicate_fd(vfs_fd)?;
+    ) -> Result<(), SharedMappingError> {
+        self.shared_mappings
+            .try_reserve_exact(1)
+            .map_err(|_| SharedMappingError::OutOfMemory)?;
+        let dup = fs::duplicate_fd(vfs_fd).map_err(SharedMappingError::Vfs)?;
         self.shared_mappings.push(SharedMapping {
             addr,
             len,
@@ -1313,6 +1316,12 @@ pub struct ExecInfo {
 pub enum FdInstallError {
     Fault,
     TooManyOpenFiles,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SharedMappingError {
+    OutOfMemory,
+    Vfs(fs::vfs::VfsError),
 }
 
 const MAX_SHEBANG_DEPTH: usize = 4;
@@ -2960,12 +2969,9 @@ pub fn register_shared_mapping(
     vfs_fd: usize,
     file_offset: usize,
     writable: bool,
-) -> Result<(), ()> {
-    with_current(|p| {
-        p.register_shared_mapping(addr, len, vfs_fd, file_offset, writable)
-            .map_err(|_| ())
-    })
-    .ok_or(())?
+) -> Result<(), SharedMappingError> {
+    with_current(|p| p.register_shared_mapping(addr, len, vfs_fd, file_offset, writable))
+        .ok_or(SharedMappingError::Vfs(fs::vfs::VfsError::BadFd))?
 }
 
 pub fn msync(addr: usize, len: usize) -> Result<(), ()> {

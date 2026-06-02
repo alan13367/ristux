@@ -2579,11 +2579,11 @@ fn linux_mmap(
         }
         if shared {
             let writable = prot & PROT_WRITE != 0;
-            if process::register_shared_mapping(mapped, length, vfs_fd, file_offset, writable)
-                .is_err()
+            if let Err(err) =
+                process::register_shared_mapping(mapped, length, vfs_fd, file_offset, writable)
             {
                 let _ = process::munmap(mapped, length);
-                return Err(EINVAL);
+                return Err(map_shared_mapping_error(err));
             }
         }
     }
@@ -3406,6 +3406,13 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::BadFd => EBADF,
         fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
         _ => EINVAL,
+    }
+}
+
+fn map_shared_mapping_error(err: process::SharedMappingError) -> i64 {
+    match err {
+        process::SharedMappingError::OutOfMemory => ENOMEM,
+        process::SharedMappingError::Vfs(err) => map_vfs_error(err),
     }
 }
 
