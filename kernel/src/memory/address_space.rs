@@ -373,6 +373,9 @@ impl AddressSpace {
             if !self.is_user_mapped(page) {
                 return Err(PagingError::NotMapped);
             }
+            if self.protection_for_page(page).is_none() {
+                return Err(PagingError::NotMapped);
+            }
             if unsafe { paging::get_pte_mut(self.p4, page) }
                 .is_none_or(|pte| *pte & paging::PRESENT_FLAG == 0)
             {
@@ -706,6 +709,7 @@ pub fn self_test() {
         .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadWrite)
         .expect("address space writable protection restore failed");
     assert_user_page_nx(&space_a, VIRT, true, "restored writable page");
+    assert_mprotect_metadata_failure_is_atomic(&mut space_a);
 
     space_b.activate();
     let value_b = unsafe { ptr::read_volatile(VIRT as *mut u64) };
@@ -732,6 +736,51 @@ fn assert_user_page_nx(space: &AddressSpace, page: usize, expected: bool, label:
     if actual != expected {
         panic!(
             "address space NX self-test {} expected {}, got {}",
+            label, expected, actual
+        );
+    }
+}
+
+fn assert_mprotect_metadata_failure_is_atomic(space: &mut AddressSpace) {
+    const BASE: usize = 0x4020_0000;
+    let second = BASE + FRAME_SIZE;
+
+    space
+        .map_zero_page(BASE)
+        .expect("address space mprotect atomic test first map failed");
+    space
+        .map_zero_page(second)
+        .expect("address space mprotect atomic test second map failed");
+
+    let Some(index) = space
+        .user_protections
+        .iter()
+        .position(|(virt, _)| *virt == second)
+    else {
+        panic!("address space mprotect atomic test missing metadata");
+    };
+    space.user_protections.swap_remove(index);
+
+    if space
+        .protect_user_range(BASE, FRAME_SIZE * 2, UserProtection::ReadOnly)
+        .is_ok()
+    {
+        panic!("address space mprotect atomic test accepted missing metadata");
+    }
+    if space.protection_for_page(BASE) != Some(UserProtection::ReadWrite) {
+        panic!("address space mprotect atomic test changed first page metadata");
+    }
+    assert_user_page_writable(space, BASE, true, "mprotect atomic first page");
+    assert_user_page_writable(space, second, true, "mprotect atomic second page");
+}
+
+fn assert_user_page_writable(space: &AddressSpace, page: usize, expected: bool, label: &str) {
+    let pte = unsafe { paging::get_pte_mut(space.p4, page) }
+        .unwrap_or_else(|| panic!("address space writable self-test missing {}", label));
+    let actual = *pte & paging::WRITABLE_FLAG != 0;
+    if actual != expected {
+        panic!(
+            "address space writable self-test {} expected {}, got {}",
             label, expected, actual
         );
     }
