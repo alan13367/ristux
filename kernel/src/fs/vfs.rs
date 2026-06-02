@@ -3003,18 +3003,41 @@ fn normalize_path(path: &str) -> Result<String, VfsError> {
             ".." => {
                 parts.pop();
             }
-            _ => parts.push(part),
+            _ => {
+                parts
+                    .try_reserve_exact(1)
+                    .map_err(|_| VfsError::OutOfMemory)?;
+                parts.push(part);
+            }
         }
     }
     if parts.is_empty() {
-        return Ok(String::from("/"));
+        return try_string_from("/");
+    }
+    let mut len = 0usize;
+    for part in &parts {
+        len = len
+            .checked_add(1)
+            .and_then(|len| len.checked_add(part.len()))
+            .ok_or(VfsError::OutOfMemory)?;
     }
     let mut normalized = String::new();
+    normalized
+        .try_reserve_exact(len)
+        .map_err(|_| VfsError::OutOfMemory)?;
     for part in parts {
         normalized.push('/');
         normalized.push_str(part);
     }
     Ok(normalized)
+}
+
+fn try_string_from(value: &str) -> Result<String, VfsError> {
+    let mut out = String::new();
+    out.try_reserve_exact(value.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    out.push_str(value);
+    Ok(out)
 }
 
 fn proc_status_pid(path: &str) -> Option<u64> {
