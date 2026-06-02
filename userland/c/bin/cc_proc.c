@@ -1,6 +1,8 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -98,6 +100,50 @@ static int check_exec_unterminated_path(void) {
     return 0;
 }
 
+static int check_exec_shebang_limit_transaction(void) {
+    const char *script = "/tmp/cc_proc_shebang";
+    const char *body = "#!/bin/false\n";
+    int fd = open(script, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec shebang create failed");
+        return 1;
+    }
+    if (write(fd, body, strlen(body)) != (ssize_t)strlen(body)) {
+        close(fd);
+        puts("cc_proc: exec shebang write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(script, 0755) < 0) {
+        puts("cc_proc: exec shebang chmod failed");
+        return 1;
+    }
+
+    char *argv[65];
+    argv[0] = (char *)script;
+    for (int i = 1; i < 64; i++) {
+        argv[i] = "arg";
+    }
+    argv[64] = NULL;
+    char *envp[] = { NULL };
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec shebang fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        execve(script, argv, envp);
+        _exit(errno == E2BIG ? 0 : 103);
+    }
+    if (wait_for_zero(child, "cc_proc: exec shebang limit failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec shebang limit ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -150,6 +196,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_unterminated_path() != 0) {
+        return 1;
+    }
+    if (check_exec_shebang_limit_transaction() != 0) {
         return 1;
     }
     puts("cc_proc: done");

@@ -191,6 +191,19 @@ impl From<elf::ElfError> for ExecError {
     }
 }
 
+struct StackSetup {
+    stack_top: usize,
+    argc: usize,
+    argv_ptr: usize,
+    envp_ptr: usize,
+}
+
+struct PreparedExec {
+    address_space: AddressSpace,
+    entry: u64,
+    stack: StackSetup,
+}
+
 impl Process {
     fn new_user(pid: Pid, parent: Option<Pid>, name: &str, credentials: Credentials) -> Self {
         let address_space =
@@ -469,7 +482,12 @@ impl Process {
         self.address_space.ensure_user_writable(addr, len).is_ok()
     }
 
-    fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, ExecError> {
+    fn prepare_exec(
+        &self,
+        data: &[u8],
+        args: &[&str],
+        env: &[&str],
+    ) -> Result<PreparedExec, ExecError> {
         let mut checked_segments = 0;
         let checked_entry = elf::for_each_load_segment(data, |_| {
             checked_segments += 1;
@@ -508,23 +526,49 @@ impl Process {
             return Err(ExecError::OutOfMemory);
         }
 
-        self.flush_and_close_shared_mappings();
-        let old = core::mem::replace(&mut self.address_space, new_space);
-        old.destroy();
+        let stack = match Self::setup_stack_in_space(&mut new_space, args, env) {
+            Ok(stack) => stack,
+            Err(err) => {
+                self.address_space.activate();
+                new_space.destroy();
+                return Err(err);
+            }
+        };
+
         self.address_space.activate();
+        Ok(PreparedExec {
+            address_space: new_space,
+            entry: checked_entry,
+            stack,
+        })
+    }
+
+    fn commit_exec(&mut self, path: &str, prepared: PreparedExec) {
+        let PreparedExec {
+            address_space,
+            entry,
+            stack,
+        } = prepared;
+
+        self.flush_and_close_shared_mappings();
+        let old = core::mem::replace(&mut self.address_space, address_space);
+        self.address_space.activate();
+        old.destroy();
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
         self.name = String::from(path);
-        self.entry = checked_entry;
-        Ok(checked_entry)
+        self.entry = entry;
+        self.stack_top = stack.stack_top;
+        self.argc = stack.argc;
+        self.argv_ptr = stack.argv_ptr;
+        self.envp_ptr = stack.envp_ptr;
     }
 
-    fn setup_stack(&mut self, args: &[&str]) -> Result<(), ExecError> {
-        self.setup_stack_with_env(args, &[])
-    }
-
-    fn setup_stack_with_env(&mut self, args: &[&str], env: &[&str]) -> Result<(), ExecError> {
-        self.address_space.activate();
+    fn setup_stack_in_space(
+        address_space: &mut AddressSpace,
+        args: &[&str],
+        env: &[&str],
+    ) -> Result<StackSetup, ExecError> {
         if args.len() > MAX_USER_ARGS {
             return Err(ExecError::TooManyArguments);
         }
@@ -533,26 +577,26 @@ impl Process {
         }
         let stack_top = paging::USER_STACK_TOP;
         let stack_bottom = stack_top - FRAME_SIZE;
-        self.address_space
+        address_space
             .map_zero_page(stack_bottom)
             .map_err(|_| ExecError::OutOfMemory)?;
-        self.address_space.stack_bottom = stack_bottom;
-        self.address_space.stack_top = stack_top;
+        address_space.stack_bottom = stack_bottom;
+        address_space.stack_top = stack_top;
 
         let mut sp = stack_top;
         let mut arg_ptrs = [0usize; MAX_USER_ARGS];
         for (index, arg) in args.iter().enumerate() {
-            arg_ptrs[index] = self.push_stack_string(&mut sp, arg)?;
+            arg_ptrs[index] = Self::push_stack_string(address_space, &mut sp, arg)?;
         }
         let mut env_ptrs = [0usize; MAX_USER_ENVS];
         for (index, entry) in env.iter().enumerate() {
-            env_ptrs[index] = self.push_stack_string(&mut sp, entry)?;
+            env_ptrs[index] = Self::push_stack_string(address_space, &mut sp, entry)?;
         }
 
         sp &= !0xf;
         let env_bytes = (env.len() + 1) * 8;
         sp = sp.checked_sub(env_bytes).ok_or(ExecError::OutOfMemory)?;
-        self.ensure_stack_mapping(sp, env_bytes)?;
+        Self::ensure_stack_mapping(address_space, sp, env_bytes)?;
         let envp_ptr = sp;
         unsafe {
             for index in 0..env.len() {
@@ -563,7 +607,7 @@ impl Process {
 
         let argv_bytes = (args.len() + 1) * 8;
         sp = sp.checked_sub(argv_bytes).ok_or(ExecError::OutOfMemory)?;
-        self.ensure_stack_mapping(sp, argv_bytes)?;
+        Self::ensure_stack_mapping(address_space, sp, argv_bytes)?;
         let argv_ptr = sp;
         unsafe {
             for index in 0..args.len() {
@@ -573,21 +617,26 @@ impl Process {
         }
 
         sp = (sp & !0xf).checked_sub(8).ok_or(ExecError::OutOfMemory)?;
-        self.ensure_stack_mapping(sp, 8)?;
-        self.stack_top = sp;
-        self.argc = args.len();
-        self.argv_ptr = argv_ptr;
-        self.envp_ptr = envp_ptr;
-        Ok(())
+        Self::ensure_stack_mapping(address_space, sp, 8)?;
+        Ok(StackSetup {
+            stack_top: sp,
+            argc: args.len(),
+            argv_ptr,
+            envp_ptr,
+        })
     }
 
-    fn push_stack_string(&mut self, sp: &mut usize, text: &str) -> Result<usize, ExecError> {
+    fn push_stack_string(
+        address_space: &mut AddressSpace,
+        sp: &mut usize,
+        text: &str,
+    ) -> Result<usize, ExecError> {
         let bytes = text.as_bytes();
         *sp = sp
             .checked_sub(bytes.len().checked_add(1).ok_or(ExecError::OutOfMemory)?)
             .ok_or(ExecError::OutOfMemory)?;
         *sp &= !0xf;
-        self.ensure_stack_mapping(*sp, bytes.len() + 1)?;
+        Self::ensure_stack_mapping(address_space, *sp, bytes.len() + 1)?;
         unsafe {
             ptr::copy_nonoverlapping(bytes.as_ptr(), *sp as *mut u8, bytes.len());
             *(*sp as *mut u8).add(bytes.len()) = 0;
@@ -595,7 +644,11 @@ impl Process {
         Ok(*sp)
     }
 
-    fn ensure_stack_mapping(&mut self, addr: usize, len: usize) -> Result<(), ExecError> {
+    fn ensure_stack_mapping(
+        address_space: &mut AddressSpace,
+        addr: usize,
+        len: usize,
+    ) -> Result<(), ExecError> {
         let end = addr.checked_add(len.max(1)).ok_or(ExecError::OutOfMemory)?;
         let mut page = paging::align_down(addr, FRAME_SIZE);
         let page_end = paging::align_up(end, FRAME_SIZE);
@@ -603,13 +656,13 @@ impl Process {
             if page <= paging::USER_STACK_GUARD || page + FRAME_SIZE > paging::USER_STACK_TOP {
                 return Err(ExecError::OutOfMemory);
             }
-            if !self.address_space.is_user_mapped(page) {
-                self.address_space
+            if !address_space.is_user_mapped(page) {
+                address_space
                     .map_zero_page(page)
                     .map_err(|_| ExecError::OutOfMemory)?;
             }
-            if page < self.address_space.stack_bottom {
-                self.address_space.stack_bottom = page;
+            if page < address_space.stack_bottom {
+                address_space.stack_bottom = page;
             }
             page += FRAME_SIZE;
         }
@@ -789,6 +842,10 @@ impl ProcessTable {
             Some(i) => i,
             None => return false,
         };
+        let prepared = match self.processes[index].prepare_exec(&data, args, &[]) {
+            Ok(prepared) => prepared,
+            Err(_) => return false,
+        };
         {
             let process = &mut self.processes[index];
             for entry in &process.fds {
@@ -799,12 +856,7 @@ impl ProcessTable {
         }
         let process = &mut self.processes[index];
         process.init_stdio();
-        if process.load_elf(path, &data).is_err() {
-            return false;
-        }
-        if process.setup_stack(args).is_err() {
-            return false;
-        }
+        process.commit_exec(path, prepared);
         process.state = ProcessState::Ready;
         clear_current();
         true
@@ -1243,8 +1295,8 @@ fn exec_for_user_inner(
         return Err(ExecError::InvalidImage);
     }
 
-    table.processes[index].load_elf(path, &data)?;
-    table.processes[index].setup_stack_with_env(args, env)?;
+    let prepared = table.processes[index].prepare_exec(&data, args, env)?;
+    table.processes[index].commit_exec(path, prepared);
     let close_on_exec = table.processes[index].close_on_exec_fds();
     for fd in close_on_exec {
         let _ = fs::close(fd);
