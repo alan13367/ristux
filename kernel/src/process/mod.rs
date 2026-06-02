@@ -3240,8 +3240,12 @@ pub fn register_shared_mapping(
         .ok_or(SharedMappingError::Vfs(fs::vfs::VfsError::BadFd))?
 }
 
-pub fn msync(addr: usize, len: usize) -> Result<(), ()> {
-    with_current(|p| p.flush_shared_mappings_range(addr, len).map_err(|_| ())).ok_or(())?
+pub fn msync(addr: usize, len: usize) -> Result<(), MmapError> {
+    with_current(|p| {
+        p.flush_shared_mappings_range(addr, len)
+            .map_err(MmapError::Vfs)
+    })
+    .ok_or(MmapError::Invalid)?
 }
 
 pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), MmapError> {

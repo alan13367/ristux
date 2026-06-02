@@ -2624,7 +2624,9 @@ fn linux_msync(addr: usize, len: usize, flags: i32) -> Result<u64, i64> {
         return Err(EINVAL);
     }
     let length = page_aligned_len(len)?;
-    process::msync(addr, length).map(|_| 0).map_err(|_| EINVAL)
+    process::msync(addr, length)
+        .map(|_| 0)
+        .map_err(map_mmap_error)
 }
 
 fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
