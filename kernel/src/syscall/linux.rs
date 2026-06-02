@@ -427,18 +427,23 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
     let Some((pid, signum, status)) = process::take_pending_signal_current() else {
         return false;
     };
-    if signum == crate::signal::Signal::Tstp.number() as usize {
-        let saved = saved_from_linux_frame(frame);
-        process::save_syscall_frame(pid, &saved);
-        process::stop_current_signal(pid, signum as u8);
-        let _ = crate::syscall::yield_until_runnable(frame);
-        return true;
-    }
     if signum != 0 {
-        if let Some(handler) = process::signal_handler(pid, signum) {
-            if handler != 0 && deliver_signal_handler(frame, signum, handler).is_ok() {
-                return true;
-            }
+        let handler =
+            process::signal_handler(pid, signum).unwrap_or(crate::signal::DEFAULT_HANDLER);
+        if handler == crate::signal::IGNORE_HANDLER {
+            return false;
+        }
+        if handler != crate::signal::DEFAULT_HANDLER
+            && deliver_signal_handler(frame, signum, handler).is_ok()
+        {
+            return true;
+        }
+        if signum == crate::signal::Signal::Tstp.number() as usize {
+            let saved = saved_from_linux_frame(frame);
+            process::save_syscall_frame(pid, &saved);
+            process::stop_current_signal(pid, signum as u8);
+            let _ = crate::syscall::yield_until_runnable(frame);
+            return true;
         }
     }
     if signum != 0 {

@@ -1,5 +1,8 @@
 use crate::process;
 
+pub const DEFAULT_HANDLER: usize = 0;
+pub const IGNORE_HANDLER: usize = 1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Signal {
     Term,

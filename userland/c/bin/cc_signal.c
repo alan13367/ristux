@@ -72,6 +72,37 @@ static int check_stop_wait_once(void) {
     return 0;
 }
 
+static int check_ignored_signals(void) {
+    sigset_t blocked;
+    sigset_t oldmask;
+    sigset_t pending;
+    if (signal(SIGQUIT, SIG_IGN) == SIG_ERR ||
+        sigemptyset(&blocked) < 0 ||
+        sigaddset(&blocked, SIGQUIT) < 0 ||
+        sigprocmask(SIG_BLOCK, &blocked, &oldmask) < 0) {
+        puts("cc_signal: ignore setup failed");
+        return 1;
+    }
+    if (raise(SIGQUIT) != 0) {
+        puts("cc_signal: ignore raise failed");
+        return 1;
+    }
+    if (sigpending(&pending) < 0 || sigismember(&pending, SIGQUIT) != 0) {
+        puts("cc_signal: ignore pending failed");
+        return 1;
+    }
+    if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0) {
+        puts("cc_signal: ignore mask restore failed");
+        return 1;
+    }
+    if (signal(SIGTSTP, SIG_IGN) == SIG_ERR || raise(SIGTSTP) != 0) {
+        puts("cc_signal: ignore stop failed");
+        return 1;
+    }
+    puts("cc_signal: ignore ok");
+    return 0;
+}
+
 int main(void) {
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
@@ -191,7 +222,7 @@ int main(void) {
     }
     puts("cc_signal: default disposition ok");
 
-    if (check_stop_wait_once() != 0) {
+    if (check_stop_wait_once() != 0 || check_ignored_signals() != 0) {
         return 1;
     }
 

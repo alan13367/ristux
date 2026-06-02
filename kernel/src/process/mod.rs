@@ -192,6 +192,30 @@ fn signal_from_legacy_status(status: i32) -> Option<u8> {
     }
 }
 
+fn is_ignored_signal(process: &Process, status: i32) -> bool {
+    let Some(signal) = signal_from_legacy_status(status) else {
+        return false;
+    };
+    if signal == crate::signal::Signal::Kill.number() {
+        return false;
+    }
+    process
+        .signal_handlers
+        .get(signal as usize)
+        .copied()
+        .unwrap_or(crate::signal::DEFAULT_HANDLER)
+        == crate::signal::IGNORE_HANDLER
+}
+
+fn clear_pending_signal(process: &mut Process, signal: usize) {
+    if signal < 64 {
+        process.pending_signals &= !(1u64 << signal);
+    }
+    if signal < 32 && process.pending_signal_status == Some(128 + signal as i32) {
+        process.pending_signal_status = None;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecError {
     NotFound,
@@ -1043,6 +1067,12 @@ impl ProcessTable {
     }
 
     fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<Vec<Pid>> {
+        if self
+            .get(pid)
+            .is_some_and(|process| is_ignored_signal(process, status))
+        {
+            return Some(Vec::new());
+        }
         if current == Some(pid) {
             let process = self.get_mut(pid)?;
             process.pending_signal_status = Some(status);
@@ -1617,6 +1647,9 @@ pub fn set_signal_handler(pid: Pid, signal: usize, handler: usize) -> Option<usi
         }
         let old = process.signal_handlers[signal];
         process.signal_handlers[signal] = handler;
+        if handler == crate::signal::IGNORE_HANDLER {
+            clear_pending_signal(process, signal);
+        }
         Some(old)
     })
 }

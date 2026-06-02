@@ -2090,7 +2090,14 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     }
 
     signal_handlers[signum] = act->sa_handler;
-    void *kernel_handler = act->sa_handler == SIG_DFL ? NULL : (void *)signal_trampoline;
+    void *kernel_handler;
+    if (act->sa_handler == SIG_DFL) {
+        kernel_handler = NULL;
+    } else if (act->sa_handler == SIG_IGN) {
+        kernel_handler = (void *)SIG_IGN;
+    } else {
+        kernel_handler = (void *)signal_trampoline;
+    }
     long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_handler, 0);
     if (syscall_ret(ret) < 0) {
         signal_handlers[signum] = old;
