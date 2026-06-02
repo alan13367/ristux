@@ -2340,7 +2340,9 @@ fn write_rlimit(rlim_ptr: usize, cur: u64, max: u64) -> Result<(), i64> {
 
 fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
     let path = read_user_cstr_errno(path_ptr)?;
-    process::user_chdir(&path).map(|_| 0).map_err(|_| ENOENT)
+    process::user_chdir(&path)
+        .map(|_| 0)
+        .map_err(map_chdir_error)
 }
 
 fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
@@ -3484,6 +3486,13 @@ fn map_cwd_error(err: fs::vfs::VfsError) -> i64 {
     match err {
         fs::vfs::VfsError::OutOfMemory => ENOMEM,
         fs::vfs::VfsError::BadFd => ESRCH,
+        other => map_vfs_error(other),
+    }
+}
+
+fn map_chdir_error(err: fs::vfs::VfsError) -> i64 {
+    match err {
+        fs::vfs::VfsError::NotFile => ENOTDIR,
         other => map_vfs_error(other),
     }
 }

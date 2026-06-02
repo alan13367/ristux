@@ -3048,19 +3048,19 @@ pub fn user_cwd() -> Result<String, fs::vfs::VfsError> {
     with_current_read(|p| try_string_from(&p.cwd)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
-pub fn user_chdir(path: &str) -> Result<(), ()> {
+pub fn user_chdir(path: &str) -> Result<(), fs::vfs::VfsError> {
     with_current(|p| {
-        let resolved = resolve_process_path(p, path).map_err(|_| ())?;
-        let fd = fs::open_read_as(&resolved, p.credentials).map_err(|_| ())?;
+        let resolved = resolve_process_path(p, path)?;
+        let fd = fs::open_read_as(&resolved, p.credentials)?;
         let is_directory = fs::directory_entries(fd).is_ok();
         let _ = fs::close(fd);
         if !is_directory {
-            return Err(());
+            return Err(fs::vfs::VfsError::NotFile);
         }
         p.cwd = resolved;
         Ok(())
     })
-    .unwrap_or(Err(()))
+    .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn current_heap_break() -> usize {
