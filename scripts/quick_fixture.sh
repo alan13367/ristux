@@ -259,6 +259,7 @@ case "$SCENARIO" in
       "^cc_proc: exec vector limits ok$"
       "^cc_proc: exec unterminated path ok$"
       "^cc_proc: exec shebang limit ok$"
+      "^cc_proc: exec invalid image ok$"
       "^cc_proc: done$"
       "TTY canonical line ready: cc_procfs"
       "^cc_procfs: dir ok$"

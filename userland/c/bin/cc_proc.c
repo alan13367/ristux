@@ -144,6 +144,44 @@ static int check_exec_shebang_limit_transaction(void) {
     return 0;
 }
 
+static int check_exec_invalid_image(void) {
+    const char *path = "/tmp/cc_proc_bad_elf";
+    const char *body = "not an elf\n";
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec invalid create failed");
+        return 1;
+    }
+    if (write(fd, body, strlen(body)) != (ssize_t)strlen(body)) {
+        close(fd);
+        puts("cc_proc: exec invalid write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(path, 0755) < 0) {
+        puts("cc_proc: exec invalid chmod failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec invalid fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == ENOEXEC ? 0 : 104);
+    }
+    if (wait_for_zero(child, "cc_proc: exec invalid image failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec invalid image ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -199,6 +237,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_shebang_limit_transaction() != 0) {
+        return 1;
+    }
+    if (check_exec_invalid_image() != 0) {
         return 1;
     }
     puts("cc_proc: done");
