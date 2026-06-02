@@ -358,6 +358,7 @@ impl Process {
         if self.fds.len() >= MAX_FDS {
             return Err(());
         }
+        self.fds.try_reserve_exact(1).map_err(|_| ())?;
         self.fds.push(FdEntry {
             user_fd,
             vfs_fd,
