@@ -210,8 +210,18 @@ impl AddressSpace {
 
     pub fn clone_full_copy(&self) -> Result<Self, PagingError> {
         let mut clone = Self::new_kernel_clone()?;
-        clone.user_mappings = Vec::with_capacity(self.user_mappings.len());
-        clone.user_protections = Vec::with_capacity(self.user_protections.len());
+        if clone
+            .user_mappings
+            .try_reserve_exact(self.user_mappings.len())
+            .is_err()
+            || clone
+                .user_protections
+                .try_reserve_exact(self.user_protections.len())
+                .is_err()
+        {
+            clone.destroy();
+            return Err(PagingError::OutOfFrames);
+        }
         for &(virt, frame) in &self.user_mappings {
             let protection = match self.protection_for_page(virt) {
                 Some(protection) => protection,

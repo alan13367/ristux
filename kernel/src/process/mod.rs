@@ -1131,7 +1131,8 @@ impl ProcessTable {
 
 impl Process {
     fn duplicate_fd_entries(entries: &[FdEntry]) -> Option<Vec<FdEntry>> {
-        let mut duplicated = Vec::with_capacity(entries.len());
+        let mut duplicated = Vec::new();
+        duplicated.try_reserve_exact(entries.len()).ok()?;
         for entry in entries {
             let vfs_fd = match fs::duplicate_fd(entry.vfs_fd) {
                 Ok(vfs_fd) => vfs_fd,
@@ -1152,7 +1153,8 @@ impl Process {
     }
 
     fn duplicate_socket_handles(handles: &[usize]) -> Option<Vec<usize>> {
-        let mut duplicated = Vec::with_capacity(handles.len());
+        let mut duplicated = Vec::new();
+        duplicated.try_reserve_exact(handles.len()).ok()?;
         for handle in handles {
             let result = crate::net::socket::with_sockets(|table| table.duplicate(*handle));
             if result.is_err() {
@@ -1171,7 +1173,8 @@ impl Process {
     }
 
     fn duplicate_shared_mappings(mappings: &[SharedMapping]) -> Option<Vec<SharedMapping>> {
-        let mut duplicated = Vec::with_capacity(mappings.len());
+        let mut duplicated = Vec::new();
+        duplicated.try_reserve_exact(mappings.len()).ok()?;
         for mapping in mappings {
             let vfs_fd = match fs::duplicate_fd(mapping.vfs_fd) {
                 Ok(vfs_fd) => vfs_fd,
@@ -1191,7 +1194,16 @@ impl Process {
         }
     }
 
+    fn clone_string(value: &String) -> Option<String> {
+        let mut cloned = String::new();
+        cloned.try_reserve_exact(value.len()).ok()?;
+        cloned.push_str(value);
+        Some(cloned)
+    }
+
     fn clone_process(&self) -> Option<Self> {
+        let name = Self::clone_string(&self.name)?;
+        let cwd = Self::clone_string(&self.cwd)?;
         let address_space = self.address_space.clone_full_copy().ok()?;
         let fds = match Self::duplicate_fd_entries(&self.fds) {
             Some(fds) => fds,
@@ -1220,8 +1232,8 @@ impl Process {
         Some(Self {
             pid: self.pid,
             parent: self.parent,
-            name: self.name.clone(),
-            cwd: self.cwd.clone(),
+            name,
+            cwd,
             pgrp: self.pgrp,
             sid: self.sid,
             controlling_tty: self.controlling_tty,
