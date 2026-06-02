@@ -66,6 +66,21 @@ struct SharedMapping {
     writable: bool,
 }
 
+struct SharedMappingDiscard {
+    addr: usize,
+    range_end: usize,
+    fragments: Vec<SharedMapping>,
+    replacement: Vec<SharedMapping>,
+}
+
+impl SharedMappingDiscard {
+    fn close_fragments(&self) {
+        for fragment in &self.fragments {
+            let _ = fs::close(fragment.vfs_fd);
+        }
+    }
+}
+
 struct WakeList {
     pids: [Pid; MAX_WAKE_PIDS],
     len: usize,
@@ -844,44 +859,121 @@ impl Process {
         Ok(())
     }
 
-    fn discard_shared_mappings_range(&mut self, addr: usize, len: usize) {
-        let Some(range_end) = addr.checked_add(len) else {
-            return;
-        };
-        let mut retained = Vec::new();
-        for mapping in core::mem::take(&mut self.shared_mappings) {
+    fn prepare_shared_mappings_discard(
+        &self,
+        addr: usize,
+        len: usize,
+    ) -> Result<SharedMappingDiscard, SharedMappingError> {
+        let range_end = addr
+            .checked_add(len)
+            .ok_or(SharedMappingError::Vfs(fs::vfs::VfsError::BadFd))?;
+        let mut fragment_count = 0usize;
+        let mut replacement_count = 0usize;
+        for mapping in &self.shared_mappings {
             let mapping_end = mapping.addr.saturating_add(mapping.len);
             let start = cmp::max(addr, mapping.addr);
             let end = cmp::min(range_end, mapping_end);
             if start >= end {
-                retained.push(mapping);
+                replacement_count = replacement_count
+                    .checked_add(1)
+                    .ok_or(SharedMappingError::OutOfMemory)?;
                 continue;
             }
             if mapping.addr < start {
-                if let Ok(dup) = fs::duplicate_fd(mapping.vfs_fd) {
-                    retained.push(SharedMapping {
+                fragment_count = fragment_count
+                    .checked_add(1)
+                    .ok_or(SharedMappingError::OutOfMemory)?;
+                replacement_count = replacement_count
+                    .checked_add(1)
+                    .ok_or(SharedMappingError::OutOfMemory)?;
+            }
+            if end < mapping_end {
+                fragment_count = fragment_count
+                    .checked_add(1)
+                    .ok_or(SharedMappingError::OutOfMemory)?;
+                replacement_count = replacement_count
+                    .checked_add(1)
+                    .ok_or(SharedMappingError::OutOfMemory)?;
+            }
+        }
+
+        let mut discard = SharedMappingDiscard {
+            addr,
+            range_end,
+            fragments: Vec::new(),
+            replacement: Vec::new(),
+        };
+        discard
+            .fragments
+            .try_reserve_exact(fragment_count)
+            .map_err(|_| SharedMappingError::OutOfMemory)?;
+        discard
+            .replacement
+            .try_reserve_exact(replacement_count)
+            .map_err(|_| SharedMappingError::OutOfMemory)?;
+
+        for mapping in &self.shared_mappings {
+            let mapping_end = mapping.addr.saturating_add(mapping.len);
+            let start = cmp::max(addr, mapping.addr);
+            let end = cmp::min(range_end, mapping_end);
+            if start >= end {
+                continue;
+            }
+            if mapping.addr < start {
+                match fs::duplicate_fd(mapping.vfs_fd) {
+                    Ok(dup) => discard.fragments.push(SharedMapping {
                         addr: mapping.addr,
                         len: start - mapping.addr,
                         file_offset: mapping.file_offset,
                         vfs_fd: dup,
                         writable: mapping.writable,
-                    });
+                    }),
+                    Err(err) => {
+                        discard.close_fragments();
+                        return Err(SharedMappingError::Vfs(err));
+                    }
                 }
             }
             if end < mapping_end {
-                if let Ok(dup) = fs::duplicate_fd(mapping.vfs_fd) {
-                    retained.push(SharedMapping {
+                match fs::duplicate_fd(mapping.vfs_fd) {
+                    Ok(dup) => discard.fragments.push(SharedMapping {
                         addr: end,
                         len: mapping_end - end,
                         file_offset: mapping.file_offset + (end - mapping.addr),
                         vfs_fd: dup,
                         writable: mapping.writable,
-                    });
+                    }),
+                    Err(err) => {
+                        discard.close_fragments();
+                        return Err(SharedMappingError::Vfs(err));
+                    }
                 }
+            }
+        }
+        Ok(discard)
+    }
+
+    fn commit_shared_mappings_discard(&mut self, mut discard: SharedMappingDiscard) {
+        let mut fragment_index = 0usize;
+        for mapping in &self.shared_mappings {
+            let mapping_end = mapping.addr.saturating_add(mapping.len);
+            let start = cmp::max(discard.addr, mapping.addr);
+            let end = cmp::min(discard.range_end, mapping_end);
+            if start >= end {
+                discard.replacement.push(*mapping);
+                continue;
+            }
+            if mapping.addr < start {
+                discard.replacement.push(discard.fragments[fragment_index]);
+                fragment_index += 1;
+            }
+            if end < mapping_end {
+                discard.replacement.push(discard.fragments[fragment_index]);
+                fragment_index += 1;
             }
             let _ = fs::close(mapping.vfs_fd);
         }
-        self.shared_mappings = retained;
+        self.shared_mappings = discard.replacement;
     }
 
     fn register_shared_mapping(
@@ -3083,6 +3175,13 @@ fn map_paging_mmap_error(err: paging::PagingError) -> MmapError {
     }
 }
 
+fn map_shared_mapping_mmap_error(err: SharedMappingError) -> MmapError {
+    match err {
+        SharedMappingError::OutOfMemory => MmapError::OutOfMemory,
+        SharedMappingError::Vfs(err) => MmapError::Vfs(err),
+    }
+}
+
 pub fn mmap_anonymous(
     hint: usize,
     len: usize,
@@ -3100,10 +3199,14 @@ pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result
     with_current(|p| {
         p.flush_shared_mappings_range(addr, len)
             .map_err(MmapError::Vfs)?;
-        p.address_space
-            .map_fixed(addr, len, protection)
-            .map_err(map_paging_mmap_error)?;
-        p.discard_shared_mappings_range(addr, len);
+        let discard = p
+            .prepare_shared_mappings_discard(addr, len)
+            .map_err(map_shared_mapping_mmap_error)?;
+        if let Err(err) = p.address_space.map_fixed(addr, len, protection) {
+            discard.close_fragments();
+            return Err(map_paging_mmap_error(err));
+        }
+        p.commit_shared_mappings_discard(discard);
         Ok(addr)
     })
     .ok_or(MmapError::Invalid)?
@@ -3113,10 +3216,14 @@ pub fn munmap(addr: usize, len: usize) -> Result<(), MmapError> {
     with_current(|p| {
         p.flush_shared_mappings_range(addr, len)
             .map_err(MmapError::Vfs)?;
-        p.address_space
-            .unmap_user_range(addr, len)
-            .map_err(map_paging_mmap_error)?;
-        p.discard_shared_mappings_range(addr, len);
+        let discard = p
+            .prepare_shared_mappings_discard(addr, len)
+            .map_err(map_shared_mapping_mmap_error)?;
+        if let Err(err) = p.address_space.unmap_user_range(addr, len) {
+            discard.close_fragments();
+            return Err(map_paging_mmap_error(err));
+        }
+        p.commit_shared_mappings_discard(discard);
         Ok(())
     })
     .ok_or(MmapError::Invalid)?
