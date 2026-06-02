@@ -575,6 +575,11 @@ impl AddressSpace {
     fn break_cow_page(&mut self, page: usize) -> Result<(), PagingError> {
         let pte = unsafe { paging::get_pte_mut(self.p4, page).ok_or(PagingError::NotMapped)? };
         let old_frame_phys = (*pte & paging::ADDR_MASK) as usize;
+        let mapping_pos = self
+            .user_mappings
+            .iter()
+            .position(|(virt, _)| *virt == page)
+            .ok_or(PagingError::NotMapped)?;
         let ref_count = super::refcount::get(old_frame_phys);
         let mut flags = *pte & !paging::ADDR_MASK;
         flags |= paging::WRITABLE_FLAG;
@@ -600,17 +605,8 @@ impl AddressSpace {
         }
         crate::smp::send_tlb_shootdown();
 
-        if let Some(pos) = self
-            .user_mappings
-            .iter()
-            .position(|(virt, _)| *virt == page)
-        {
-            self.user_mappings[pos] = (page, new_frame);
-            Ok(())
-        } else {
-            frame_allocator::free_frame(new_frame);
-            Err(PagingError::NotMapped)
-        }
+        self.user_mappings[mapping_pos] = (page, new_frame);
+        Ok(())
     }
 
     fn protection_for_page(&self, page: usize) -> Option<UserProtection> {
