@@ -7,6 +7,7 @@ pub const IGNORE_HANDLER: usize = 1;
 pub enum Signal {
     Term,
     Kill,
+    Stop,
     Int,
     Usr1,
     Usr2,
@@ -22,6 +23,7 @@ impl Signal {
         match number {
             15 => Some(Self::Term),
             9 => Some(Self::Kill),
+            19 => Some(Self::Stop),
             2 => Some(Self::Int),
             10 => Some(Self::Usr1),
             12 => Some(Self::Usr2),
@@ -38,6 +40,7 @@ impl Signal {
         match self {
             Self::Term => 15,
             Self::Kill => 9,
+            Self::Stop => 19,
             Self::Int => 2,
             Self::Usr1 => 10,
             Self::Usr2 => 12,
@@ -61,6 +64,7 @@ pub fn init() {
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
     let delivered = match signal {
         Signal::Kill
+        | Signal::Stop
         | Signal::Term
         | Signal::Int
         | Signal::Usr1
@@ -102,6 +106,7 @@ fn self_test() {
         panic!("signal self-test wait status failed");
     }
     let _ = Signal::Kill.default_status();
+    let _ = Signal::Stop.default_status();
     let _ = Signal::Child.number();
     let _ = Signal::Pipe.number();
     crate::println!("Signals self-test passed.");

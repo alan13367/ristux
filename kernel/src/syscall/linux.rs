@@ -428,7 +428,8 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
         return false;
     };
     if signum != 0 {
-        let uncatchable = signum == crate::signal::Signal::Kill.number() as usize;
+        let uncatchable = signum == crate::signal::Signal::Kill.number() as usize
+            || signum == crate::signal::Signal::Stop.number() as usize;
         if !uncatchable {
             let handler =
                 process::signal_handler(pid, signum).unwrap_or(crate::signal::DEFAULT_HANDLER);
@@ -441,7 +442,9 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
                 return true;
             }
         }
-        if signum == crate::signal::Signal::Tstp.number() as usize {
+        if signum == crate::signal::Signal::Tstp.number() as usize
+            || signum == crate::signal::Signal::Stop.number() as usize
+        {
             let saved = saved_from_linux_frame(frame);
             process::save_syscall_frame(pid, &saved);
             process::stop_current_signal(pid, signum as u8);
@@ -3268,7 +3271,10 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
     if signum == 0 || signum >= 32 {
         return Err(EINVAL);
     }
-    if act != 0 && signum == crate::signal::Signal::Kill.number() as usize {
+    if act != 0
+        && (signum == crate::signal::Signal::Kill.number() as usize
+            || signum == crate::signal::Signal::Stop.number() as usize)
+    {
         return Err(EINVAL);
     }
     let pid = process::current_pid().ok_or(ESRCH)?;

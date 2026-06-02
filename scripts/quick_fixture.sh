@@ -250,6 +250,7 @@ case "$SCENARIO" in
       "^cc_signal: sigchld ok$"
       "^cc_signal: external handler ok$"
       "^cc_signal: sigkill ok$"
+      "^cc_signal: sigstop ok$"
       "^cc_signal: stop wait once ok$"
       "^cc_signal: ignore ok$"
       "^cc_signal: after handler$"

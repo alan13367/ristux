@@ -150,6 +150,51 @@ static int check_sigkill_uncatchable(void) {
     return 0;
 }
 
+static int check_sigstop_uncatchable(void) {
+    errno = 0;
+    if (signal(SIGSTOP, SIG_IGN) != SIG_ERR || errno != EINVAL) {
+        puts("cc_signal: sigstop disposition failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: sigstop fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        sigset_t mask;
+        if (sigemptyset(&mask) < 0 ||
+            sigaddset(&mask, SIGSTOP) < 0 ||
+            sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
+            _exit(2);
+        }
+        raise(SIGSTOP);
+        for (;;) {
+            syscall(SYS_sched_yield);
+        }
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGSTOP) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigstop stop failed");
+        return 1;
+    }
+    if (kill(child, SIGCONT) < 0 || kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGTERM) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigstop cleanup failed");
+        return 1;
+    }
+    puts("cc_signal: sigstop ok");
+    return 0;
+}
+
 static int check_external_signal_handler(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -372,6 +417,7 @@ int main(void) {
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||
+        check_sigstop_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||
         check_ignored_signals() != 0) {
         return 1;

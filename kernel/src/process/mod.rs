@@ -192,11 +192,15 @@ fn signal_from_legacy_status(status: i32) -> Option<u8> {
     }
 }
 
+fn is_uncatchable_signal(signal: u8) -> bool {
+    signal == crate::signal::Signal::Kill.number() || signal == crate::signal::Signal::Stop.number()
+}
+
 fn is_ignored_signal(process: &Process, status: i32) -> bool {
     let Some(signal) = signal_from_legacy_status(status) else {
         return false;
     };
-    if signal == crate::signal::Signal::Kill.number() {
+    if is_uncatchable_signal(signal) {
         return false;
     }
     let handler = process
@@ -227,7 +231,7 @@ fn should_queue_signal(process: &Process, status: i32, current: Option<Pid>) -> 
     let Some(signal) = signal_from_legacy_status(status) else {
         return false;
     };
-    if signal == crate::signal::Signal::Kill.number() {
+    if is_uncatchable_signal(signal) {
         return false;
     }
     let masked = signal < 64 && process.signal_mask & (1u64 << signal) != 0;
@@ -1538,7 +1542,10 @@ pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
         let status = process.pending_signal_status?;
         if status >= 128 {
             let signal = (status - 128) as u64;
-            if signal < 64 && process.signal_mask & (1 << signal) != 0 {
+            if signal < 64
+                && !is_uncatchable_signal(signal as u8)
+                && process.signal_mask & (1 << signal) != 0
+            {
                 return None;
             }
         }
@@ -1563,7 +1570,8 @@ pub fn current_pending_signals() -> Option<u64> {
 }
 
 pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
-    const UNBLOCKABLE: u64 = 1 << crate::signal::Signal::Kill.number();
+    const UNBLOCKABLE: u64 =
+        (1 << crate::signal::Signal::Kill.number()) | (1 << crate::signal::Signal::Stop.number());
     with_current(|p| {
         let old = p.signal_mask;
         p.signal_mask = mask & !UNBLOCKABLE;
