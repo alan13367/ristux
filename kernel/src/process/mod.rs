@@ -771,29 +771,39 @@ impl Process {
             return Err(fs::vfs::VfsError::BadFd);
         };
         for mapping in &self.shared_mappings {
-            if !mapping.writable {
-                continue;
-            }
-            let mapping_end = mapping.addr.saturating_add(mapping.len);
-            let start = cmp::max(addr, mapping.addr);
-            let end = cmp::min(range_end, mapping_end);
-            if start >= end {
-                continue;
-            }
-            if !self.allows_user_read(start, end - start) {
+            self.flush_shared_mapping_range(mapping, addr, range_end)?;
+        }
+        Ok(())
+    }
+
+    fn flush_shared_mapping_range(
+        &self,
+        mapping: &SharedMapping,
+        addr: usize,
+        range_end: usize,
+    ) -> Result<(), fs::vfs::VfsError> {
+        if !mapping.writable {
+            return Ok(());
+        }
+        let mapping_end = mapping.addr.saturating_add(mapping.len);
+        let start = cmp::max(addr, mapping.addr);
+        let end = cmp::min(range_end, mapping_end);
+        if start >= end {
+            return Ok(());
+        }
+        if !self.allows_user_read(start, end - start) {
+            return Err(fs::vfs::VfsError::BadFd);
+        }
+        let file_offset = mapping.file_offset + (start - mapping.addr);
+        fs::lseek(mapping.vfs_fd, file_offset as isize, 0)?;
+        let bytes = unsafe { slice::from_raw_parts(start as *const u8, end - start) };
+        let mut written = 0usize;
+        while written < bytes.len() {
+            let count = fs::write(mapping.vfs_fd, &bytes[written..])?;
+            if count == 0 {
                 return Err(fs::vfs::VfsError::BadFd);
             }
-            let file_offset = mapping.file_offset + (start - mapping.addr);
-            fs::lseek(mapping.vfs_fd, file_offset as isize, 0)?;
-            let bytes = unsafe { slice::from_raw_parts(start as *const u8, end - start) };
-            let mut written = 0usize;
-            while written < bytes.len() {
-                let count = fs::write(mapping.vfs_fd, &bytes[written..])?;
-                if count == 0 {
-                    return Err(fs::vfs::VfsError::BadFd);
-                }
-                written += count;
-            }
+            written += count;
         }
         Ok(())
     }
@@ -858,11 +868,15 @@ impl Process {
     }
 
     fn flush_and_close_shared_mappings(&mut self) {
-        let mappings = self.shared_mappings.clone();
-        for mapping in &mappings {
-            let _ = self.flush_shared_mappings_range(mapping.addr, mapping.len);
+        let mappings = core::mem::take(&mut self.shared_mappings);
+        if current_pid() == Some(self.pid) {
+            for mapping in &mappings {
+                if let Some(range_end) = mapping.addr.checked_add(mapping.len) {
+                    let _ = self.flush_shared_mapping_range(mapping, mapping.addr, range_end);
+                }
+            }
         }
-        for mapping in core::mem::take(&mut self.shared_mappings) {
+        for mapping in mappings {
             let _ = fs::close(mapping.vfs_fd);
         }
     }
