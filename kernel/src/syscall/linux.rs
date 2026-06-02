@@ -3358,6 +3358,7 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
         if slice[0] == 0 {
             return String::from_utf8(buf).ok();
         }
+        buf.try_reserve(1).ok()?;
         buf.push(slice[0]);
         offset += 1;
     }
@@ -3415,12 +3416,14 @@ fn align8(value: usize) -> usize {
 #[derive(Clone, Copy)]
 enum UserVectorError {
     BadAddress,
+    OutOfMemory,
     TooManyEntries,
 }
 
 fn map_user_vector_error(err: UserVectorError) -> i64 {
     match err {
         UserVectorError::BadAddress => EFAULT,
+        UserVectorError::OutOfMemory => ENOMEM,
         UserVectorError::TooManyEntries => E2BIG,
     }
 }
@@ -3445,6 +3448,8 @@ fn read_user_argv(argv_ptr: usize) -> Result<Vec<alloc::string::String>, UserVec
         if index >= process::MAX_USER_ARGS {
             return Err(UserVectorError::TooManyEntries);
         }
+        args.try_reserve(1)
+            .map_err(|_| UserVectorError::OutOfMemory)?;
         args.push(read_user_cstr(arg_ptr).ok_or(UserVectorError::BadAddress)?);
         index += 1;
     }
@@ -3474,6 +3479,8 @@ fn read_user_envp(envp_ptr: usize) -> Result<Vec<alloc::string::String>, UserVec
         if index >= process::MAX_USER_ENVS {
             return Err(UserVectorError::TooManyEntries);
         }
+        env.try_reserve(1)
+            .map_err(|_| UserVectorError::OutOfMemory)?;
         env.push(read_user_cstr(entry_ptr).ok_or(UserVectorError::BadAddress)?);
         index += 1;
     }
