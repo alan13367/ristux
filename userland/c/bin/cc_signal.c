@@ -1,6 +1,8 @@
 #include <signal.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static volatile int saw_signal;
@@ -81,6 +83,40 @@ int main(void) {
         return 1;
     }
     puts("cc_signal: mask ok");
+    errno = 0;
+    if (kill(getpid(), 256) != -1 || errno != EINVAL) {
+        puts("cc_signal: invalid signal failed");
+        return 1;
+    }
+
+    pid_t parent = getpid();
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: permission fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        if (setuid(100) < 0) {
+            _exit(2);
+        }
+        errno = 0;
+        if (kill(parent, 0) != -1 || errno != EPERM) {
+            _exit(3);
+        }
+        errno = 0;
+        if (kill(parent, SIGUSR1) != -1 || errno != EPERM) {
+            _exit(4);
+        }
+        _exit(0);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_signal: permission failed");
+        return 1;
+    }
+    puts("cc_signal: permission ok");
+
     puts("cc_signal: after handler");
     return 0;
 }

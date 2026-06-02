@@ -363,7 +363,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_statfs => linux_statfs(a0 as usize, a1 as usize),
         NR_fstatfs => linux_fstatfs(a0 as usize, a1 as usize),
         NR_mount => linux_mount(a0 as usize, a1 as usize, a2 as usize),
-        NR_kill => linux_kill(a0 as i64, a1 as u8),
+        NR_kill => linux_kill(a0 as i64, a1),
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
         NR_getgid => Ok(process::current_gid() as u64),
@@ -3104,30 +3104,62 @@ fn linux_mount(source_ptr: usize, target_ptr: usize, fstype_ptr: usize) -> Resul
         .map_err(map_vfs_error)
 }
 
-fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
-    if sig == 0 {
-        let exists = if pid < 0 {
-            !process::pids_in_pgrp((-pid) as u64).is_empty()
-        } else if pid == 0 {
-            process::current_pgrp()
-                .map(|pgrp| !process::pids_in_pgrp(pgrp).is_empty())
-                .unwrap_or(false)
-        } else {
-            process::get_process_info(pid as u64).is_some()
-        };
-        return if exists { Ok(0) } else { Err(ESRCH) };
-    }
-    let signal = crate::signal::Signal::from_number(sig).ok_or(EINVAL)?;
-    let delivered = if pid < 0 {
-        crate::signal::send_pgrp((-pid) as u64, signal)
-    } else if pid == 0 {
-        process::current_pgrp()
-            .map(|pgrp| crate::signal::send_pgrp(pgrp, signal))
-            .unwrap_or(false)
+fn linux_kill(pid: i64, sig: u64) -> Result<u64, i64> {
+    let signal = if sig == 0 {
+        None
     } else {
-        crate::signal::send(pid as u64, signal)
+        let sig = u8::try_from(sig).map_err(|_| EINVAL)?;
+        Some(crate::signal::Signal::from_number(sig).ok_or(EINVAL)?)
     };
-    if delivered { Ok(0) } else { Err(ESRCH) }
+    let targets = kill_targets(pid)?;
+    let mut permitted = false;
+    let mut delivered = false;
+    for target in targets {
+        if !process::can_signal_current(target, signal.map(|signal| signal.number()))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        permitted = true;
+        if let Some(signal) = signal {
+            delivered |= crate::signal::send(target, signal);
+        }
+    }
+    if !permitted {
+        return Err(EPERM);
+    }
+    if signal.is_some() && !delivered {
+        return Err(ESRCH);
+    }
+    Ok(0)
+}
+
+fn kill_targets(pid: i64) -> Result<Vec<process::Pid>, i64> {
+    let targets = if pid < -1 {
+        let pgrp = pid.checked_neg().ok_or(EINVAL)? as u64;
+        process::pids_in_pgrp(pgrp)
+    } else if pid == -1 {
+        let caller = process::current_pid().ok_or(ESRCH)?;
+        process::list_process_ids()
+            .into_iter()
+            .filter(|candidate| *candidate != caller && *candidate != 1)
+            .collect()
+    } else if pid == 0 {
+        let pgrp = process::current_pgrp().ok_or(ESRCH)?;
+        process::pids_in_pgrp(pgrp)
+    } else {
+        let target = pid as process::Pid;
+        if process::get_process_info(target).is_some() {
+            Vec::from([target])
+        } else {
+            Vec::new()
+        }
+    };
+    if targets.is_empty() {
+        Err(ESRCH)
+    } else {
+        Ok(targets)
+    }
 }
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {

@@ -1329,6 +1329,35 @@ pub fn signal_pgrp(pgrp: Pid, status: i32) -> bool {
     delivered
 }
 
+pub fn can_signal_current(target: Pid, signal: Option<u8>) -> Option<bool> {
+    let caller = current_pid()?;
+    with_table(|table| {
+        let caller_proc = table.get(caller)?;
+        let target_proc = table.get(target)?;
+        if caller == target || caller_proc.credentials.is_superuser() {
+            return Some(true);
+        }
+        if signal == Some(crate::signal::Signal::Cont.number())
+            && caller_proc.sid == target_proc.sid
+        {
+            return Some(true);
+        }
+        let caller_uid = caller_proc.credentials.uid;
+        let caller_euid = caller_proc.credentials.euid;
+        let target_uid = target_proc.credentials.uid;
+        let target_euid = target_proc.credentials.euid;
+        let target_suid = target_proc.credentials.suid;
+        Some(
+            caller_uid == target_uid
+                || caller_uid == target_euid
+                || caller_uid == target_suid
+                || caller_euid == target_uid
+                || caller_euid == target_euid
+                || caller_euid == target_suid,
+        )
+    })
+}
+
 pub fn current_pgrp() -> Option<Pid> {
     with_current_read(|process| process.pgrp)
 }
