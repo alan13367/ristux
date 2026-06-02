@@ -86,6 +86,32 @@ static int check_wait_errors(void) {
     return 0;
 }
 
+static int check_wait_bad_status_pointer(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_session: wait bad status fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        _exit(7);
+    }
+
+    errno = 0;
+    if (waitpid(child, (int *)1, 0) != -1 || errno != EFAULT) {
+        puts("cc_session: wait bad status pointer failed");
+        return 1;
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 7) {
+        puts("cc_session: wait bad status retry failed");
+        return 1;
+    }
+    puts("cc_session: wait bad status ok");
+    return 0;
+}
+
 int main(void) {
     if (check_group_leader_rejected() != 0) {
         return 1;
@@ -97,6 +123,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_errors() != 0) {
+        return 1;
+    }
+    if (check_wait_bad_status_pointer() != 0) {
         return 1;
     }
     puts("cc_session: done");

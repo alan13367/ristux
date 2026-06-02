@@ -2080,17 +2080,21 @@ fn linux_wait4(
     let include_stopped = options & WUNTRACED != 0;
 
     loop {
-        match process::wait_any(parent, child, include_stopped) {
+        match process::peek_wait_any(parent, child, include_stopped) {
             Some((waited_pid, status)) => {
+                let encoded = match status {
+                    process::WaitStatus::Exited(status) => (status & 0xff) << 8,
+                    process::WaitStatus::Signaled(signal) => signal as i32,
+                    process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
+                };
                 if status_ptr != 0 {
-                    if let Some(out) = process::write_user_buffer(status_ptr, 4) {
-                        let encoded = match status {
-                            process::WaitStatus::Exited(status) => (status & 0xff) << 8,
-                            process::WaitStatus::Signaled(signal) => signal as i32,
-                            process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
-                        };
-                        out.copy_from_slice(&(encoded as u32).to_le_bytes());
-                    }
+                    let out = process::write_user_buffer(status_ptr, 4).ok_or(EFAULT)?;
+                    out.copy_from_slice(&(encoded as u32).to_le_bytes());
+                }
+                if !matches!(status, process::WaitStatus::Stopped(_))
+                    && !process::reap_waited_zombie(parent, waited_pid)
+                {
+                    return Err(ECHILD);
                 }
                 return Ok(waited_pid as u64);
             }

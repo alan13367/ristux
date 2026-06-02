@@ -2608,9 +2608,10 @@ pub fn current_heap_break() -> usize {
     with_current_read(|p| p.address_space.heap_break).unwrap_or(0)
 }
 
-/// Wait for any child matching `child` (0 = any). Zombies are reaped; stopped
-/// children are reported when requested and left waitable for a later `fg`.
-pub fn wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, WaitStatus)> {
+/// Find any waitable child matching `child` (0 = any). Zombies are only
+/// reported here; callers must reap them after userspace status copy succeeds.
+/// Stopped children remain waitable for a later `fg`.
+pub fn peek_wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, WaitStatus)> {
     with_table(|table| {
         if include_stopped {
             let stopped = table
@@ -2632,28 +2633,35 @@ pub fn wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, 
             }
         }
 
-        let candidates: Vec<Pid> = table
-            .processes
-            .iter()
-            .filter(|p| {
-                p.parent == Some(parent)
-                    && (child == 0 || p.pid == child)
-                    && matches!(p.state, ProcessState::Zombie(_))
-            })
-            .map(|p| p.pid)
-            .collect();
-        if let Some(&zombie_pid) = candidates.first() {
-            let status = match table.get(zombie_pid)?.state {
+        let zombie = table.processes.iter().find(|p| {
+            p.parent == Some(parent)
+                && (child == 0 || p.pid == child)
+                && matches!(p.state, ProcessState::Zombie(_))
+        });
+        if let Some(process) = zombie {
+            let status = match process.state {
                 ProcessState::Zombie(reason) => match reason {
                     ExitReason::Exited(status) => WaitStatus::Exited(status),
                     ExitReason::Signaled(signal) => WaitStatus::Signaled(signal),
                 },
                 _ => return None,
             };
-            table.reap(zombie_pid);
-            return Some((zombie_pid, status));
+            return Some((process.pid, status));
         }
         None
+    })
+}
+
+pub fn reap_waited_zombie(parent: Pid, child: Pid) -> bool {
+    with_table(|table| {
+        let Some(process) = table.get(child) else {
+            return false;
+        };
+        if process.parent != Some(parent) || !matches!(process.state, ProcessState::Zombie(_)) {
+            return false;
+        }
+        table.reap(child);
+        true
     })
 }
 
