@@ -3366,8 +3366,6 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
 }
 
 fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::string::String, i64> {
-    use alloc::format;
-
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
     if path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
@@ -3391,11 +3389,31 @@ fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::str
         other => map_vfs_error(other),
     })?;
     let base = fs::fd_path(vfs_fd).map_err(map_vfs_error)?;
-    Ok(if base == "/" {
-        format!("/{}", path)
+    join_at_path(&base, &path)
+}
+
+fn join_at_path(base: &str, path: &str) -> Result<alloc::string::String, i64> {
+    use alloc::string::String;
+
+    let base = base.trim_end_matches('/');
+    let len = if base.is_empty() {
+        1usize.checked_add(path.len()).ok_or(ENOMEM)?
     } else {
-        format!("{}/{}", base.trim_end_matches('/'), path)
-    })
+        base.len()
+            .checked_add(1)
+            .and_then(|len| len.checked_add(path.len()))
+            .ok_or(ENOMEM)?
+    };
+    let mut joined = String::new();
+    joined.try_reserve_exact(len).map_err(|_| ENOMEM)?;
+    if base.is_empty() {
+        joined.push('/');
+    } else {
+        joined.push_str(base);
+        joined.push('/');
+    }
+    joined.push_str(path);
+    Ok(joined)
 }
 
 fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
