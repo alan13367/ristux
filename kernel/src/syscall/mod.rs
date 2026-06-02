@@ -43,6 +43,7 @@ const EACCES: i64 = -13;
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
 const EEXIST: i64 = -17;
+const EMFILE: i64 = -24;
 const EINVAL: i64 = -22;
 const ENOENT: i64 = -2;
 const ESRCH: i64 = -3;
@@ -672,6 +673,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
         VfsError::AlreadyExists => SyscallError(EEXIST),
         VfsError::PermissionDenied => SyscallError(EACCES),
         VfsError::WouldBlock => SyscallError(EAGAIN),
+        VfsError::TooManyOpenFiles => SyscallError(EMFILE),
     }
 }
 

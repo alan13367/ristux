@@ -5,9 +5,9 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, UserProtection},
+        address_space::{AddressSpace, UserAccess, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
-        paging::{self, PageFlags},
+        paging,
     },
     security::{Access, Credentials, FileMetadata},
     sync::spinlock::SpinLock,
@@ -142,6 +142,26 @@ pub enum WaitStatus {
     Stopped(u8),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecError {
+    NotFound,
+    PermissionDenied,
+    InvalidImage,
+    TooManyArguments,
+    OutOfMemory,
+}
+
+impl From<elf::ElfError> for ExecError {
+    fn from(err: elf::ElfError) -> Self {
+        match err {
+            elf::ElfError::TooSmall | elf::ElfError::BadMagic | elf::ElfError::OutOfBounds => {
+                Self::InvalidImage
+            }
+            elf::ElfError::Unsupported => Self::InvalidImage,
+        }
+    }
+}
+
 impl Process {
     fn new_user(pid: Pid, parent: Option<Pid>, name: &str, credentials: Credentials) -> Self {
         let address_space =
@@ -191,7 +211,7 @@ impl Process {
     }
 
     fn set_fd(&mut self, user_fd: usize, vfs_fd: usize) {
-        self.set_fd_with_flags(user_fd, vfs_fd, 0, 0);
+        let _ = self.set_fd_with_flags(user_fd, vfs_fd, 0, 0);
     }
 
     fn set_fd_with_flags(
@@ -200,15 +220,18 @@ impl Process {
         vfs_fd: usize,
         status_flags: u32,
         fd_flags: u32,
-    ) {
+    ) -> Result<(), ()> {
+        if user_fd >= self.fd_limit() {
+            return Err(());
+        }
         if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             entry.vfs_fd = vfs_fd;
             entry.status_flags = status_flags;
             entry.fd_flags = fd_flags;
-            return;
+            return Ok(());
         }
         if self.fds.len() >= MAX_FDS {
-            panic!("too many file descriptors");
+            return Err(());
         }
         self.fds.push(FdEntry {
             user_fd,
@@ -219,6 +242,7 @@ impl Process {
         if user_fd >= self.next_fd {
             self.next_fd = user_fd + 1;
         }
+        Ok(())
     }
 
     fn lookup_fd(&self, user_fd: usize) -> Option<usize> {
@@ -228,28 +252,39 @@ impl Process {
             .map(|e| e.vfs_fd)
     }
 
-    fn push_fd(&mut self, vfs_fd: usize) -> usize {
+    fn push_fd(&mut self, vfs_fd: usize) -> Result<usize, ()> {
         self.push_fd_with_flags(vfs_fd, 0)
     }
 
-    fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> usize {
+    fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> Result<usize, ()> {
         self.push_fd_with_all_flags(vfs_fd, status_flags, 0)
     }
 
-    fn push_fd_with_all_flags(&mut self, vfs_fd: usize, status_flags: u32, fd_flags: u32) -> usize {
-        let user_fd = self.lowest_available_fd();
-        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags);
-        user_fd
+    fn push_fd_with_all_flags(
+        &mut self,
+        vfs_fd: usize,
+        status_flags: u32,
+        fd_flags: u32,
+    ) -> Result<usize, ()> {
+        let user_fd = self.lowest_available_fd().ok_or(())?;
+        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags)?;
+        Ok(user_fd)
     }
 
-    fn lowest_available_fd(&self) -> usize {
+    fn lowest_available_fd(&self) -> Option<usize> {
+        let limit = self.fd_limit();
         let mut candidate = 0;
-        loop {
+        while candidate < limit {
             if self.fds.iter().all(|entry| entry.user_fd != candidate) {
-                return candidate;
+                return Some(candidate);
             }
             candidate += 1;
         }
+        None
+    }
+
+    fn fd_limit(&self) -> usize {
+        (self.rlimit_nofile_cur as usize).min(MAX_FDS)
     }
 
     fn remove_fd(&mut self, user_fd: usize) -> Option<usize> {
@@ -263,16 +298,19 @@ impl Process {
         vfs_fd: usize,
         status_flags: u32,
         fd_flags: u32,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, ()> {
+        if user_fd >= self.fd_limit() {
+            return Err(());
+        }
         if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             let old = entry.vfs_fd;
             entry.vfs_fd = vfs_fd;
             entry.status_flags = status_flags;
             entry.fd_flags = fd_flags;
-            return Some(old);
+            return Ok(Some(old));
         }
-        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags);
-        None
+        self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags)?;
+        Ok(None)
     }
 
     fn status_flags(&self, user_fd: usize) -> Option<u32> {
@@ -386,34 +424,60 @@ impl Process {
         }
     }
 
-    fn allows(&self, addr: usize, len: usize) -> bool {
-        self.address_space.allows(addr, len)
+    fn allows_user_read(&self, addr: usize, len: usize) -> bool {
+        self.address_space.allows_user(addr, len, UserAccess::Read)
     }
 
-    fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, elf::ElfError> {
+    fn prepare_user_write(&mut self, addr: usize, len: usize) -> bool {
+        if !self.address_space.allows_user(addr, len, UserAccess::Write) {
+            return false;
+        }
+        self.address_space.ensure_user_writable(addr, len).is_ok()
+    }
+
+    fn load_elf(&mut self, path: &str, data: &[u8]) -> Result<u64, ExecError> {
         let mut checked_segments = 0;
         let checked_entry = elf::for_each_load_segment(data, |_| {
             checked_segments += 1;
-        })?;
+        })
+        .map_err(ExecError::from)?;
         if checked_segments == 0 {
-            return Err(elf::ElfError::Unsupported);
+            return Err(ExecError::InvalidImage);
+        }
+
+        let mut new_space = AddressSpace::new_kernel_clone().map_err(|_| ExecError::OutOfMemory)?;
+        new_space.activate();
+        let mut segments = 0;
+        let mut load_error = None;
+        let map_result = elf::for_each_load_segment(data, |segment| {
+            if load_error.is_some() {
+                return;
+            }
+            match map_elf_segment(&mut new_space, segment) {
+                Ok(()) => segments += 1,
+                Err(err) => load_error = Some(err),
+            }
+        });
+        if let Err(err) = map_result {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(ExecError::from(err));
+        }
+        if let Some(err) = load_error {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(err);
+        }
+        if segments != checked_segments || segments == 0 {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(ExecError::OutOfMemory);
         }
 
         self.flush_and_close_shared_mappings();
-        let old = core::mem::replace(
-            &mut self.address_space,
-            AddressSpace::new_kernel_clone().map_err(|_| elf::ElfError::Unsupported)?,
-        );
+        let old = core::mem::replace(&mut self.address_space, new_space);
         old.destroy();
         self.address_space.activate();
-        let mut segments = 0;
-        let _entry = elf::for_each_load_segment(data, |segment| {
-            map_elf_segment(&mut self.address_space, segment);
-            segments += 1;
-        })?;
-        if segments == 0 {
-            return Err(elf::ElfError::Unsupported);
-        }
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
         self.name = String::from(path);
@@ -421,40 +485,40 @@ impl Process {
         Ok(checked_entry)
     }
 
-    fn setup_stack(&mut self, args: &[&str]) {
-        self.setup_stack_with_env(args, &[]);
+    fn setup_stack(&mut self, args: &[&str]) -> Result<(), ExecError> {
+        self.setup_stack_with_env(args, &[])
     }
 
-    fn setup_stack_with_env(&mut self, args: &[&str], env: &[&str]) {
+    fn setup_stack_with_env(&mut self, args: &[&str], env: &[&str]) -> Result<(), ExecError> {
         self.address_space.activate();
         if args.len() > MAX_USER_ARGS {
-            panic!("too many user arguments");
+            return Err(ExecError::TooManyArguments);
         }
         if env.len() > MAX_USER_ENVS {
-            panic!("too many user environment entries");
+            return Err(ExecError::TooManyArguments);
         }
         let stack_top = paging::USER_STACK_TOP;
         let stack_bottom = stack_top - FRAME_SIZE;
         self.address_space
             .map_zero_page(stack_bottom)
-            .expect("user stack map failed");
+            .map_err(|_| ExecError::OutOfMemory)?;
         self.address_space.stack_bottom = stack_bottom;
         self.address_space.stack_top = stack_top;
 
         let mut sp = stack_top;
         let mut arg_ptrs = [0usize; MAX_USER_ARGS];
         for (index, arg) in args.iter().enumerate() {
-            arg_ptrs[index] = self.push_stack_string(&mut sp, arg);
+            arg_ptrs[index] = self.push_stack_string(&mut sp, arg)?;
         }
         let mut env_ptrs = [0usize; MAX_USER_ENVS];
         for (index, entry) in env.iter().enumerate() {
-            env_ptrs[index] = self.push_stack_string(&mut sp, entry);
+            env_ptrs[index] = self.push_stack_string(&mut sp, entry)?;
         }
 
         sp &= !0xf;
         let env_bytes = (env.len() + 1) * 8;
-        sp -= env_bytes;
-        self.ensure_stack_mapping(sp, env_bytes);
+        sp = sp.checked_sub(env_bytes).ok_or(ExecError::OutOfMemory)?;
+        self.ensure_stack_mapping(sp, env_bytes)?;
         let envp_ptr = sp;
         unsafe {
             for index in 0..env.len() {
@@ -464,8 +528,8 @@ impl Process {
         }
 
         let argv_bytes = (args.len() + 1) * 8;
-        sp -= argv_bytes;
-        self.ensure_stack_mapping(sp, argv_bytes);
+        sp = sp.checked_sub(argv_bytes).ok_or(ExecError::OutOfMemory)?;
+        self.ensure_stack_mapping(sp, argv_bytes)?;
         let argv_ptr = sp;
         unsafe {
             for index in 0..args.len() {
@@ -474,44 +538,48 @@ impl Process {
             *(argv_ptr as *mut u64).add(args.len()) = 0;
         }
 
-        sp = (sp & !0xf).saturating_sub(8);
-        self.ensure_stack_mapping(sp, 8);
+        sp = (sp & !0xf).checked_sub(8).ok_or(ExecError::OutOfMemory)?;
+        self.ensure_stack_mapping(sp, 8)?;
         self.stack_top = sp;
         self.argc = args.len();
         self.argv_ptr = argv_ptr;
         self.envp_ptr = envp_ptr;
+        Ok(())
     }
 
-    fn push_stack_string(&mut self, sp: &mut usize, text: &str) -> usize {
+    fn push_stack_string(&mut self, sp: &mut usize, text: &str) -> Result<usize, ExecError> {
         let bytes = text.as_bytes();
-        *sp -= bytes.len() + 1;
+        *sp = sp
+            .checked_sub(bytes.len().checked_add(1).ok_or(ExecError::OutOfMemory)?)
+            .ok_or(ExecError::OutOfMemory)?;
         *sp &= !0xf;
-        self.ensure_stack_mapping(*sp, bytes.len() + 1);
+        self.ensure_stack_mapping(*sp, bytes.len() + 1)?;
         unsafe {
             ptr::copy_nonoverlapping(bytes.as_ptr(), *sp as *mut u8, bytes.len());
             *(*sp as *mut u8).add(bytes.len()) = 0;
         }
-        *sp
+        Ok(*sp)
     }
 
-    fn ensure_stack_mapping(&mut self, addr: usize, len: usize) {
-        let end = addr.saturating_add(len.max(1));
+    fn ensure_stack_mapping(&mut self, addr: usize, len: usize) -> Result<(), ExecError> {
+        let end = addr.checked_add(len.max(1)).ok_or(ExecError::OutOfMemory)?;
         let mut page = paging::align_down(addr, FRAME_SIZE);
         let page_end = paging::align_up(end, FRAME_SIZE);
         while page < page_end {
             if page <= paging::USER_STACK_GUARD || page + FRAME_SIZE > paging::USER_STACK_TOP {
-                panic!("user stack exhausted");
+                return Err(ExecError::OutOfMemory);
             }
-            if !self.address_space.allows(page, FRAME_SIZE) {
+            if !self.address_space.is_user_mapped(page) {
                 self.address_space
                     .map_zero_page(page)
-                    .expect("user stack map failed");
+                    .map_err(|_| ExecError::OutOfMemory)?;
             }
             if page < self.address_space.stack_bottom {
                 self.address_space.stack_bottom = page;
             }
             page += FRAME_SIZE;
         }
+        Ok(())
     }
 
     fn flush_shared_mappings_range(
@@ -535,7 +603,7 @@ impl Process {
             if start >= end {
                 continue;
             }
-            if !self.allows(start, end - start) {
+            if !self.allows_user_read(start, end - start) {
                 return Err(fs::vfs::VfsError::BadFd);
             }
             let file_offset = mapping.file_offset + (start - mapping.addr);
@@ -700,7 +768,9 @@ impl ProcessTable {
         if process.load_elf(path, &data).is_err() {
             return false;
         }
-        process.setup_stack(args);
+        if process.setup_stack(args).is_err() {
+            return false;
+        }
         process.state = ProcessState::Ready;
         clear_current();
         true
@@ -937,6 +1007,12 @@ pub struct ExecInfo {
     pub envp_ptr: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FdInstallError {
+    Fault,
+    TooManyOpenFiles,
+}
+
 const MAX_SHEBANG_DEPTH: usize = 4;
 
 fn trim_ascii_bytes(mut bytes: &[u8]) -> &[u8] {
@@ -999,33 +1075,40 @@ fn exec_for_user_inner(
     args: &[&str],
     env: &[&str],
     depth: usize,
-) -> Option<ExecInfo> {
+) -> Result<ExecInfo, ExecError> {
     if depth > MAX_SHEBANG_DEPTH {
-        return None;
+        return Err(ExecError::InvalidImage);
     }
-    let metadata = fs::stat(path).ok()?;
-    let data = fs::read_file(path)?;
-    let index = table.processes.iter().position(|p| p.pid == pid)?;
+    let metadata = fs::stat(path).map_err(|_| ExecError::NotFound)?;
+    let data = fs::read_file(path).ok_or(ExecError::NotFound)?;
+    let index = table
+        .processes
+        .iter()
+        .position(|p| p.pid == pid)
+        .ok_or(ExecError::NotFound)?;
     let credentials = table.processes[index].credentials;
     let file = FileMetadata::new(metadata.owner, metadata.group, metadata.mode);
     if !file.can_access(credentials, Access::Execute) {
-        return None;
+        return Err(ExecError::PermissionDenied);
     }
 
     if let Some((interpreter, script_args)) = parse_shebang(path, &data, args) {
         let interpreter = if interpreter.starts_with('/') {
             interpreter
         } else {
-            resolve_process_path(&table.processes[index], &interpreter).ok()?
+            resolve_process_path(&table.processes[index], &interpreter)
+                .map_err(|_| ExecError::NotFound)?
         };
         let script_arg_refs: Vec<&str> = script_args.iter().map(|arg| arg.as_str()).collect();
         return exec_for_user_inner(table, pid, &interpreter, &script_arg_refs, env, depth + 1);
     }
 
     if data.get(0..4) != Some(b"\x7fELF") {
-        return None;
+        return Err(ExecError::InvalidImage);
     }
 
+    table.processes[index].load_elf(path, &data)?;
+    table.processes[index].setup_stack_with_env(args, env)?;
     let close_on_exec = table.processes[index].close_on_exec_fds();
     for fd in close_on_exec {
         let _ = fs::close(fd);
@@ -1035,10 +1118,6 @@ fn exec_for_user_inner(
         let _ = crate::net::socket::with_sockets(|socket_table| socket_table.close(handle));
     }
     // Preserve fds across exec except descriptors marked FD_CLOEXEC.
-    if table.processes[index].load_elf(path, &data).is_err() {
-        return None;
-    }
-    table.processes[index].setup_stack_with_env(args, env);
     if metadata.mode & 0o4000 != 0 {
         table.processes[index].credentials.euid = metadata.owner;
     }
@@ -1047,7 +1126,7 @@ fn exec_for_user_inner(
     }
     table.processes[index].state = ProcessState::Running;
     let p = &table.processes[index];
-    Some(ExecInfo {
+    Ok(ExecInfo {
         entry: p.entry,
         stack_top: p.stack_top,
         argc: p.argc,
@@ -1060,7 +1139,12 @@ fn exec_for_user_inner(
 /// `pid` with the program at `path`, preserves the existing file descriptors,
 /// and returns the entry/stack info so the syscall dispatcher can patch the
 /// outgoing iretq frame.
-pub fn exec_for_user(pid: Pid, path: &str, args: &[&str], env: &[&str]) -> Option<ExecInfo> {
+pub fn exec_for_user(
+    pid: Pid,
+    path: &str,
+    args: &[&str],
+    env: &[&str],
+) -> Result<ExecInfo, ExecError> {
     with_table(|table| exec_for_user_inner(table, pid, path, args, env, 0))
 }
 
@@ -1074,18 +1158,42 @@ pub fn install_pipe_fds_with_flags(
     write_vfs: usize,
     status_flags: u32,
     fd_flags: u32,
-) -> Result<(), ()> {
-    let parent = current_pid().ok_or(())?;
+) -> Result<(), FdInstallError> {
+    let Some(parent) = current_pid() else {
+        let _ = fs::close(read_vfs);
+        let _ = fs::close(write_vfs);
+        return Err(FdInstallError::Fault);
+    };
     let (user_read, user_write) = with_table(|table| {
-        let process = table.get_mut(parent).ok_or(())?;
-        let user_read = process.push_fd_with_all_flags(read_vfs, status_flags, fd_flags);
-        let user_write = process.push_fd_with_all_flags(write_vfs, status_flags, fd_flags);
+        let Some(process) = table.get_mut(parent) else {
+            let _ = fs::close(read_vfs);
+            let _ = fs::close(write_vfs);
+            return Err(FdInstallError::Fault);
+        };
+        let user_read = match process.push_fd_with_all_flags(read_vfs, status_flags, fd_flags) {
+            Ok(fd) => fd,
+            Err(()) => {
+                let _ = fs::close(read_vfs);
+                let _ = fs::close(write_vfs);
+                return Err(FdInstallError::TooManyOpenFiles);
+            }
+        };
+        let user_write = match process.push_fd_with_all_flags(write_vfs, status_flags, fd_flags) {
+            Ok(fd) => fd,
+            Err(()) => {
+                if let Some(vfs_fd) = process.remove_fd(user_read) {
+                    let _ = fs::close(vfs_fd);
+                }
+                let _ = fs::close(write_vfs);
+                return Err(FdInstallError::TooManyOpenFiles);
+            }
+        };
         Ok((user_read, user_write))
     })?;
     let Some(out) = write_user_buffer(pipefd, 8) else {
         let _ = user_close(user_read);
         let _ = user_close(user_write);
-        return Err(());
+        return Err(FdInstallError::Fault);
     };
     out[0..4].copy_from_slice(&(user_read as u32).to_le_bytes());
     out[4..8].copy_from_slice(&(user_write as u32).to_le_bytes());
@@ -1373,7 +1481,7 @@ pub fn read_user(addr: usize, len: usize) -> Option<&'static [u8]> {
         return Some(&[]);
     }
     with_current_read(|p| {
-        if !p.allows(addr, len) {
+        if !p.allows_user_read(addr, len) {
             return None;
         }
         Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
@@ -1385,7 +1493,7 @@ pub fn write_user_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
         return Some(&mut []);
     }
     with_current(|p| {
-        if !p.allows(addr, len) {
+        if !p.prepare_user_write(addr, len) {
             return None;
         }
         Some(unsafe { slice::from_raw_parts_mut(addr as *mut u8, len) })
@@ -1455,7 +1563,13 @@ pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
         let path = resolve_open_path(p, path)?;
         let vfs_fd = fs::open_read_as(&path, p.credentials)?;
-        Ok(p.push_fd(vfs_fd))
+        match p.push_fd(vfs_fd) {
+            Ok(fd) => Ok(fd),
+            Err(()) => {
+                let _ = fs::close(vfs_fd);
+                Err(fs::vfs::VfsError::TooManyOpenFiles)
+            }
+        }
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -1500,7 +1614,13 @@ pub fn user_open_options(
         if append {
             let _ = fs::lseek(vfs_fd, 0, 2);
         }
-        Ok(p.push_fd_with_flags(vfs_fd, status_flags))
+        match p.push_fd_with_flags(vfs_fd, status_flags) {
+            Ok(fd) => Ok(fd),
+            Err(()) => {
+                let _ = fs::close(vfs_fd);
+                Err(fs::vfs::VfsError::TooManyOpenFiles)
+            }
+        }
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -1510,7 +1630,13 @@ pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
         let path = resolve_process_path(p, path)?;
         let mode = 0o644 & !p.umask;
         let vfs_fd = fs::create_file_with_mode_as(&path, p.credentials, mode)?;
-        Ok(p.push_fd(vfs_fd))
+        match p.push_fd(vfs_fd) {
+            Ok(fd) => Ok(fd),
+            Err(()) => {
+                let _ = fs::close(vfs_fd);
+                Err(fs::vfs::VfsError::TooManyOpenFiles)
+            }
+        }
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -1573,7 +1699,13 @@ pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
         let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
-        Ok(p.push_fd_with_flags(dup, status_flags))
+        match p.push_fd_with_flags(dup, status_flags) {
+            Ok(fd) => Ok(fd),
+            Err(()) => {
+                let _ = fs::close(dup);
+                Err(fs::vfs::VfsError::TooManyOpenFiles)
+            }
+        }
     })
     .unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
@@ -1589,7 +1721,13 @@ pub fn user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::Vfs
         let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
-        let old = p.replace_fd_with_flags(target_fd, dup, status_flags, 0);
+        let old = match p.replace_fd_with_flags(target_fd, dup, status_flags, 0) {
+            Ok(old) => old,
+            Err(()) => {
+                let _ = fs::close(dup);
+                return Err(fs::vfs::VfsError::BadFd);
+            }
+        };
         if let Some(old) = old {
             fs::close(old)?;
         }
@@ -1610,7 +1748,13 @@ pub fn user_dup3(
         let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let vfs_fd = p.lookup_fd(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
         let dup = fs::duplicate_fd(vfs_fd)?;
-        let old = p.replace_fd_with_flags(target_fd, dup, status_flags, fd_flags);
+        let old = match p.replace_fd_with_flags(target_fd, dup, status_flags, fd_flags) {
+            Ok(old) => old,
+            Err(()) => {
+                let _ = fs::close(dup);
+                return Err(fs::vfs::VfsError::BadFd);
+            }
+        };
         if let Some(old) = old {
             fs::close(old)?;
         }
@@ -1758,54 +1902,14 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     let present = error_code & 0x1 != 0;
     let write_fault = error_code & 0x2 != 0;
 
-    // Handle Copy-on-Write faults first
+    // Handle Copy-on-Write faults first, but only when the mapping is still
+    // logically writable. Read-only and PROT_NONE mappings must fault.
     if present && write_fault && fault_addr < 0x8000_0000 {
         let cow_handled = with_current(|process| {
-            unsafe {
-                if let Some(pte) = paging::get_pte_mut(process.address_space.p4, fault_addr) {
-                    if *pte & paging::COW_FLAG != 0 {
-                        let old_frame_phys = (*pte & paging::ADDR_MASK) as usize;
-                        let ref_count = crate::memory::refcount::get(old_frame_phys);
-                        if ref_count == 1 {
-                            let mut flags = *pte & !paging::ADDR_MASK;
-                            flags |= paging::WRITABLE_FLAG;
-                            flags &= !paging::COW_FLAG;
-                            *pte = (*pte & paging::ADDR_MASK) | flags;
-                            paging::flush(fault_addr);
-                            crate::smp::send_tlb_shootdown();
-                            return true;
-                        } else {
-                            if let Some(new_frame) = frame_allocator::allocate_frame() {
-                                let fault_page_addr = paging::align_down(fault_addr, FRAME_SIZE);
-                                ptr::copy_nonoverlapping(
-                                    fault_page_addr as *const u8,
-                                    new_frame.start as *mut u8,
-                                    FRAME_SIZE,
-                                );
-                                crate::memory::refcount::decrement(old_frame_phys);
-                                let mut flags = *pte & !paging::ADDR_MASK;
-                                flags |= paging::WRITABLE_FLAG;
-                                flags &= !paging::COW_FLAG;
-                                *pte = new_frame.start as u64 | flags;
-                                paging::flush(fault_addr);
-                                crate::smp::send_tlb_shootdown();
-
-                                if let Some(pos) = process
-                                    .address_space
-                                    .user_mappings
-                                    .iter()
-                                    .position(|(v, _)| *v == fault_page_addr)
-                                {
-                                    process.address_space.user_mappings[pos] =
-                                        (fault_page_addr, new_frame);
-                                }
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            false
+            process
+                .address_space
+                .ensure_user_writable(fault_addr, 1)
+                .is_ok()
         })
         .unwrap_or(false);
 
@@ -1959,24 +2063,41 @@ pub fn stats() -> ProcessStats {
     })
 }
 
-fn map_elf_segment(address_space: &mut AddressSpace, segment: elf::SegmentView<'_>) {
+fn map_elf_segment(
+    address_space: &mut AddressSpace,
+    segment: elf::SegmentView<'_>,
+) -> Result<(), ExecError> {
+    const PF_W: u32 = 0x2;
+
     address_space.activate();
     let segment_start = segment.vaddr;
     let segment_end = segment_start
         .checked_add(segment.mem_size)
-        .expect("ELF segment end overflow");
+        .ok_or(ExecError::InvalidImage)?;
     if segment_start == segment_end {
-        return;
+        return Ok(());
     }
 
     let file_end = segment_start
         .checked_add(segment.file_bytes.len())
-        .expect("ELF file segment end overflow");
+        .ok_or(ExecError::InvalidImage)?;
     let map_start = paging::align_down(segment_start, FRAME_SIZE);
     let map_end = paging::align_up(segment_end, FRAME_SIZE);
+    let protection = if segment.flags & PF_W != 0 {
+        UserProtection::ReadWrite
+    } else {
+        UserProtection::ReadOnly
+    };
+    let mut mapped = Vec::new();
 
     for page in (map_start..map_end).step_by(FRAME_SIZE) {
-        let frame = frame_allocator::allocate_frame().expect("ELF segment frame allocation failed");
+        if address_space.is_user_mapped(page) {
+            for mapped_page in mapped {
+                let _ = address_space.unmap_user_page(mapped_page);
+            }
+            return Err(ExecError::InvalidImage);
+        }
+        let frame = frame_allocator::allocate_frame().ok_or(ExecError::OutOfMemory)?;
         unsafe {
             ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
             let page_end = page + FRAME_SIZE;
@@ -1991,11 +2112,22 @@ fn map_elf_segment(address_space: &mut AddressSpace, segment: elf::SegmentView<'
                     copy_end - copy_start,
                 );
             }
-            address_space
-                .map_owned_user_page(page, frame, PageFlags::USER_WRITABLE)
-                .expect("ELF segment map failed");
+            if let Err(err) = address_space.map_owned_user_page(page, frame, protection) {
+                frame_allocator::free_frame(frame);
+                for mapped_page in mapped {
+                    let _ = address_space.unmap_user_page(mapped_page);
+                }
+                return match err {
+                    paging::PagingError::OutOfFrames | paging::PagingError::RefcountOverflow => {
+                        Err(ExecError::OutOfMemory)
+                    }
+                    _ => Err(ExecError::InvalidImage),
+                };
+            }
         }
+        mapped.push(page);
     }
+    Ok(())
 }
 
 fn self_test() {
@@ -2342,7 +2474,7 @@ pub fn brk(new_break: usize) -> Result<usize, ()> {
 pub fn mmap_anonymous(hint: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
     with_current(|p| {
         p.address_space
-            .map_anonymous(hint, len, protection.page_flags())
+            .map_anonymous(hint, len, protection)
             .map_err(|_| ())
     })
     .ok_or(())?
@@ -2352,7 +2484,7 @@ pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result
     with_current(|p| {
         p.flush_shared_mappings_range(addr, len).map_err(|_| ())?;
         p.address_space
-            .map_fixed(addr, len, protection.page_flags())
+            .map_fixed(addr, len, protection)
             .map_err(|_| ())?;
         p.discard_shared_mappings_range(addr, len);
         Ok(addr)

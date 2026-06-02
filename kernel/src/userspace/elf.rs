@@ -19,6 +19,7 @@ pub struct LoadedSegment {
 pub struct SegmentView<'a> {
     pub vaddr: usize,
     pub mem_size: usize,
+    pub flags: u32,
     pub file_bytes: &'a [u8],
 }
 
@@ -165,7 +166,7 @@ pub fn for_each_load_segment(
             continue;
         }
 
-        let _flags = read_u32(data, offset + 4)?;
+        let flags = read_u32(data, offset + 4)?;
         let file_offset = read_u64(data, offset + 8)? as usize;
         let vaddr = read_u64(data, offset + 16)? as usize;
         let filesz = read_u64(data, offset + 32)? as usize;
@@ -180,6 +181,7 @@ pub fn for_each_load_segment(
         f(SegmentView {
             vaddr,
             mem_size: memsz,
+            flags,
             file_bytes: &data[file_offset..file_end],
         });
     }

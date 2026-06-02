@@ -59,6 +59,7 @@ pub enum VfsError {
     AlreadyExists,
     PermissionDenied,
     WouldBlock,
+    TooManyOpenFiles,
 }
 
 impl fmt::Display for VfsError {
@@ -71,6 +72,7 @@ impl fmt::Display for VfsError {
             Self::AlreadyExists => f.write_str("already exists"),
             Self::PermissionDenied => f.write_str("permission denied"),
             Self::WouldBlock => f.write_str("would block"),
+            Self::TooManyOpenFiles => f.write_str("too many open files"),
         }
     }
 }

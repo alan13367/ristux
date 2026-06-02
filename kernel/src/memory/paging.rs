@@ -43,6 +43,7 @@ pub enum PagingError {
     AlreadyMapped,
     NotMapped,
     HugePage,
+    RefcountOverflow,
 }
 
 impl fmt::Display for PagingError {
@@ -52,6 +53,7 @@ impl fmt::Display for PagingError {
             Self::AlreadyMapped => f.write_str("page is already mapped"),
             Self::NotMapped => f.write_str("page is not mapped"),
             Self::HugePage => f.write_str("encountered an unsupported huge page"),
+            Self::RefcountOverflow => f.write_str("frame reference count overflow"),
         }
     }
 }
@@ -351,3 +353,4 @@ pub const fn align_up(addr: usize, align: usize) -> usize {
 pub const USER_STACK_TOP: usize = 0x7010_0000;
 pub const USER_STACK_GUARD: usize = 0x7000_0000;
 pub const USER_HEAP_START: usize = 0x6000_0000;
+pub const USER_HEAP_END: usize = 0x6800_0000;

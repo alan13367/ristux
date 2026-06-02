@@ -7,7 +7,7 @@ const CHUNK_MASK: usize = CHUNK_SIZE - 1;
 const ROOT_ENTRIES: usize = 512;
 
 struct RefcountTable {
-    root: [Option<Box<[u8; CHUNK_SIZE]>>; ROOT_ENTRIES],
+    root: [Option<Box<[u16; CHUNK_SIZE]>>; ROOT_ENTRIES],
 }
 
 impl RefcountTable {
@@ -17,7 +17,7 @@ impl RefcountTable {
         }
     }
 
-    fn chunk_for(&mut self, frame_index: usize) -> Option<&mut [u8; CHUNK_SIZE]> {
+    fn chunk_for(&mut self, frame_index: usize) -> Option<&mut [u16; CHUNK_SIZE]> {
         let root_index = frame_index >> CHUNK_SHIFT;
         if root_index >= ROOT_ENTRIES {
             return None;
@@ -28,7 +28,7 @@ impl RefcountTable {
         self.root[root_index].as_deref_mut()
     }
 
-    fn get_chunk(&self, frame_index: usize) -> Option<&[u8; CHUNK_SIZE]> {
+    fn get_chunk(&self, frame_index: usize) -> Option<&[u16; CHUNK_SIZE]> {
         let root_index = frame_index >> CHUNK_SHIFT;
         self.root.get(root_index)?.as_deref()
     }
@@ -50,19 +50,23 @@ fn frame_index(phys: usize) -> usize {
     phys / 4096
 }
 
-pub fn increment(phys: usize) {
+pub fn try_increment(phys: usize) -> bool {
     let index = frame_index(phys);
     let mut guard = REF_COUNTS.lock();
     let Some(table) = guard.as_mut() else {
-        return;
+        return true;
     };
     if let Some(chunk) = table.chunk_for(index) {
         let slot = index & CHUNK_MASK;
-        chunk[slot] = chunk[slot].saturating_add(1);
+        let Some(next) = chunk[slot].checked_add(1) else {
+            return false;
+        };
+        chunk[slot] = next;
     }
+    true
 }
 
-pub fn decrement(phys: usize) -> u8 {
+pub fn decrement(phys: usize) -> u16 {
     let index = frame_index(phys);
     let mut guard = REF_COUNTS.lock();
     let Some(table) = guard.as_mut() else {
@@ -78,7 +82,7 @@ pub fn decrement(phys: usize) -> u8 {
     0
 }
 
-pub fn get(phys: usize) -> u8 {
+pub fn get(phys: usize) -> u16 {
     let index = frame_index(phys);
     let guard = REF_COUNTS.lock();
     let Some(table) = guard.as_ref() else {
@@ -90,7 +94,7 @@ pub fn get(phys: usize) -> u8 {
     1
 }
 
-pub fn set(phys: usize, val: u8) {
+pub fn set(phys: usize, val: u16) {
     let index = frame_index(phys);
     let mut guard = REF_COUNTS.lock();
     let Some(table) = guard.as_mut() else {

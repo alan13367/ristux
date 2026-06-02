@@ -144,6 +144,8 @@ pub const NR_getrandom: u64 = 318;
 const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
 const EBADF: i64 = -9;
+const E2BIG: i64 = -7;
+const ENOEXEC: i64 = -8;
 const ENOMEM: i64 = -12;
 const EMFILE: i64 = -24;
 const EFAULT: i64 = -14;
@@ -1414,7 +1416,10 @@ fn linux_pipe2(pipefd: usize, flags: u32) -> Result<u64, i64> {
     };
     process::install_pipe_fds_with_flags(pipefd, read_fd, write_fd, status_flags, fd_flags)
         .map(|_| 0)
-        .map_err(|_| EFAULT)
+        .map_err(|err| match err {
+            process::FdInstallError::Fault => EFAULT,
+            process::FdInstallError::TooManyOpenFiles => EMFILE,
+        })
 }
 
 fn linux_sched_yield(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
@@ -1980,7 +1985,7 @@ fn linux_execve(
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let env_refs: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
-    let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).ok_or(ENOENT)?;
+    let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).map_err(map_exec_error)?;
     // Patch the syscall frame so the imminent iretq lands at the new entry
     // point with the freshly built user stack. argc → rdi, argv → rsi (SysV
     // calling convention used by our _start glue).
@@ -1995,6 +2000,16 @@ fn linux_execve(
     // rax (return value) will be overwritten by the iretq epilogue; set it
     // so user code that mistakenly inspects rax after execve sees 0.
     Ok(0)
+}
+
+fn map_exec_error(err: process::ExecError) -> i64 {
+    match err {
+        process::ExecError::NotFound => ENOENT,
+        process::ExecError::PermissionDenied => EACCES,
+        process::ExecError::InvalidImage => ENOEXEC,
+        process::ExecError::TooManyArguments => E2BIG,
+        process::ExecError::OutOfMemory => ENOMEM,
+    }
 }
 
 fn linux_wait4(
@@ -2487,7 +2502,10 @@ fn linux_mmap(
         }
     }
     if protection != UserProtection::ReadWrite {
-        process::mprotect(mapped, length, protection).map_err(|_| ENOMEM)?;
+        if process::mprotect(mapped, length, protection).is_err() {
+            let _ = process::munmap(mapped, length);
+            return Err(EINVAL);
+        }
     }
     Ok(mapped as u64)
 }
@@ -3238,6 +3256,7 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::NotFound => ENOENT,
         fs::vfs::VfsError::AlreadyExists => EEXIST,
         fs::vfs::VfsError::BadFd => EBADF,
+        fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
         _ => EINVAL,
     }
 }

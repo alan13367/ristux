@@ -23,12 +23,35 @@ int main(void) {
         printf("cc_mmap: mprotect failed errno=%d\n", errno);
         return 1;
     }
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: zero open failed");
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, anon + 4096, 1) != -1 || errno != EFAULT) {
+        printf("cc_mmap: readonly read target errno=%d\n", errno);
+        return 1;
+    }
+    close(zero_fd);
+    puts("cc_mmap: readonly syscall protection ok");
     puts("cc_mmap: mprotect ok");
 
     if (mprotect(anon + 4096, 4096, PROT_NONE) < 0) {
         printf("cc_mmap: prot none failed errno=%d\n", errno);
         return 1;
     }
+    zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: zero reopen failed");
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, anon + 4096, 1) != -1 || errno != EFAULT) {
+        printf("cc_mmap: prot none read target errno=%d\n", errno);
+        return 1;
+    }
+    close(zero_fd);
     if (mprotect(anon + 4096, 4096, PROT_READ | PROT_WRITE) < 0) {
         printf("cc_mmap: prot restore failed errno=%d\n", errno);
         return 1;
