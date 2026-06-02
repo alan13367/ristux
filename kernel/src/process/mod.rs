@@ -2072,18 +2072,18 @@ pub fn mark_ready(pid: Pid) -> bool {
 
 pub fn with_current<T>(f: impl FnOnce(&mut Process) -> T) -> Option<T> {
     let pid = current_pid()?;
-    Some(with_table(|table| {
-        let process = table.get_mut(pid).expect("current process missing");
-        f(process)
-    }))
+    with_table(|table| {
+        let process = table.get_mut(pid)?;
+        Some(f(process))
+    })
 }
 
 pub fn with_current_read<T>(f: impl FnOnce(&Process) -> T) -> Option<T> {
     let pid = current_pid()?;
-    Some(with_table(|table| {
-        let process = table.get(pid).expect("current process missing");
-        f(process)
-    }))
+    with_table(|table| {
+        let process = table.get(pid)?;
+        Some(f(process))
+    })
 }
 
 pub fn read_user(addr: usize, len: usize) -> Option<&'static [u8]> {
@@ -2840,6 +2840,10 @@ fn self_test() {
         panic!("init reaping self-test failed");
     }
 
+    set_current(u64::MAX);
+    if with_current_read(|_| ()).is_some() || with_current(|_| ()).is_some() {
+        panic!("stale current process self-test failed");
+    }
     clear_current();
     crate::println!("Process model self-test passed: fork exec wait reparent.");
 }
