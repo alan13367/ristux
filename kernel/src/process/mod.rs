@@ -94,6 +94,7 @@ pub struct Process {
     pub argv_ptr: usize,
     pub envp_ptr: usize,
     exit_status: Option<i32>,
+    stop_reported: bool,
     waiters: Vec<Pid>,
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
@@ -237,6 +238,7 @@ impl Process {
             argv_ptr: 0,
             envp_ptr: 0,
             exit_status: None,
+            stop_reported: false,
             waiters: Vec::new(),
             is_user: true,
             saved_syscall: None,
@@ -827,6 +829,7 @@ impl ProcessTable {
         child.state = ProcessState::Ready;
         child.waiters.clear();
         child.exit_status = None;
+        child.stop_reported = false;
         child.pending_signals = 0;
         child.pending_signal_status = None;
         self.processes.push(child);
@@ -974,6 +977,7 @@ impl ProcessTable {
         }
         process.state = ProcessState::Stopped(signal);
         process.exit_status = None;
+        process.stop_reported = false;
         if current_pid() == Some(pid) {
             clear_current();
         }
@@ -986,6 +990,7 @@ impl ProcessTable {
         };
         if matches!(process.state, ProcessState::Stopped(_)) {
             process.state = ProcessState::Ready;
+            process.stop_reported = false;
             return true;
         }
         !matches!(process.state, ProcessState::Zombie(_))
@@ -1159,6 +1164,7 @@ impl Process {
             argv_ptr: self.argv_ptr,
             envp_ptr: self.envp_ptr,
             exit_status: None,
+            stop_reported: false,
             waiters: Vec::new(),
             is_user: self.is_user,
             saved_syscall: None,
@@ -2672,6 +2678,7 @@ pub fn peek_wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(
                 .find(|p| {
                     p.parent == Some(parent)
                         && (child == 0 || p.pid == child)
+                        && !p.stop_reported
                         && matches!(p.state, ProcessState::Stopped(_))
                 })
                 .map(|p| {
@@ -2701,6 +2708,19 @@ pub fn peek_wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(
             return Some((process.pid, status));
         }
         None
+    })
+}
+
+pub fn mark_waited_stopped(parent: Pid, child: Pid) -> bool {
+    with_table(|table| {
+        let Some(process) = table.get_mut(child) else {
+            return false;
+        };
+        if process.parent != Some(parent) || !matches!(process.state, ProcessState::Stopped(_)) {
+            return false;
+        }
+        process.stop_reported = true;
+        true
     })
 }
 

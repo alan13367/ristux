@@ -2091,10 +2091,17 @@ fn linux_wait4(
                     let out = process::write_user_buffer(status_ptr, 4).ok_or(EFAULT)?;
                     out.copy_from_slice(&(encoded as u32).to_le_bytes());
                 }
-                if !matches!(status, process::WaitStatus::Stopped(_))
-                    && !process::reap_waited_zombie(parent, waited_pid)
-                {
-                    return Err(ECHILD);
+                match status {
+                    process::WaitStatus::Stopped(_) => {
+                        if !process::mark_waited_stopped(parent, waited_pid) {
+                            return Err(ECHILD);
+                        }
+                    }
+                    _ => {
+                        if !process::reap_waited_zombie(parent, waited_pid) {
+                            return Err(ECHILD);
+                        }
+                    }
                 }
                 return Ok(waited_pid as u64);
             }

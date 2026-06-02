@@ -25,6 +25,53 @@ static void on_usr1(int signum) {
     }
 }
 
+static int check_stop_wait_once(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: stop fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        for (;;) {
+        }
+    }
+
+    if (kill(child, SIGTSTP) < 0) {
+        puts("cc_signal: stop send failed");
+        kill(child, SIGKILL);
+        return 1;
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP) {
+        puts("cc_signal: stop wait failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+
+    errno = 0;
+    if (waitpid(child, &status, WNOHANG | WUNTRACED) != 0) {
+        puts("cc_signal: stop duplicate wait failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+
+    if (kill(child, SIGCONT) < 0 || kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGTERM) {
+        puts("cc_signal: stop cleanup failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+
+    puts("cc_signal: stop wait once ok");
+    return 0;
+}
+
 int main(void) {
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
@@ -143,6 +190,10 @@ int main(void) {
         return 1;
     }
     puts("cc_signal: default disposition ok");
+
+    if (check_stop_wait_once() != 0) {
+        return 1;
+    }
 
     puts("cc_signal: after handler");
     return 0;
