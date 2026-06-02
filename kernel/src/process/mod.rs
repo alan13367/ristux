@@ -871,18 +871,14 @@ impl Process {
         }
     }
 
-    fn destroy(&mut self) {
+    fn destroy(mut self) {
         self.flush_and_close_shared_mappings();
         for entry in &self.fds {
             let _ = fs::close(entry.vfs_fd);
         }
         self.fds.clear();
         self.close_socket_handles();
-        let old = core::mem::replace(
-            &mut self.address_space,
-            AddressSpace::new_kernel_clone().expect("address space"),
-        );
-        old.destroy();
+        self.address_space.destroy();
     }
 }
 
@@ -985,9 +981,7 @@ impl ProcessTable {
             }
             process.fds.clear();
             process.close_socket_handles();
-            let mut old = AddressSpace::new_kernel_clone().expect("address space");
-            core::mem::swap(&mut process.address_space, &mut old);
-            old.destroy();
+            process.address_space.clear_user_pages();
             if was_current {
                 clear_current();
             }
@@ -1108,7 +1102,7 @@ impl ProcessTable {
 
     fn reap(&mut self, pid: Pid) {
         if let Some(index) = self.processes.iter().position(|p| p.pid == pid) {
-            let mut process = self.processes.remove(index);
+            let process = self.processes.remove(index);
             process.destroy();
         }
     }

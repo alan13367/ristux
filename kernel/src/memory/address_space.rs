@@ -151,11 +151,19 @@ impl AddressSpace {
         Ok(())
     }
 
-    pub fn destroy(mut self) {
-        while let Some((virt, _)) = self.user_mappings.pop() {
+    pub fn clear_user_pages(&mut self) {
+        while let Some((virt, _)) = self.user_mappings.first().copied() {
             let _ = self.unmap_user_page(virt);
         }
         self.user_protections.clear();
+        self.heap_break = paging::USER_HEAP_START;
+        self.stack_bottom = paging::USER_STACK_GUARD;
+        self.stack_top = paging::USER_STACK_TOP;
+        self.mmap_next = USER_MMAP_START;
+    }
+
+    pub fn destroy(mut self) {
+        self.clear_user_pages();
         unsafe {
             paging::free_user_page_tables(self.p4);
         }
