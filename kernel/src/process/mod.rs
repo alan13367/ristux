@@ -2148,6 +2148,13 @@ pub fn is_user_executable(addr: usize, len: usize) -> bool {
     with_current_read(|p| p.allows_user_execute(addr, len)).unwrap_or(false)
 }
 
+pub fn is_user_readable(addr: usize, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    with_current_read(|p| p.allows_user_read(addr, len)).unwrap_or(false)
+}
+
 pub fn write_user_buffer(addr: usize, len: usize) -> Option<&'static mut [u8]> {
     if len == 0 {
         return Some(&mut []);

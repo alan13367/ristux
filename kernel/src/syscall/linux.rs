@@ -559,6 +559,9 @@ fn sanitize_linux_saved_frame(saved: &mut process::SavedSyscallFrame) -> Result<
     if !process::is_user_executable(saved.rip as usize, 1) {
         return Err(EFAULT);
     }
+    if !process::is_user_readable(saved.rsp as usize, 1) {
+        return Err(EFAULT);
+    }
     saved.rflags = (saved.rflags & USER_RFLAGS_MASK) | RFLAGS_FIXED | RFLAGS_IF;
     Ok(())
 }
