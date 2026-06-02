@@ -548,9 +548,11 @@ impl Process {
         }
     }
 
-    fn add_socket_handle(&mut self, handle: usize) -> Result<(), ()> {
+    fn add_socket_handle(&mut self, handle: usize) -> Result<(), SocketInstallError> {
         if !self.socket_handles.contains(&handle) {
-            self.socket_handles.try_reserve_exact(1).map_err(|_| ())?;
+            self.socket_handles
+                .try_reserve_exact(1)
+                .map_err(|_| SocketInstallError::OutOfMemory)?;
             self.socket_handles.push(handle);
         }
         Ok(())
@@ -1453,6 +1455,11 @@ pub enum FdInstallError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SocketInstallError {
+    OutOfMemory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedMappingError {
     OutOfMemory,
     Vfs(fs::vfs::VfsError),
@@ -2305,8 +2312,8 @@ pub fn user_close(user_fd: usize) -> Result<(), fs::vfs::VfsError> {
     result
 }
 
-pub fn install_socket_handle(handle: usize) -> Result<(), ()> {
-    with_current(|p| p.add_socket_handle(handle)).unwrap_or(Err(()))
+pub fn install_socket_handle(handle: usize) -> Result<(), SocketInstallError> {
+    with_current(|p| p.add_socket_handle(handle)).unwrap_or(Err(SocketInstallError::OutOfMemory))
 }
 
 pub fn owns_socket_handle(handle: usize) -> bool {

@@ -1529,7 +1529,7 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
     .ok_or(EINVAL)?;
     if process::install_socket_handle(handle).is_err() {
         let _ = crate::net::socket::with_sockets(|table| table.close(handle));
-        return Err(EMFILE);
+        return Err(ENOMEM);
     }
     Ok((SOCKET_FD_BASE + handle) as u64)
 }
@@ -1587,7 +1587,7 @@ fn linux_accept(
                 }
                 if process::install_socket_handle(accepted).is_err() {
                     let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
-                    return Err(EMFILE);
+                    return Err(ENOMEM);
                 }
                 if addr != 0 {
                     let peer = peer.unwrap_or(crate::net::socket::SocketAddress {
