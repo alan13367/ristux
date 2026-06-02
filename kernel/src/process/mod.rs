@@ -310,6 +310,13 @@ pub enum ExecError {
     OutOfMemory,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForkError {
+    NoSuchProcess,
+    OutOfMemory,
+    InvalidProcessState,
+}
+
 impl From<elf::ElfError> for ExecError {
     fn from(err: elf::ElfError) -> Self {
         match err {
@@ -1058,9 +1065,14 @@ impl ProcessTable {
         self.processes.iter().find(|p| p.pid == pid)
     }
 
-    fn fork(&mut self, parent: Pid) -> Option<Pid> {
-        self.processes.try_reserve_exact(1).ok()?;
-        let parent_proc = self.get(parent)?.clone_process()?;
+    fn fork(&mut self, parent: Pid) -> Result<Pid, ForkError> {
+        self.processes
+            .try_reserve_exact(1)
+            .map_err(|_| ForkError::OutOfMemory)?;
+        let parent_proc = self
+            .get(parent)
+            .ok_or(ForkError::NoSuchProcess)?
+            .clone_process()?;
         let pid = self.next_pid;
         let mut child = parent_proc;
         child.pid = pid;
@@ -1074,7 +1086,7 @@ impl ProcessTable {
         self.processes.push(child);
         self.next_pid += 1;
         crate::sched::on_fork(pid);
-        Some(pid)
+        Ok(pid)
     }
 
     fn exec(&mut self, pid: Pid, path: &str, args: &[&str]) -> bool {
@@ -1291,20 +1303,22 @@ impl ProcessTable {
 }
 
 impl Process {
-    fn duplicate_fd_entries(entries: &[FdEntry]) -> Option<Vec<FdEntry>> {
+    fn duplicate_fd_entries(entries: &[FdEntry]) -> Result<Vec<FdEntry>, ForkError> {
         let mut duplicated = Vec::new();
-        duplicated.try_reserve_exact(entries.len()).ok()?;
+        duplicated
+            .try_reserve_exact(entries.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
         for entry in entries {
             let vfs_fd = match fs::duplicate_fd(entry.vfs_fd) {
                 Ok(vfs_fd) => vfs_fd,
-                Err(_) => {
+                Err(err) => {
                     Self::close_fd_entries(&duplicated);
-                    return None;
+                    return Err(map_fork_vfs_error(err));
                 }
             };
             duplicated.push(FdEntry { vfs_fd, ..*entry });
         }
-        Some(duplicated)
+        Ok(duplicated)
     }
 
     fn close_fd_entries(entries: &[FdEntry]) {
@@ -1313,18 +1327,20 @@ impl Process {
         }
     }
 
-    fn duplicate_socket_handles(handles: &[usize]) -> Option<Vec<usize>> {
+    fn duplicate_socket_handles(handles: &[usize]) -> Result<Vec<usize>, ForkError> {
         let mut duplicated = Vec::new();
-        duplicated.try_reserve_exact(handles.len()).ok()?;
+        duplicated
+            .try_reserve_exact(handles.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
         for handle in handles {
             let result = crate::net::socket::with_sockets(|table| table.duplicate(*handle));
             if result.is_err() {
                 Self::close_socket_handle_list(&duplicated);
-                return None;
+                return Err(ForkError::InvalidProcessState);
             }
             duplicated.push(*handle);
         }
-        Some(duplicated)
+        Ok(duplicated)
     }
 
     fn close_socket_handle_list(handles: &[usize]) {
@@ -1333,20 +1349,24 @@ impl Process {
         }
     }
 
-    fn duplicate_shared_mappings(mappings: &[SharedMapping]) -> Option<Vec<SharedMapping>> {
+    fn duplicate_shared_mappings(
+        mappings: &[SharedMapping],
+    ) -> Result<Vec<SharedMapping>, ForkError> {
         let mut duplicated = Vec::new();
-        duplicated.try_reserve_exact(mappings.len()).ok()?;
+        duplicated
+            .try_reserve_exact(mappings.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
         for mapping in mappings {
             let vfs_fd = match fs::duplicate_fd(mapping.vfs_fd) {
                 Ok(vfs_fd) => vfs_fd,
-                Err(_) => {
+                Err(err) => {
                     Self::close_shared_mapping_fds(&duplicated);
-                    return None;
+                    return Err(map_fork_vfs_error(err));
                 }
             };
             duplicated.push(SharedMapping { vfs_fd, ..*mapping });
         }
-        Some(duplicated)
+        Ok(duplicated)
     }
 
     fn close_shared_mapping_fds(mappings: &[SharedMapping]) {
@@ -1355,42 +1375,47 @@ impl Process {
         }
     }
 
-    fn clone_string(value: &String) -> Option<String> {
+    fn clone_string(value: &String) -> Result<String, ForkError> {
         let mut cloned = String::new();
-        cloned.try_reserve_exact(value.len()).ok()?;
+        cloned
+            .try_reserve_exact(value.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
         cloned.push_str(value);
-        Some(cloned)
+        Ok(cloned)
     }
 
-    fn clone_process(&self) -> Option<Self> {
+    fn clone_process(&self) -> Result<Self, ForkError> {
         let name = Self::clone_string(&self.name)?;
         let cwd = Self::clone_string(&self.cwd)?;
-        let address_space = self.address_space.clone_full_copy().ok()?;
+        let address_space = self
+            .address_space
+            .clone_full_copy()
+            .map_err(map_fork_paging_error)?;
         let fds = match Self::duplicate_fd_entries(&self.fds) {
-            Some(fds) => fds,
-            None => {
+            Ok(fds) => fds,
+            Err(err) => {
                 address_space.destroy();
-                return None;
+                return Err(err);
             }
         };
         let socket_handles = match Self::duplicate_socket_handles(&self.socket_handles) {
-            Some(socket_handles) => socket_handles,
-            None => {
+            Ok(socket_handles) => socket_handles,
+            Err(err) => {
                 Self::close_fd_entries(&fds);
                 address_space.destroy();
-                return None;
+                return Err(err);
             }
         };
         let shared_mappings = match Self::duplicate_shared_mappings(&self.shared_mappings) {
-            Some(shared_mappings) => shared_mappings,
-            None => {
+            Ok(shared_mappings) => shared_mappings,
+            Err(err) => {
                 Self::close_socket_handle_list(&socket_handles);
                 Self::close_fd_entries(&fds);
                 address_space.destroy();
-                return None;
+                return Err(err);
             }
         };
-        Some(Self {
+        Ok(Self {
             pid: self.pid,
             parent: self.parent,
             name,
@@ -1428,6 +1453,24 @@ impl Process {
     }
 }
 
+fn map_fork_vfs_error(err: fs::vfs::VfsError) -> ForkError {
+    match err {
+        fs::vfs::VfsError::OutOfMemory | fs::vfs::VfsError::TooManyOpenFiles => {
+            ForkError::OutOfMemory
+        }
+        _ => ForkError::InvalidProcessState,
+    }
+}
+
+fn map_fork_paging_error(err: paging::PagingError) -> ForkError {
+    match err {
+        paging::PagingError::OutOfFrames
+        | paging::PagingError::RefcountOverflow
+        | paging::PagingError::RefcountUnavailable => ForkError::OutOfMemory,
+        _ => ForkError::InvalidProcessState,
+    }
+}
+
 pub fn init() {
     let mut table = ProcessTable::new();
     let init = table.spawn_init();
@@ -1436,7 +1479,7 @@ pub fn init() {
     self_test();
 }
 
-pub fn fork(parent: Pid) -> Option<Pid> {
+pub fn fork(parent: Pid) -> Result<Pid, ForkError> {
     with_table(|table| table.fork(parent))
 }
 
@@ -2840,6 +2883,9 @@ fn self_test() {
         panic!("init reaping self-test failed");
     }
 
+    if fork(u64::MAX) != Err(ForkError::NoSuchProcess) {
+        panic!("fork missing parent self-test failed");
+    }
     set_current(u64::MAX);
     if with_current_read(|_| ()).is_some() || with_current(|_| ()).is_some() {
         panic!("stale current process self-test failed");

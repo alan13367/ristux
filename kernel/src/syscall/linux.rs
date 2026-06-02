@@ -2003,7 +2003,7 @@ fn linux_reboot(magic1: u32, magic2: u32, cmd: u32) -> Result<u64, i64> {
 
 fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
     let parent = process::current_pid().ok_or(ESRCH)?;
-    let child = process::fork(parent).ok_or(ENOMEM)?;
+    let child = process::fork(parent).map_err(map_fork_error)?;
     // Seed the child's resumable syscall frame so the scheduler can iretq into
     // it. The child wakes up at the user instruction immediately after the
     // syscall (frame.rip is already past it), with rax = 0.
@@ -2032,6 +2032,14 @@ fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
     let _ = &mut child_frame;
     process::save_syscall_frame(child, &child_frame);
     Ok(child as u64)
+}
+
+fn map_fork_error(err: process::ForkError) -> i64 {
+    match err {
+        process::ForkError::NoSuchProcess => ESRCH,
+        process::ForkError::OutOfMemory => ENOMEM,
+        process::ForkError::InvalidProcessState => EINVAL,
+    }
 }
 
 fn linux_execve(
