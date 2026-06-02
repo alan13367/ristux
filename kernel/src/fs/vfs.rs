@@ -1022,6 +1022,7 @@ impl Vfs {
     }
 
     fn push_open_handle(&mut self, handle: OpenHandle) -> Result<usize, VfsError> {
+        self.reserve_open_handle_slots(1)?;
         for (fd, slot) in self.open_files.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some(handle);
@@ -1033,7 +1034,21 @@ impl Vfs {
         Ok(self.open_files.len() - 1)
     }
 
+    fn reserve_open_handle_slots(&mut self, count: usize) -> Result<(), VfsError> {
+        let free_slots = self.open_files.iter().filter(|slot| slot.is_none()).count();
+        if free_slots >= count {
+            return Ok(());
+        }
+        self.open_files
+            .try_reserve_exact(count - free_slots)
+            .map_err(|_| VfsError::OutOfMemory)
+    }
+
     fn create_pipe(&mut self, capacity: usize) -> Result<(usize, usize), VfsError> {
+        self.reserve_open_handle_slots(2)?;
+        self.pipes
+            .try_reserve_exact(1)
+            .map_err(|_| VfsError::OutOfMemory)?;
         let pipe = self.pipes.len();
         self.pipes.push(PipeState::new(capacity));
         let read_fd = self.push_open_handle(OpenHandle::PipeRead { pipe })?;
@@ -1042,27 +1057,52 @@ impl Vfs {
     }
 
     fn open_pty_master(&mut self, rights: OpenRights) -> Result<usize, VfsError> {
+        self.reserve_open_handle_slots(1)?;
+        self.ptys
+            .try_reserve_exact(1)
+            .map_err(|_| VfsError::OutOfMemory)?;
         let pty = self.ptys.len();
         self.ptys.push(PtyState::new(4096));
-        self.ensure_pty_slave_node(pty);
+        if let Err(err) = self.ensure_pty_slave_node(pty) {
+            self.ptys.pop();
+            return Err(err);
+        }
         self.push_open_handle(OpenHandle::PtyMaster { pty, rights })
     }
 
     fn open_pty_slave(&mut self, pty: usize, rights: OpenRights) -> Result<usize, VfsError> {
-        let state = self.ptys.get_mut(pty).ok_or(VfsError::NotFound)?;
-        if state.locked {
+        if self.ptys.get(pty).ok_or(VfsError::NotFound)?.locked {
             return Err(VfsError::PermissionDenied);
         }
-        state.add_slave();
+        self.reserve_open_handle_slots(1)?;
+        self.ptys
+            .get_mut(pty)
+            .ok_or(VfsError::NotFound)?
+            .add_slave();
         self.push_open_handle(OpenHandle::PtySlave { pty, rights })
     }
 
-    fn ensure_pty_slave_node(&mut self, pty: usize) {
-        let path = format!("/dev/pts/{}", pty);
+    fn ensure_pty_slave_node(&mut self, pty: usize) -> Result<(), VfsError> {
+        let path = try_pty_slave_path(pty)?;
         if self.nodes.iter().any(|node| node.path == path) {
-            return;
+            return Ok(());
         }
-        self.add_device(&path, DeviceKind::PtySlave(pty));
+        self.nodes
+            .try_reserve_exact(1)
+            .map_err(|_| VfsError::OutOfMemory)?;
+        let now = crate::time::filesystem_timestamp();
+        self.nodes.push(Node {
+            path,
+            kind: NodeKind::Device(DeviceKind::PtySlave(pty)),
+            metadata: FileMetadata::new(0, 0, 0o666),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
+            data: Vec::new(),
+            link_target: None,
+        });
+        Ok(())
     }
 
     fn duplicate_fd(&mut self, fd: usize) -> Result<usize, VfsError> {
@@ -1071,6 +1111,7 @@ impl Vfs {
             .get(fd)
             .and_then(|slot| slot.as_ref().cloned())
             .ok_or(VfsError::BadFd)?;
+        self.reserve_open_handle_slots(1)?;
         self.retain_handle(&handle)?;
         self.push_open_handle(handle)
     }
@@ -3008,6 +3049,21 @@ fn replace_path_prefix(path: &str, old_prefix: &str, new_prefix: &str) -> Result
     rewritten.push_str(new_prefix);
     rewritten.push_str(suffix);
     Ok(rewritten)
+}
+
+fn try_pty_slave_path(pty: usize) -> Result<String, VfsError> {
+    const PREFIX: &str = "/dev/pts/";
+    let suffix = try_u64_string(pty as u64)?;
+    let len = PREFIX
+        .len()
+        .checked_add(suffix.len())
+        .ok_or(VfsError::OutOfMemory)?;
+    let mut path = String::new();
+    path.try_reserve_exact(len)
+        .map_err(|_| VfsError::OutOfMemory)?;
+    path.push_str(PREFIX);
+    path.push_str(&suffix);
+    Ok(path)
 }
 
 fn fill_random(output: &mut [u8]) {
