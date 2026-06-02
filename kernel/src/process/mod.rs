@@ -393,9 +393,9 @@ impl Process {
         vfs_fd: usize,
         status_flags: u32,
         fd_flags: u32,
-    ) -> Result<(), ()> {
+    ) -> Result<(), FdTableError> {
         if user_fd >= self.fd_limit() {
-            return Err(());
+            return Err(FdTableError::TooManyOpenFiles);
         }
         if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             entry.vfs_fd = vfs_fd;
@@ -404,9 +404,11 @@ impl Process {
             return Ok(());
         }
         if self.fds.len() >= MAX_FDS {
-            return Err(());
+            return Err(FdTableError::TooManyOpenFiles);
         }
-        self.fds.try_reserve_exact(1).map_err(|_| ())?;
+        self.fds
+            .try_reserve_exact(1)
+            .map_err(|_| FdTableError::OutOfMemory)?;
         self.fds.push(FdEntry {
             user_fd,
             vfs_fd,
@@ -426,11 +428,15 @@ impl Process {
             .map(|e| e.vfs_fd)
     }
 
-    fn push_fd(&mut self, vfs_fd: usize) -> Result<usize, ()> {
+    fn push_fd(&mut self, vfs_fd: usize) -> Result<usize, FdTableError> {
         self.push_fd_with_flags(vfs_fd, 0)
     }
 
-    fn push_fd_with_flags(&mut self, vfs_fd: usize, status_flags: u32) -> Result<usize, ()> {
+    fn push_fd_with_flags(
+        &mut self,
+        vfs_fd: usize,
+        status_flags: u32,
+    ) -> Result<usize, FdTableError> {
         self.push_fd_with_all_flags(vfs_fd, status_flags, 0)
     }
 
@@ -439,8 +445,10 @@ impl Process {
         vfs_fd: usize,
         status_flags: u32,
         fd_flags: u32,
-    ) -> Result<usize, ()> {
-        let user_fd = self.lowest_available_fd().ok_or(())?;
+    ) -> Result<usize, FdTableError> {
+        let user_fd = self
+            .lowest_available_fd()
+            .ok_or(FdTableError::TooManyOpenFiles)?;
         self.set_fd_with_flags(user_fd, vfs_fd, status_flags, fd_flags)?;
         Ok(user_fd)
     }
@@ -472,9 +480,9 @@ impl Process {
         vfs_fd: usize,
         status_flags: u32,
         fd_flags: u32,
-    ) -> Result<Option<usize>, ()> {
+    ) -> Result<Option<usize>, FdTableError> {
         if user_fd >= self.fd_limit() {
-            return Err(());
+            return Err(FdTableError::TooManyOpenFiles);
         }
         if let Some(entry) = self.fds.iter_mut().find(|e| e.user_fd == user_fd) {
             let old = entry.vfs_fd;
@@ -1449,9 +1457,16 @@ pub struct ExecInfo {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FdTableError {
+    TooManyOpenFiles,
+    OutOfMemory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FdInstallError {
     Fault,
     TooManyOpenFiles,
+    OutOfMemory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1473,6 +1488,27 @@ pub enum MmapError {
 }
 
 const MAX_SHEBANG_DEPTH: usize = 4;
+
+fn map_fd_table_vfs_error(err: FdTableError) -> fs::vfs::VfsError {
+    match err {
+        FdTableError::TooManyOpenFiles => fs::vfs::VfsError::TooManyOpenFiles,
+        FdTableError::OutOfMemory => fs::vfs::VfsError::OutOfMemory,
+    }
+}
+
+fn map_dup_target_error(err: FdTableError) -> fs::vfs::VfsError {
+    match err {
+        FdTableError::TooManyOpenFiles => fs::vfs::VfsError::BadFd,
+        FdTableError::OutOfMemory => fs::vfs::VfsError::OutOfMemory,
+    }
+}
+
+fn map_fd_install_error(err: FdTableError) -> FdInstallError {
+    match err {
+        FdTableError::TooManyOpenFiles => FdInstallError::TooManyOpenFiles,
+        FdTableError::OutOfMemory => FdInstallError::OutOfMemory,
+    }
+}
 
 fn trim_ascii_bytes(mut bytes: &[u8]) -> &[u8] {
     while bytes
@@ -1668,20 +1704,20 @@ pub fn install_pipe_fds_with_flags(
         };
         let user_read = match process.push_fd_with_all_flags(read_vfs, status_flags, fd_flags) {
             Ok(fd) => fd,
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(read_vfs);
                 let _ = fs::close(write_vfs);
-                return Err(FdInstallError::TooManyOpenFiles);
+                return Err(map_fd_install_error(err));
             }
         };
         let user_write = match process.push_fd_with_all_flags(write_vfs, status_flags, fd_flags) {
             Ok(fd) => fd,
-            Err(()) => {
+            Err(err) => {
                 if let Some(vfs_fd) = process.remove_fd(user_read) {
                     let _ = fs::close(vfs_fd);
                 }
                 let _ = fs::close(write_vfs);
-                return Err(FdInstallError::TooManyOpenFiles);
+                return Err(map_fd_install_error(err));
             }
         };
         Ok((user_read, user_write))
@@ -2223,9 +2259,9 @@ pub fn user_open(path: &str) -> Result<usize, fs::vfs::VfsError> {
         let vfs_fd = fs::open_read_as(&path, p.credentials)?;
         match p.push_fd(vfs_fd) {
             Ok(fd) => Ok(fd),
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(vfs_fd);
-                Err(fs::vfs::VfsError::TooManyOpenFiles)
+                Err(map_fd_table_vfs_error(err))
             }
         }
     })
@@ -2274,9 +2310,9 @@ pub fn user_open_options(
         }
         match p.push_fd_with_flags(vfs_fd, status_flags) {
             Ok(fd) => Ok(fd),
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(vfs_fd);
-                Err(fs::vfs::VfsError::TooManyOpenFiles)
+                Err(map_fd_table_vfs_error(err))
             }
         }
     })
@@ -2290,9 +2326,9 @@ pub fn user_create(path: &str) -> Result<usize, fs::vfs::VfsError> {
         let vfs_fd = fs::create_file_with_mode_as(&path, p.credentials, mode)?;
         match p.push_fd(vfs_fd) {
             Ok(fd) => Ok(fd),
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(vfs_fd);
-                Err(fs::vfs::VfsError::TooManyOpenFiles)
+                Err(map_fd_table_vfs_error(err))
             }
         }
     })
@@ -2355,9 +2391,9 @@ pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
         let dup = fs::duplicate_fd(vfs_fd)?;
         match p.push_fd_with_flags(dup, status_flags) {
             Ok(fd) => Ok(fd),
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(dup);
-                Err(fs::vfs::VfsError::TooManyOpenFiles)
+                Err(map_fd_table_vfs_error(err))
             }
         }
     })
@@ -2377,9 +2413,9 @@ pub fn user_dup2(user_fd: usize, target_fd: usize) -> Result<usize, fs::vfs::Vfs
         let dup = fs::duplicate_fd(vfs_fd)?;
         let old = match p.replace_fd_with_flags(target_fd, dup, status_flags, 0) {
             Ok(old) => old,
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(dup);
-                return Err(fs::vfs::VfsError::BadFd);
+                return Err(map_dup_target_error(err));
             }
         };
         if let Some(old) = old {
@@ -2404,9 +2440,9 @@ pub fn user_dup3(
         let dup = fs::duplicate_fd(vfs_fd)?;
         let old = match p.replace_fd_with_flags(target_fd, dup, status_flags, fd_flags) {
             Ok(old) => old,
-            Err(()) => {
+            Err(err) => {
                 let _ = fs::close(dup);
-                return Err(fs::vfs::VfsError::BadFd);
+                return Err(map_dup_target_error(err));
             }
         };
         if let Some(old) = old {

@@ -1478,6 +1478,7 @@ fn linux_pipe2(pipefd: usize, flags: u32) -> Result<u64, i64> {
         .map_err(|err| match err {
             process::FdInstallError::Fault => EFAULT,
             process::FdInstallError::TooManyOpenFiles => EMFILE,
+            process::FdInstallError::OutOfMemory => ENOMEM,
         })
 }
 
@@ -1492,7 +1493,7 @@ fn linux_sched_yield(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
 fn linux_dup2(oldfd: usize, newfd: usize) -> Result<u64, i64> {
     process::user_dup2(oldfd, newfd)
         .map(|fd| fd as u64)
-        .map_err(|_| EBADF)
+        .map_err(map_vfs_error)
 }
 
 fn linux_dup3(oldfd: usize, newfd: usize, flags: u32) -> Result<u64, i64> {
@@ -1506,11 +1507,13 @@ fn linux_dup3(oldfd: usize, newfd: usize, flags: u32) -> Result<u64, i64> {
     };
     process::user_dup3(oldfd, newfd, fd_flags)
         .map(|fd| fd as u64)
-        .map_err(|_| EBADF)
+        .map_err(map_vfs_error)
 }
 
 fn linux_dup(fd: usize) -> Result<u64, i64> {
-    process::user_dup(fd).map(|fd| fd as u64).map_err(|_| EBADF)
+    process::user_dup(fd)
+        .map(|fd| fd as u64)
+        .map_err(map_vfs_error)
 }
 
 fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
