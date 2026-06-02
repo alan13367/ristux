@@ -28,11 +28,11 @@ send_text() {
     case "$ch" in
       [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
       ' ') printf 'sendkey spc\n' ;;
-      '&') printf 'sendkey shift-7\n' ;;
-      '/') printf 'sendkey slash\n' ;;
+      '&') printf 'sendkey shift-6\n' ;;
+      '/') printf 'sendkey shift-7\n' ;;
       '.') printf 'sendkey dot\n' ;;
-      '-') printf 'sendkey minus\n' ;;
-      ':') printf 'sendkey shift-semicolon\n' ;;
+      '-') printf 'sendkey slash\n' ;;
+      ':') printf 'sendkey shift-dot\n' ;;
       A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z)
         lower="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')"
         printf 'sendkey shift-%s\n' "$lower"

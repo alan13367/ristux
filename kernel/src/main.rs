@@ -60,6 +60,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
             .unwrap_or_else(|message| panic!("{}", message))
     };
     boot_info.print_summary();
+    tty::configure_keyboard_layout(boot_info.command_line());
     memory::init(&boot_info);
     time::init();
     entropy::init();

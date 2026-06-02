@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::str;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::{process::Pid, signal::Signal, sync::spinlock::SpinLock};
 
@@ -8,6 +8,12 @@ static TTY: SpinLock<Option<Tty>> = SpinLock::new(None);
 static LEFT_SHIFT: AtomicBool = AtomicBool::new(false);
 static RIGHT_SHIFT: AtomicBool = AtomicBool::new(false);
 static CTRL: AtomicBool = AtomicBool::new(false);
+static ALT: AtomicBool = AtomicBool::new(false);
+static EXTENDED_SCANCODE: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_LAYOUT: AtomicU8 = AtomicU8::new(KEYBOARD_LAYOUT_SPANISH_MAC);
+
+const KEYBOARD_LAYOUT_US: u8 = 0;
+const KEYBOARD_LAYOUT_SPANISH_MAC: u8 = 1;
 
 pub const TERMIOS_SIZE: usize = 60;
 const NCCS: usize = 32;
@@ -549,7 +555,39 @@ pub fn set_foreground_pgrp(pgrp: Pid) {
     tty.set_foreground_pgrp(pgrp);
 }
 
+pub fn configure_keyboard_layout(cmdline: Option<&str>) {
+    let layout = match cmdline {
+        Some(cmdline) if cmdline.contains("kbd=us") || cmdline.contains("keyboard=us") => {
+            KEYBOARD_LAYOUT_US
+        }
+        Some(cmdline)
+            if cmdline.contains("kbd=es")
+                || cmdline.contains("kbd=es-mac")
+                || cmdline.contains("keyboard=es")
+                || cmdline.contains("keyboard=es-mac") =>
+        {
+            KEYBOARD_LAYOUT_SPANISH_MAC
+        }
+        _ => KEYBOARD_LAYOUT_SPANISH_MAC,
+    };
+    KEYBOARD_LAYOUT.store(layout, Ordering::Relaxed);
+    crate::println!("Keyboard layout: {}.", keyboard_layout_name(layout));
+}
+
+fn keyboard_layout_name(layout: u8) -> &'static str {
+    match layout {
+        KEYBOARD_LAYOUT_US => "us",
+        KEYBOARD_LAYOUT_SPANISH_MAC => "es-mac",
+        _ => "unknown",
+    }
+}
+
 fn translate_set1(scancode: u8) -> Option<u8> {
+    if scancode == 0xe0 {
+        EXTENDED_SCANCODE.store(true, Ordering::Relaxed);
+        return None;
+    }
+    let _extended = EXTENDED_SCANCODE.swap(false, Ordering::Relaxed);
     match scancode {
         0x2a => {
             LEFT_SHIFT.store(true, Ordering::Relaxed);
@@ -561,6 +599,10 @@ fn translate_set1(scancode: u8) -> Option<u8> {
         }
         0x1d => {
             CTRL.store(true, Ordering::Relaxed);
+            return None;
+        }
+        0x38 => {
+            ALT.store(true, Ordering::Relaxed);
             return None;
         }
         0xaa => {
@@ -575,6 +617,10 @@ fn translate_set1(scancode: u8) -> Option<u8> {
             CTRL.store(false, Ordering::Relaxed);
             return None;
         }
+        0xb8 => {
+            ALT.store(false, Ordering::Relaxed);
+            return None;
+        }
         _ => {}
     }
 
@@ -583,7 +629,20 @@ fn translate_set1(scancode: u8) -> Option<u8> {
     }
 
     let shifted = LEFT_SHIFT.load(Ordering::Relaxed) || RIGHT_SHIFT.load(Ordering::Relaxed);
-    let byte = match scancode {
+    let alt = ALT.load(Ordering::Relaxed);
+    let byte = match KEYBOARD_LAYOUT.load(Ordering::Relaxed) {
+        KEYBOARD_LAYOUT_SPANISH_MAC => translate_spanish_mac(scancode, shifted, alt),
+        _ => translate_us(scancode, shifted),
+    }?;
+    if CTRL.load(Ordering::Relaxed) && byte.is_ascii_alphabetic() {
+        return Some(byte.to_ascii_lowercase() & 0x1f);
+    }
+    Some(byte)
+}
+
+fn translate_us(scancode: u8, shifted: bool) -> Option<u8> {
+    match scancode {
+        0x01 => Some(0x1b),
         0x02 => Some(if shifted { b'!' } else { b'1' }),
         0x03 => Some(if shifted { b'@' } else { b'2' }),
         0x04 => Some(if shifted { b'#' } else { b'3' }),
@@ -636,11 +695,90 @@ fn translate_set1(scancode: u8) -> Option<u8> {
         0x35 => Some(if shifted { b'?' } else { b'/' }),
         0x39 => Some(b' '),
         _ => None,
-    }?;
-    if CTRL.load(Ordering::Relaxed) && byte.is_ascii_alphabetic() {
-        return Some(byte.to_ascii_lowercase() & 0x1f);
     }
-    Some(byte)
+}
+
+fn translate_spanish_mac(scancode: u8, shifted: bool, alt: bool) -> Option<u8> {
+    if alt {
+        match (scancode, shifted) {
+            (0x02, false) => return Some(b'|'),
+            (0x03, false) => return Some(b'@'),
+            (0x04, false) => return Some(b'#'),
+            (0x08, false) => return Some(b'{'),
+            (0x08, true) => return Some(b'\\'),
+            (0x09, false) => return Some(b'['),
+            (0x0a, false) => return Some(b']'),
+            (0x0b, false) => return Some(b'}'),
+            (0x0c, false) => return Some(b'\\'),
+            (0x1a, false) => return Some(b'['),
+            (0x1a, true) => return Some(b'{'),
+            (0x1b, false) => return Some(b']'),
+            (0x1b, true) => return Some(b'}'),
+            (0x28, false) => return Some(b'{'),
+            (0x29, false) => return Some(b'\\'),
+            (0x2b, false) => return Some(b'}'),
+            (0x31, false) => return Some(b'~'),
+            (0x56, false) => return Some(b'|'),
+            _ => {}
+        }
+    }
+
+    match scancode {
+        0x01 => Some(0x1b),
+        0x02 => Some(if shifted { b'!' } else { b'1' }),
+        0x03 => Some(if shifted { b'"' } else { b'2' }),
+        0x04 => Some(if shifted { b'#' } else { b'3' }),
+        0x05 => Some(if shifted { b'$' } else { b'4' }),
+        0x06 => Some(if shifted { b'%' } else { b'5' }),
+        0x07 => Some(if shifted { b'&' } else { b'6' }),
+        0x08 => Some(if shifted { b'/' } else { b'7' }),
+        0x09 => Some(if shifted { b'(' } else { b'8' }),
+        0x0a => Some(if shifted { b')' } else { b'9' }),
+        0x0b => Some(if shifted { b'=' } else { b'0' }),
+        0x0c => Some(if shifted { b'?' } else { b'\'' }),
+        0x0d => Some(if shifted { b'+' } else { b'=' }),
+        0x0e => Some(0x08),
+        0x0f => Some(b'\t'),
+        0x10 => Some(if shifted { b'Q' } else { b'q' }),
+        0x11 => Some(if shifted { b'W' } else { b'w' }),
+        0x12 => Some(if shifted { b'E' } else { b'e' }),
+        0x13 => Some(if shifted { b'R' } else { b'r' }),
+        0x14 => Some(if shifted { b'T' } else { b't' }),
+        0x15 => Some(if shifted { b'Y' } else { b'y' }),
+        0x16 => Some(if shifted { b'U' } else { b'u' }),
+        0x17 => Some(if shifted { b'I' } else { b'i' }),
+        0x18 => Some(if shifted { b'O' } else { b'o' }),
+        0x19 => Some(if shifted { b'P' } else { b'p' }),
+        0x1a => Some(if shifted { b'^' } else { b'`' }),
+        0x1b => Some(if shifted { b'*' } else { b'+' }),
+        0x1c => Some(b'\n'),
+        0x1e => Some(if shifted { b'A' } else { b'a' }),
+        0x1f => Some(if shifted { b'S' } else { b's' }),
+        0x20 => Some(if shifted { b'D' } else { b'd' }),
+        0x21 => Some(if shifted { b'F' } else { b'f' }),
+        0x22 => Some(if shifted { b'G' } else { b'g' }),
+        0x23 => Some(if shifted { b'H' } else { b'h' }),
+        0x24 => Some(if shifted { b'J' } else { b'j' }),
+        0x25 => Some(if shifted { b'K' } else { b'k' }),
+        0x26 => Some(if shifted { b'L' } else { b'l' }),
+        0x27 => Some(if shifted { b':' } else { b';' }),
+        0x28 => Some(if shifted { b'"' } else { b'\'' }),
+        0x29 => Some(if shifted { b'~' } else { b'`' }),
+        0x2b => Some(if shifted { b'|' } else { b'\\' }),
+        0x2c => Some(if shifted { b'Z' } else { b'z' }),
+        0x2d => Some(if shifted { b'X' } else { b'x' }),
+        0x2e => Some(if shifted { b'C' } else { b'c' }),
+        0x2f => Some(if shifted { b'V' } else { b'v' }),
+        0x30 => Some(if shifted { b'B' } else { b'b' }),
+        0x31 => Some(if shifted { b'N' } else { b'n' }),
+        0x32 => Some(if shifted { b'M' } else { b'm' }),
+        0x33 => Some(if shifted { b';' } else { b',' }),
+        0x34 => Some(if shifted { b':' } else { b'.' }),
+        0x35 => Some(if shifted { b'_' } else { b'-' }),
+        0x39 => Some(b' '),
+        0x56 => Some(if shifted { b'>' } else { b'<' }),
+        _ => None,
+    }
 }
 
 fn self_test() {
@@ -657,14 +795,46 @@ fn self_test() {
     if tty.input(0x03) != Some(Signal::Int) {
         panic!("tty ctrl-c self-test failed");
     }
-    if translate_set1(0x1e) != Some(b'a') || translate_set1(0x9e).is_some() {
+    let layout = KEYBOARD_LAYOUT.load(Ordering::Relaxed);
+    if translate_set1(0x01) != Some(0x1b)
+        || translate_set1(0x1e) != Some(b'a')
+        || translate_set1(0x9e).is_some()
+    {
         panic!("tty scancode translation self-test failed");
     }
     translate_set1(0x2a);
-    if translate_set1(0x2b) != Some(b'|') {
+    let shifted_punctuation = if layout == KEYBOARD_LAYOUT_SPANISH_MAC {
+        translate_set1(0x34) == Some(b':')
+    } else {
+        translate_set1(0x2b) == Some(b'|')
+    };
+    if !shifted_punctuation {
         panic!("tty shifted punctuation self-test failed");
     }
     translate_set1(0xaa);
+    if layout == KEYBOARD_LAYOUT_SPANISH_MAC {
+        if translate_set1(0x56) != Some(b'<') {
+            panic!("tty spanish angle bracket self-test failed");
+        }
+        translate_set1(0x2a);
+        if translate_set1(0x56) != Some(b'>') {
+            panic!("tty spanish shifted angle bracket self-test failed");
+        }
+        translate_set1(0xaa);
+        translate_set1(0x38);
+        let mac_symbols = translate_set1(0x1a) == Some(b'[')
+            && translate_set1(0x1b) == Some(b']')
+            && translate_set1(0x28) == Some(b'{')
+            && translate_set1(0x2b) == Some(b'}');
+        let pc_symbols = translate_set1(0x09) == Some(b'[')
+            && translate_set1(0x0a) == Some(b']')
+            && translate_set1(0x08) == Some(b'{')
+            && translate_set1(0x0b) == Some(b'}');
+        if !mac_symbols || !pc_symbols {
+            panic!("tty spanish bracket self-test failed");
+        }
+        translate_set1(0xb8);
+    }
     tty.input(0x04);
     if tty.read_available() != Some(Vec::new()) {
         panic!("tty ctrl-d self-test failed");

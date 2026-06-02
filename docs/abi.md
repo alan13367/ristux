@@ -213,6 +213,13 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads
   honor `ICANON`, `ISIG`, `VMIN`, `VTIME`, and the standard control characters
   used by the in-tree `stty` utility.
+- Keyboard: the PS/2 set-1 translator defaults to a Spanish Mac-oriented
+  layout, including `Shift-.` for `:`, the ISO `<`/`>` key, and Option/AltGr
+  variants for `[`, `]`, `{`, and `}`. The graphical `make run` path passes
+  QEMU `-k es` by default so macOS Spanish keyboard input reaches the guest as
+  Spanish-style scancodes; override with `QEMU_KEYMAP=` if needed. Kernel
+  command-line options `kbd=us`/`keyboard=us` and
+  `kbd=es-mac`/`keyboard=es-mac` select the available layouts.
 - Console ANSI: the VGA text console handles common `ESC [` CSI sequences for
   cursor movement, line/screen clear, SGR foreground/background colors, saved
   cursor state, and private alternate-screen toggles such as `?1049h`/`?1049l`.
@@ -230,9 +237,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `/etc/profile` and `$HOME/.profile`, and `export NAME=value` environment
   propagation. PTY-backed shells are covered for Ctrl-C, Ctrl-Z, `jobs`, and
   `fg` over `/dev/pts/N`.
-- Editor: `/bin/edit` and `/bin/vi` provide a small vi-like line editor with
-  append, insert, open-line, delete-line, print, write, forced quit, and
-  write-and-quit commands for basic file editing from the console or a PTY.
+- Editor: `/bin/edit` and `/bin/vi` provide a small full-screen vi-style
+  editor over the ANSI console. It uses raw termios input, displays the file
+  buffer, supports normal/insert/command modes, and accepts commands such as
+  `:w`, `:q`, `:q!`, and `:wq` on the bottom command line.
 - Build tools: `/bin/cc` and `/bin/tcc` are TinyCC, with `/bin/as`,
   `/bin/ld`, and `/bin/cpp` compatibility frontends that delegate to TinyCC for
   static in-system builds. `/bin/as` prepends `-c`, `/bin/cpp` prepends `-E`,

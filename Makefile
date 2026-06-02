@@ -6,6 +6,7 @@ GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v i686
 QEMU ?= qemu-system-x86_64
 QEMU_FLAGS ?= -m 256M -smp 4
 QEMU_DISPLAY ?= $(shell if $(QEMU) -display help 2>/dev/null | grep -qx cocoa; then printf '%s' '-display cocoa,zoom-to-fit=on'; fi)
+QEMU_KEYMAP ?= es
 QEMU_WINDOW_BOUNDS ?= 80,80,1360,820
 QEMU_WINDOW_TITLE ?= Ristux
 RUST_HOST := $(shell $(RUSTC) -vV | sed -n 's/^host: //p')
@@ -620,7 +621,7 @@ iso: check-multiboot $(ISO_INITRD) $(DISK_IMAGE)
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_DIR)
 
 run: iso disk
-	QEMU="$(QEMU)" QEMU_FLAGS="$(QEMU_FLAGS)" QEMU_DISPLAY="$(QEMU_DISPLAY)" QEMU_WINDOW_BOUNDS="$(QEMU_WINDOW_BOUNDS)" QEMU_WINDOW_TITLE="$(QEMU_WINDOW_TITLE)" ISO_IMAGE="$(ISO_IMAGE)" DISK_IMAGE="$(DISK_IMAGE)" scripts/run_qemu_display.sh
+	QEMU="$(QEMU)" QEMU_FLAGS="$(QEMU_FLAGS)" QEMU_DISPLAY="$(QEMU_DISPLAY)" QEMU_KEYMAP="$(QEMU_KEYMAP)" QEMU_WINDOW_BOUNDS="$(QEMU_WINDOW_BOUNDS)" QEMU_WINDOW_TITLE="$(QEMU_WINDOW_TITLE)" ISO_IMAGE="$(ISO_IMAGE)" DISK_IMAGE="$(DISK_IMAGE)" scripts/run_qemu_display.sh
 
 run-headless: iso
 	scripts/run_qemu.sh --headless

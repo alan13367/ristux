@@ -267,44 +267,51 @@ case "$SCENARIO" in
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
       "rm -f /tmp/editcheck.txt"
-      "edit /tmp/editcheck.txt"
-      "a"
-      "alpha"
-      "beta"
-      "."
-      "w"
-      "q"
       "vi /tmp/editcheck.txt"
-      "p"
-      "o"
-      "gamma"
-      "."
-      "dd"
-      ":wq"
+      "__text ialpha"
+      "__sendkey ret"
+      "__text beta"
+      "__sendkey esc"
+      "__text :wq"
+      "__sendkey ret"
       "vi /tmp/editcheck.txt"
-      "i"
-      "scratch"
-      "."
-      ":q!"
+      "__text Go"
+      "__text gamma"
+      "__sendkey esc"
+      "__text :wq"
+      "__sendkey ret"
       "cat /tmp/editcheck.txt"
       "which vi"
       "pkg info vi"
     )
     EXPECTS=(
-      "TTY canonical line ready: edit /tmp/editcheck.txt"
       "TTY canonical line ready: vi /tmp/editcheck.txt"
-      "^edit: new file$"
-      "^edit: wrote 2 line[(]s[)]$"
-      "^edit: done$"
-      "^1.alpha$"
-      "^2.beta$"
-      "^edit: deleted$"
       "^alpha$"
       "^beta$"
+      "^gamma$"
       "^/bin/vi$"
       "^name: vi$"
       "^  edit$"
       "^  /bin/vi$"
+    )
+    ;;
+  editor-c)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "rm -f /tmp/hello.c"
+      "vi /tmp/hello.c"
+      "__text i#include <stdio.h>"
+      "__sendkey ret"
+      "__text int main() { return 0; }"
+      "__sendkey esc"
+      "__text :wq"
+      "__sendkey ret"
+      "cat /tmp/hello.c"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: vi /tmp/hello.c"
+      "^#include <stdio.h>$"
+      "^int main() { return 0; }$"
     )
     ;;
   libc)
@@ -2652,7 +2659,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-c, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
     exit 2
     ;;
 esac
@@ -2665,37 +2672,37 @@ send_text() {
     case "$ch" in
       [a-z0-9]) printf 'sendkey %s\n' "$ch" ;;
       ' ') printf 'sendkey spc\n' ;;
-      '|') printf 'sendkey shift-backslash\n' ;;
-      '&') printf 'sendkey shift-7\n' ;;
+      '|') printf 'sendkey alt-1\n' ;;
+      '&') printf 'sendkey shift-6\n' ;;
       '$') printf 'sendkey shift-4\n' ;;
       '%') printf 'sendkey shift-5\n' ;;
-      '*') printf 'sendkey shift-8\n' ;;
-      '(') printf 'sendkey shift-9\n' ;;
-      ')') printf 'sendkey shift-0\n' ;;
-      '[') printf 'sendkey bracketleft\n' ;;
-      ']') printf 'sendkey bracketright\n' ;;
-      '{') printf 'sendkey shift-bracketleft\n' ;;
-      '}') printf 'sendkey shift-bracketright\n' ;;
-      '/') printf 'sendkey slash\n' ;;
-      \\) printf 'sendkey backslash\n' ;;
-      '?') printf 'sendkey shift-slash\n' ;;
-      ';') printf 'sendkey semicolon\n' ;;
-      ':') printf 'sendkey shift-semicolon\n' ;;
-      "'") printf 'sendkey apostrophe\n' ;;
-      '"') printf 'sendkey shift-apostrophe\n' ;;
-      '`') printf 'sendkey grave_accent\n' ;;
+      '*') printf 'sendkey shift-bracketright\n' ;;
+      '(') printf 'sendkey shift-8\n' ;;
+      ')') printf 'sendkey shift-9\n' ;;
+      '[') printf 'sendkey alt-8\n' ;;
+      ']') printf 'sendkey alt-9\n' ;;
+      '{') printf 'sendkey alt-7\n' ;;
+      '}') printf 'sendkey alt-0\n' ;;
+      '/') printf 'sendkey shift-7\n' ;;
+      \\) printf 'sendkey alt-shift-7\n' ;;
+      '?') printf 'sendkey shift-minus\n' ;;
+      ';') printf 'sendkey shift-comma\n' ;;
+      ':') printf 'sendkey shift-dot\n' ;;
+      "'") printf 'sendkey minus\n' ;;
+      '"') printf 'sendkey shift-2\n' ;;
+      '`') printf 'sendkey bracketleft\n' ;;
       '#') printf 'sendkey shift-3\n' ;;
       '!') printf 'sendkey shift-1\n' ;;
       '.') printf 'sendkey dot\n' ;;
       ',') printf 'sendkey comma\n' ;;
-      '-') printf 'sendkey minus\n' ;;
-      '_') printf 'sendkey shift-minus\n' ;;
-      '=') printf 'sendkey equal\n' ;;
-      '+') printf 'sendkey shift-equal\n' ;;
-      '@') printf 'sendkey shift-2\n' ;;
-      '>') printf 'sendkey shift-dot\n' ;;
-      '<') printf 'sendkey shift-comma\n' ;;
-      '~') printf 'sendkey shift-grave_accent\n' ;;
+      '-') printf 'sendkey slash\n' ;;
+      '_') printf 'sendkey shift-slash\n' ;;
+      '=') printf 'sendkey shift-0\n' ;;
+      '+') printf 'sendkey bracketright\n' ;;
+      '@') printf 'sendkey alt-2\n' ;;
+      '>') printf 'sendkey shift-less\n' ;;
+      '<') printf 'sendkey less\n' ;;
+      '~') printf 'sendkey alt-n\n' ;;
       A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z)
         lower="$(printf '%s' "$ch" | tr 'A-Z' 'a-z')"
         printf 'sendkey shift-%s\n' "$lower"
@@ -2709,6 +2716,9 @@ send_text() {
 send_command() {
   local command="$1"
   case "$command" in
+    "__text "*)
+      send_text "${command#__text }"
+      ;;
     "__sendkey "*)
       printf 'sendkey %s\n' "${command#__sendkey }"
       ;;

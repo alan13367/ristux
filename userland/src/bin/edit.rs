@@ -13,6 +13,489 @@ const O_WRONLY: i32 = 1;
 const O_CREAT: i32 = 0o100;
 const O_TRUNC: i32 = 0o1000;
 
+const TCGETS: usize = 0x5401;
+const TCSETS: usize = 0x5402;
+const TIOCGWINSZ: usize = 0x5413;
+const TERMIOS_SIZE: usize = 60;
+const TERMIOS_IFLAG: usize = 0;
+const TERMIOS_OFLAG: usize = 4;
+const TERMIOS_LFLAG: usize = 12;
+const TERMIOS_CC: usize = 17;
+const VTIME: usize = 5;
+const VMIN: usize = 6;
+const ICRNL: u32 = 0x0100;
+const OPOST: u32 = 0x0001;
+const ISIG: u32 = 0x0001;
+const ICANON: u32 = 0x0002;
+const ECHO: u32 = 0x0008;
+const IEXTEN: u32 = 0x8000;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Mode {
+    Normal,
+    Insert,
+    Command,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Key {
+    Byte(u8),
+    Esc,
+    Backspace,
+    Enter,
+}
+
+struct Terminal {
+    original: [u8; TERMIOS_SIZE],
+}
+
+impl Terminal {
+    fn enter() -> Option<Self> {
+        let mut original = [0u8; TERMIOS_SIZE];
+        if sys::ioctl(0, TCGETS, original.as_mut_ptr() as usize) < 0 {
+            return None;
+        }
+        let mut raw = original;
+        let iflag = read_u32(&raw, TERMIOS_IFLAG) & !ICRNL;
+        let oflag = read_u32(&raw, TERMIOS_OFLAG) & !OPOST;
+        let lflag = read_u32(&raw, TERMIOS_LFLAG) & !(ISIG | ICANON | ECHO | IEXTEN);
+        set_u32(&mut raw, TERMIOS_IFLAG, iflag);
+        set_u32(&mut raw, TERMIOS_OFLAG, oflag);
+        set_u32(&mut raw, TERMIOS_LFLAG, lflag);
+        raw[TERMIOS_CC + VMIN] = 1;
+        raw[TERMIOS_CC + VTIME] = 0;
+        if sys::ioctl(0, TCSETS, raw.as_ptr() as usize) < 0 {
+            return None;
+        }
+        let _ = write_all(1, b"\x1b[?1049h\x1b[2J\x1b[H");
+        Some(Self { original })
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = sys::ioctl(0, TCSETS, self.original.as_ptr() as usize);
+        let _ = write_all(1, b"\x1b[0m\x1b[?1049l\x1b[2J\x1b[H");
+    }
+}
+
+struct Editor {
+    path: Vec<u8>,
+    lines: Vec<Vec<u8>>,
+    cx: usize,
+    cy: usize,
+    row_offset: usize,
+    rows: usize,
+    cols: usize,
+    mode: Mode,
+    dirty: bool,
+    running: bool,
+    command: Vec<u8>,
+    status: Vec<u8>,
+    pending_delete: bool,
+}
+
+impl Editor {
+    fn new(path: &[u8], lines: Vec<Vec<u8>>) -> Self {
+        let mut editor = Self {
+            path: path.to_vec(),
+            lines,
+            cx: 0,
+            cy: 0,
+            row_offset: 0,
+            rows: 24,
+            cols: 80,
+            mode: Mode::Normal,
+            dirty: false,
+            running: true,
+            command: Vec::new(),
+            status: Vec::new(),
+            pending_delete: false,
+        };
+        editor.update_window_size();
+        if editor.lines.is_empty() {
+            editor.status = b"new file".to_vec();
+        }
+        editor
+    }
+
+    fn run(&mut self) -> i32 {
+        while self.running {
+            self.refresh_screen();
+            let key = read_key();
+            self.handle_key(key);
+        }
+        0
+    }
+
+    fn handle_key(&mut self, key: Key) {
+        match self.mode {
+            Mode::Normal => self.handle_normal_key(key),
+            Mode::Insert => self.handle_insert_key(key),
+            Mode::Command => self.handle_command_key(key),
+        }
+        self.clamp_cursor();
+    }
+
+    fn handle_normal_key(&mut self, key: Key) {
+        if self.pending_delete && key != Key::Byte(b'd') {
+            self.pending_delete = false;
+        }
+        match key {
+            Key::Byte(b':') => {
+                self.command.clear();
+                self.mode = Mode::Command;
+                self.pending_delete = false;
+            }
+            Key::Byte(b'i') => {
+                self.ensure_current_line();
+                self.mode = Mode::Insert;
+            }
+            Key::Byte(b'a') => {
+                self.ensure_current_line();
+                if self.cx < self.current_line_len() {
+                    self.cx += 1;
+                }
+                self.mode = Mode::Insert;
+            }
+            Key::Byte(b'A') => {
+                self.ensure_current_line();
+                self.cx = self.current_line_len();
+                self.mode = Mode::Insert;
+            }
+            Key::Byte(b'o') => {
+                let index = self.cy.saturating_add(1).min(self.lines.len());
+                self.lines.insert(index, Vec::new());
+                self.cy = index;
+                self.cx = 0;
+                self.mode = Mode::Insert;
+                self.dirty = true;
+            }
+            Key::Byte(b'O') => {
+                let index = self.cy.min(self.lines.len());
+                self.lines.insert(index, Vec::new());
+                self.cy = index;
+                self.cx = 0;
+                self.mode = Mode::Insert;
+                self.dirty = true;
+            }
+            Key::Byte(b'h') => self.move_left(),
+            Key::Byte(b'l') => self.move_right(),
+            Key::Byte(b'k') => self.move_up(),
+            Key::Byte(b'j') => self.move_down(),
+            Key::Byte(b'0') => self.cx = 0,
+            Key::Byte(b'$') => self.cx = self.current_line_len(),
+            Key::Byte(b'G') => {
+                if !self.lines.is_empty() {
+                    self.cy = self.lines.len() - 1;
+                    self.cx = self.cx.min(self.current_line_len());
+                }
+            }
+            Key::Byte(b'x') => self.delete_char(),
+            Key::Byte(b'd') if self.pending_delete => {
+                self.delete_line();
+                self.pending_delete = false;
+            }
+            Key::Byte(b'd') => self.pending_delete = true,
+            _ => {}
+        }
+    }
+
+    fn handle_insert_key(&mut self, key: Key) {
+        match key {
+            Key::Esc => {
+                self.mode = Mode::Normal;
+                if self.cx > 0 {
+                    self.cx -= 1;
+                }
+            }
+            Key::Backspace => self.backspace(),
+            Key::Enter => self.insert_newline(),
+            Key::Byte(byte) if byte == b'\t' => {
+                for _ in 0..4 {
+                    self.insert_byte(b' ');
+                }
+            }
+            Key::Byte(byte) if (0x20..=0x7e).contains(&byte) => self.insert_byte(byte),
+            _ => {}
+        }
+    }
+
+    fn handle_command_key(&mut self, key: Key) {
+        match key {
+            Key::Esc => {
+                self.mode = Mode::Normal;
+                self.command.clear();
+                self.status.clear();
+            }
+            Key::Backspace => {
+                self.command.pop();
+            }
+            Key::Enter => self.execute_command(),
+            Key::Byte(byte) if (0x20..=0x7e).contains(&byte) => self.command.push(byte),
+            _ => {}
+        }
+    }
+
+    fn execute_command(&mut self) {
+        let command = self.command.as_slice();
+        match command {
+            b"w" | b"write" => {
+                let _ = self.write_current_file();
+            }
+            b"q" | b"quit" => {
+                if self.dirty {
+                    self.status = b"unsaved changes: use :wq or :q!".to_vec();
+                } else {
+                    self.running = false;
+                }
+            }
+            b"q!" | b"quit!" => self.running = false,
+            b"wq" | b"x" => {
+                if self.write_current_file() {
+                    self.running = false;
+                }
+            }
+            b"help" | b"h" => {
+                self.status = b"normal: i/a/o/O edit, h/j/k/l move, x delete char, dd delete line, :wq save+quit".to_vec();
+            }
+            _ => self.status = b"unknown command".to_vec(),
+        }
+        self.command.clear();
+        if self.running {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    fn write_current_file(&mut self) -> bool {
+        if save_file(&self.path, &self.lines) {
+            self.dirty = false;
+            let mut status = b"wrote ".to_vec();
+            status.extend_from_slice(self.lines.len().to_string().as_bytes());
+            status.extend_from_slice(b" line(s)");
+            self.status = status;
+            true
+        } else {
+            self.status = b"write failed".to_vec();
+            false
+        }
+    }
+
+    fn ensure_current_line(&mut self) {
+        if self.lines.is_empty() {
+            self.lines.push(Vec::new());
+            self.cy = 0;
+            self.cx = 0;
+        }
+    }
+
+    fn insert_byte(&mut self, byte: u8) {
+        self.ensure_current_line();
+        let line = &mut self.lines[self.cy];
+        line.insert(self.cx.min(line.len()), byte);
+        self.cx += 1;
+        self.dirty = true;
+    }
+
+    fn insert_newline(&mut self) {
+        self.ensure_current_line();
+        let rest = {
+            let line = &mut self.lines[self.cy];
+            line.split_off(self.cx.min(line.len()))
+        };
+        self.cy += 1;
+        self.cx = 0;
+        self.lines.insert(self.cy, rest);
+        self.dirty = true;
+    }
+
+    fn backspace(&mut self) {
+        if self.lines.is_empty() {
+            return;
+        }
+        if self.cx > 0 {
+            let line = &mut self.lines[self.cy];
+            if self.cx <= line.len() {
+                line.remove(self.cx - 1);
+                self.cx -= 1;
+                self.dirty = true;
+            }
+        } else if self.cy > 0 {
+            let current = self.lines.remove(self.cy);
+            self.cy -= 1;
+            self.cx = self.lines[self.cy].len();
+            self.lines[self.cy].extend_from_slice(&current);
+            self.dirty = true;
+        }
+    }
+
+    fn delete_char(&mut self) {
+        if self.lines.is_empty() || self.cy >= self.lines.len() {
+            return;
+        }
+        let line = &mut self.lines[self.cy];
+        if self.cx < line.len() {
+            line.remove(self.cx);
+            self.dirty = true;
+        } else if self.cy + 1 < self.lines.len() {
+            let next = self.lines.remove(self.cy + 1);
+            self.lines[self.cy].extend_from_slice(&next);
+            self.dirty = true;
+        }
+    }
+
+    fn delete_line(&mut self) {
+        if self.lines.is_empty() {
+            self.status = b"no such line".to_vec();
+            return;
+        }
+        self.lines.remove(self.cy.min(self.lines.len() - 1));
+        if self.cy >= self.lines.len() && self.cy > 0 {
+            self.cy -= 1;
+        }
+        self.cx = 0;
+        self.dirty = true;
+        self.status = b"deleted".to_vec();
+    }
+
+    fn move_left(&mut self) {
+        if self.cx > 0 {
+            self.cx -= 1;
+        } else if self.cy > 0 {
+            self.cy -= 1;
+            self.cx = self.current_line_len();
+        }
+    }
+
+    fn move_right(&mut self) {
+        if self.cx < self.current_line_len() {
+            self.cx += 1;
+        } else if self.cy + 1 < self.lines.len() {
+            self.cy += 1;
+            self.cx = 0;
+        }
+    }
+
+    fn move_up(&mut self) {
+        if self.cy > 0 {
+            self.cy -= 1;
+            self.cx = self.cx.min(self.current_line_len());
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.cy + 1 < self.lines.len() {
+            self.cy += 1;
+            self.cx = self.cx.min(self.current_line_len());
+        }
+    }
+
+    fn current_line_len(&self) -> usize {
+        self.lines.get(self.cy).map(|line| line.len()).unwrap_or(0)
+    }
+
+    fn clamp_cursor(&mut self) {
+        if self.lines.is_empty() {
+            self.cy = 0;
+            self.cx = 0;
+            return;
+        }
+        self.cy = self.cy.min(self.lines.len() - 1);
+        self.cx = self.cx.min(self.current_line_len());
+    }
+
+    fn update_window_size(&mut self) {
+        let mut ws = [0u8; 8];
+        if sys::ioctl(1, TIOCGWINSZ, ws.as_mut_ptr() as usize) >= 0 {
+            let rows = u16::from_le_bytes([ws[0], ws[1]]) as usize;
+            let cols = u16::from_le_bytes([ws[2], ws[3]]) as usize;
+            if rows >= 2 {
+                self.rows = rows;
+            }
+            if cols >= 20 {
+                self.cols = cols;
+            }
+        }
+    }
+
+    fn refresh_screen(&mut self) {
+        self.update_window_size();
+        self.scroll();
+        let text_rows = self.rows.saturating_sub(1).max(1);
+        let _ = write_all(1, b"\x1b[H");
+        for screen_row in 0..text_rows {
+            move_cursor(screen_row + 1, 1);
+            let _ = write_all(1, b"\x1b[2K");
+            let file_row = self.row_offset + screen_row;
+            if file_row < self.lines.len() {
+                write_display_line(&self.lines[file_row], self.cols);
+            } else {
+                let _ = write_all(1, b"\x1b[34m~\x1b[0m");
+            }
+        }
+        self.draw_bottom_line();
+        self.position_cursor();
+    }
+
+    fn scroll(&mut self) {
+        let text_rows = self.rows.saturating_sub(1).max(1);
+        if self.cy < self.row_offset {
+            self.row_offset = self.cy;
+        } else if self.cy >= self.row_offset + text_rows {
+            self.row_offset = self.cy.saturating_sub(text_rows - 1);
+        }
+    }
+
+    fn draw_bottom_line(&self) {
+        move_cursor(self.rows, 1);
+        let _ = write_all(1, b"\x1b[2K");
+        match self.mode {
+            Mode::Command => {
+                let _ = write_all(1, b":");
+                write_display_line(&self.command, self.cols.saturating_sub(1));
+            }
+            Mode::Insert => self.draw_status(b"-- INSERT --"),
+            Mode::Normal => {
+                if self.status.is_empty() {
+                    self.draw_file_status();
+                } else {
+                    self.draw_status(&self.status);
+                }
+            }
+        }
+    }
+
+    fn draw_file_status(&self) {
+        let _ = write_all(1, b"\x1b[97;44m");
+        let _ = write_all(1, b" ");
+        let _ = write_all(1, &self.path);
+        if self.dirty {
+            let _ = write_all(1, b" [+]");
+        }
+        let _ = write_all(1, b"  ");
+        let _ = write_all(1, self.lines.len().to_string().as_bytes());
+        let _ = write_all(1, b" lines ");
+        let _ = write_all(1, b"\x1b[0m");
+    }
+
+    fn draw_status(&self, status: &[u8]) {
+        let _ = write_all(1, b"\x1b[97;44m ");
+        write_display_line(status, self.cols.saturating_sub(1));
+        let _ = write_all(1, b"\x1b[0m");
+    }
+
+    fn position_cursor(&self) {
+        match self.mode {
+            Mode::Command => move_cursor(self.rows, self.command.len().saturating_add(2)),
+            _ => {
+                let row = self.cy.saturating_sub(self.row_offset).saturating_add(1);
+                let col = self.cx.min(self.cols.saturating_sub(1)).saturating_add(1);
+                move_cursor(row.min(self.rows.saturating_sub(1).max(1)), col);
+            }
+        }
+    }
+}
+
 fn cstr(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() + 1);
     out.extend_from_slice(s);
@@ -31,34 +514,29 @@ fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
     true
 }
 
-fn read_line(fd: i32) -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    let mut buf = [0u8; 128];
+fn read_key() -> Key {
+    let mut buf = [0u8; 1];
     loop {
-        let n = sys::read(fd, &mut buf);
-        if n < 0 || (n == 0 && line.is_empty()) {
-            return None;
+        let n = sys::read(0, &mut buf);
+        if n == 1 {
+            return decode_key(buf[0]);
         }
-        if n == 0 {
-            break;
-        }
-        let chunk = &buf[..n as usize];
-        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
-            line.extend_from_slice(&chunk[..pos]);
-            break;
-        }
-        line.extend_from_slice(chunk);
+        let _ = sys::sched_yield();
     }
-    while line.last() == Some(&b'\r') {
-        line.pop();
+}
+
+fn decode_key(byte: u8) -> Key {
+    match byte {
+        0x1b => Key::Esc,
+        0x08 | 0x7f => Key::Backspace,
+        b'\n' | b'\r' => Key::Enter,
+        byte => Key::Byte(byte),
     }
-    Some(line)
 }
 
 fn load_file(path: &[u8]) -> Vec<Vec<u8>> {
     let fd = sys::open(cstr(path).as_ptr(), O_RDONLY, 0);
     if fd < 0 {
-        let _ = write_all(1, b"edit: new file\n");
         return Vec::new();
     }
 
@@ -103,197 +581,73 @@ fn save_file(path: &[u8], lines: &[Vec<u8>]) -> bool {
     true
 }
 
-fn parse_number(bytes: &[u8]) -> Option<usize> {
-    let mut value = 0usize;
-    let mut seen = false;
-    for &byte in bytes {
-        if byte == b' ' || byte == b'\t' {
-            continue;
-        }
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-        value = value
-            .saturating_mul(10)
-            .saturating_add((byte - b'0') as usize);
-        seen = true;
-    }
-    if seen {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn print_lines(lines: &[Vec<u8>]) {
-    for (index, line) in lines.iter().enumerate() {
-        let _ = write_all(1, (index + 1).to_string().as_bytes());
-        let _ = write_all(1, b"\t");
-        let _ = write_all(1, line);
-        let _ = write_all(1, b"\n");
-    }
-}
-
-fn append_mode(lines: &mut Vec<Vec<u8>>, insert_at: Option<usize>) -> usize {
-    let _ = write_all(1, b"edit: enter text, . alone to finish\n");
-    let mut offset = 0usize;
-    while let Some(line) = read_line(0) {
-        if line.as_slice() == b"." {
+fn write_display_line(line: &[u8], width: usize) {
+    let mut written = 0usize;
+    for &byte in line {
+        if written >= width {
             break;
         }
-        if let Some(index) = insert_at {
-            lines.insert((index + offset).min(lines.len()), line);
-            offset += 1;
-        } else {
-            lines.push(line);
+        match byte {
+            b'\t' => {
+                let spaces = 4 - (written % 4);
+                for _ in 0..spaces {
+                    if written >= width {
+                        break;
+                    }
+                    let _ = write_all(1, b" ");
+                    written += 1;
+                }
+            }
+            0x20..=0x7e => {
+                let _ = write_all(1, &[byte]);
+                written += 1;
+            }
+            _ => {
+                if written + 2 > width {
+                    break;
+                }
+                let _ = write_all(1, b"^");
+                let printable = [byte ^ 0x40];
+                let _ = write_all(1, &printable);
+                written += 2;
+            }
         }
     }
-    let _ = write_all(1, b"edit: appended\n");
-    offset
 }
 
-fn save_command(path: &[u8], lines: &[Vec<u8>], dirty: &mut bool) -> bool {
-    if save_file(path, lines) {
-        *dirty = false;
-        let _ = write_all(1, b"edit: wrote ");
-        let _ = write_all(1, lines.len().to_string().as_bytes());
-        let _ = write_all(1, b" line(s)\n");
-        true
-    } else {
-        let _ = write_all(2, b"edit: write failed\n");
-        false
-    }
+fn move_cursor(row: usize, col: usize) {
+    let _ = write_all(1, b"\x1b[");
+    let _ = write_all(1, row.max(1).to_string().as_bytes());
+    let _ = write_all(1, b";");
+    let _ = write_all(1, col.max(1).to_string().as_bytes());
+    let _ = write_all(1, b"H");
 }
 
-fn quit_command(dirty: bool, force: bool) -> Option<i32> {
-    if dirty && !force {
-        let _ = write_all(1, b"edit: unsaved changes, use w then q\n");
-        None
-    } else {
-        let _ = write_all(1, b"edit: done\n");
-        Some(0)
-    }
+fn read_u32(buf: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
+}
+
+fn set_u32(buf: &mut [u8], offset: usize, value: u32) {
+    buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 fn main(args: &[&[u8]]) -> i32 {
     if args.len() < 2 {
-        let _ = write_all(2, b"usage: edit FILE\n");
+        let _ = write_all(2, b"usage: vi FILE\n");
         return 1;
     }
-    let path = args[1];
-    let _ = write_all(1, b"edit: ");
-    let _ = write_all(1, path);
-    let _ = write_all(1, b"\n");
-
-    let mut lines = load_file(path);
-    let mut dirty = false;
-    let mut cursor = if lines.is_empty() { 0 } else { lines.len() - 1 };
-    loop {
-        let _ = write_all(1, b": ");
-        let Some(command) = read_line(0) else {
-            break;
-        };
-        match command.as_slice() {
-            b"a" => {
-                let inserted = append_mode(&mut lines, None);
-                if inserted > 0 {
-                    cursor = lines.len().saturating_sub(1);
-                }
-                dirty = true;
-            }
-            b"p" => print_lines(&lines),
-            b"w" | b":w" | b":write" => {
-                let _ = save_command(path, &lines, &mut dirty);
-            }
-            b"q" | b":q" | b":quit" => {
-                if let Some(status) = quit_command(dirty, false) {
-                    return status;
-                }
-            }
-            b":q!" => return quit_command(dirty, true).unwrap_or(0),
-            b":wq" | b":x" => {
-                if save_command(path, &lines, &mut dirty) {
-                    return quit_command(false, false).unwrap_or(0);
-                }
-            }
-            b"h" => {
-                let _ = write_all(
-                    1,
-                    b"a append, i/I insert, o open, d N/dd delete, p print, w/:w write, q/:q quit\n",
-                );
-            }
-            b"i" | b"I" => {
-                let index = cursor.min(lines.len());
-                let inserted = append_mode(&mut lines, Some(index));
-                if inserted > 0 {
-                    cursor = cursor.min(lines.len().saturating_sub(1));
-                    dirty = true;
-                }
-            }
-            b"o" | b"O" => {
-                let index = if command.as_slice() == b"O" {
-                    cursor.min(lines.len())
-                } else {
-                    cursor.saturating_add(1).min(lines.len())
-                };
-                let inserted = append_mode(&mut lines, Some(index));
-                if inserted > 0 {
-                    cursor = index
-                        .saturating_add(inserted - 1)
-                        .min(lines.len().saturating_sub(1));
-                    dirty = true;
-                }
-            }
-            b"dd" => {
-                if lines.is_empty() {
-                    let _ = write_all(2, b"edit: no such line\n");
-                } else {
-                    lines.remove(cursor.min(lines.len() - 1));
-                    cursor = cursor.min(lines.len().saturating_sub(1));
-                    dirty = true;
-                    let _ = write_all(1, b"edit: deleted\n");
-                }
-            }
-            _ if command.starts_with(b"i ") => {
-                let index = parse_number(&command[2..]).unwrap_or(1).saturating_sub(1);
-                let inserted = append_mode(&mut lines, Some(index));
-                if inserted > 0 {
-                    cursor = index.min(lines.len().saturating_sub(1));
-                    dirty = true;
-                }
-            }
-            _ if command.starts_with(b"d ") => {
-                if let Some(index) = parse_number(&command[2..]) {
-                    if index > 0 && index <= lines.len() {
-                        lines.remove(index - 1);
-                        cursor = index.saturating_sub(1).min(lines.len().saturating_sub(1));
-                        dirty = true;
-                        let _ = write_all(1, b"edit: deleted\n");
-                    } else {
-                        let _ = write_all(2, b"edit: no such line\n");
-                    }
-                } else {
-                    let _ = write_all(2, b"edit: bad line number\n");
-                }
-            }
-            _ if parse_number(&command).is_some() => {
-                let index = parse_number(&command).unwrap_or(1);
-                if index > 0 && index <= lines.len() {
-                    cursor = index - 1;
-                    let _ = write_all(1, (cursor + 1).to_string().as_bytes());
-                    let _ = write_all(1, b"\t");
-                    let _ = write_all(1, &lines[cursor]);
-                    let _ = write_all(1, b"\n");
-                } else {
-                    let _ = write_all(2, b"edit: no such line\n");
-                }
-            }
-            _ => {
-                let _ = write_all(2, b"edit: unknown command\n");
-            }
-        }
-    }
-    0
+    let Some(_terminal) = Terminal::enter() else {
+        let _ = write_all(2, b"vi: raw terminal setup failed\n");
+        return 1;
+    };
+    let lines = load_file(args[1]);
+    let mut editor = Editor::new(args[1], lines);
+    editor.run()
 }
 
 ristux_userland::program_main!(main);
