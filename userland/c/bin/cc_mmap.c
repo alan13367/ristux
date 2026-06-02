@@ -252,6 +252,13 @@ int main(void) {
         puts("cc_mmap: write failed");
         return 1;
     }
+    errno = 0;
+    if (mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, -4096) != MAP_FAILED ||
+        errno != EINVAL) {
+        printf("cc_mmap: negative offset errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_mmap: offset ok");
 
     char *file = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);

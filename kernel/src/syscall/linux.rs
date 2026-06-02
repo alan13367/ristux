@@ -354,7 +354,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             a2 as i32,
             a3 as i32,
             a4 as i64,
-            a5 as usize,
+            a5 as i64,
         ),
         NR_mprotect => linux_mprotect(a0 as usize, a1 as usize, a2 as i32),
         NR_munmap => linux_munmap(a0 as usize, a1 as usize),
@@ -2537,7 +2537,7 @@ fn linux_mmap(
     prot: i32,
     flags: i32,
     fd: i64,
-    offset: usize,
+    offset: i64,
 ) -> Result<u64, i64> {
     let protection = mmap_protection(prot)?;
     if flags & !(MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS) != 0 {
@@ -2557,11 +2557,11 @@ fn linux_mmap(
     let file_mapping = if anonymous {
         None
     } else {
-        if fd < 0 || offset % FRAME_SIZE != 0 {
+        if fd < 0 || offset < 0 || offset as usize % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
         let vfs_fd = process::user_vfs_fd(fd as usize).ok_or(EBADF)?;
-        Some(vfs_fd)
+        Some((vfs_fd, offset as usize))
     };
 
     let mapped = if flags & MAP_FIXED != 0 {
@@ -2572,14 +2572,16 @@ fn linux_mmap(
     } else {
         process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(|_| ENOMEM)?
     };
-    if let Some(vfs_fd) = file_mapping {
-        if let Err(err) = copy_mmap_file_from_vfs_dup(vfs_fd, mapped, length, offset) {
+    if let Some((vfs_fd, file_offset)) = file_mapping {
+        if let Err(err) = copy_mmap_file_from_vfs_dup(vfs_fd, mapped, length, file_offset) {
             let _ = process::munmap(mapped, length);
             return Err(err);
         }
         if shared {
             let writable = prot & PROT_WRITE != 0;
-            if process::register_shared_mapping(mapped, length, vfs_fd, offset, writable).is_err() {
+            if process::register_shared_mapping(mapped, length, vfs_fd, file_offset, writable)
+                .is_err()
+            {
                 let _ = process::munmap(mapped, length);
                 return Err(EINVAL);
             }
