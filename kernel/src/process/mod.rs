@@ -1319,9 +1319,22 @@ fn trim_ascii_bytes(mut bytes: &[u8]) -> &[u8] {
     bytes
 }
 
-fn parse_shebang(path: &str, data: &[u8], args: &[&str]) -> Option<(String, Vec<String>)> {
+fn try_exec_string(value: &str) -> Result<String, ExecError> {
+    let mut string = String::new();
+    string
+        .try_reserve_exact(value.len())
+        .map_err(|_| ExecError::OutOfMemory)?;
+    string.push_str(value);
+    Ok(string)
+}
+
+fn parse_shebang(
+    path: &str,
+    data: &[u8],
+    args: &[&str],
+) -> Result<Option<(String, Vec<String>)>, ExecError> {
     if !data.starts_with(b"#!") {
-        return None;
+        return Ok(None);
     }
     let end = data[2..]
         .iter()
@@ -1330,7 +1343,7 @@ fn parse_shebang(path: &str, data: &[u8], args: &[&str]) -> Option<(String, Vec<
         .unwrap_or(data.len());
     let line = trim_ascii_bytes(&data[2..end]);
     if line.is_empty() {
-        return None;
+        return Ok(None);
     }
     let split = line
         .iter()
@@ -1338,22 +1351,45 @@ fn parse_shebang(path: &str, data: &[u8], args: &[&str]) -> Option<(String, Vec<
         .unwrap_or(line.len());
     let interpreter = trim_ascii_bytes(&line[..split]);
     if interpreter.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let interpreter = core::str::from_utf8(interpreter).ok()?;
-    let mut script_args = Vec::new();
-    script_args.push(String::from(interpreter));
-    if split < line.len() {
+    let interpreter = match core::str::from_utf8(interpreter) {
+        Ok(interpreter) => interpreter,
+        Err(_) => return Ok(None),
+    };
+    let optional = if split < line.len() {
         let optional = trim_ascii_bytes(&line[split..]);
-        if !optional.is_empty() {
-            script_args.push(String::from(core::str::from_utf8(optional).ok()?));
+        if optional.is_empty() {
+            None
+        } else {
+            match core::str::from_utf8(optional) {
+                Ok(optional) => Some(optional),
+                Err(_) => return Ok(None),
+            }
         }
+    } else {
+        None
+    };
+    let arg_count = 2usize
+        .checked_add(usize::from(optional.is_some()))
+        .and_then(|count| count.checked_add(args.len().saturating_sub(1)))
+        .ok_or(ExecError::TooManyArguments)?;
+    if arg_count > MAX_USER_ARGS {
+        return Err(ExecError::TooManyArguments);
     }
-    script_args.push(String::from(path));
+    let mut script_args = Vec::new();
+    script_args
+        .try_reserve_exact(arg_count)
+        .map_err(|_| ExecError::OutOfMemory)?;
+    script_args.push(try_exec_string(interpreter)?);
+    if let Some(optional) = optional {
+        script_args.push(try_exec_string(optional)?);
+    }
+    script_args.push(try_exec_string(path)?);
     for arg in args.iter().skip(1) {
-        script_args.push(String::from(*arg));
+        script_args.push(try_exec_string(arg)?);
     }
-    Some((String::from(interpreter), script_args))
+    Ok(Some((try_exec_string(interpreter)?, script_args)))
 }
 
 fn exec_for_user_inner(
@@ -1380,14 +1416,20 @@ fn exec_for_user_inner(
         return Err(ExecError::PermissionDenied);
     }
 
-    if let Some((interpreter, script_args)) = parse_shebang(path, &data, args) {
+    if let Some((interpreter, script_args)) = parse_shebang(path, &data, args)? {
         let interpreter = if interpreter.starts_with('/') {
             interpreter
         } else {
             resolve_process_path(&table.processes[index], &interpreter)
                 .map_err(|_| ExecError::NotFound)?
         };
-        let script_arg_refs: Vec<&str> = script_args.iter().map(|arg| arg.as_str()).collect();
+        let mut script_arg_refs = Vec::new();
+        script_arg_refs
+            .try_reserve_exact(script_args.len())
+            .map_err(|_| ExecError::OutOfMemory)?;
+        for arg in &script_args {
+            script_arg_refs.push(arg.as_str());
+        }
         return exec_for_user_inner(table, pid, &interpreter, &script_arg_refs, env, depth + 1);
     }
 
