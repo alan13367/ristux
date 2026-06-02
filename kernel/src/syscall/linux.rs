@@ -2344,7 +2344,7 @@ fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
-    let cwd = process::user_cwd().ok_or(ESRCH)?;
+    let cwd = process::user_cwd().map_err(map_cwd_error)?;
     let needed = cwd.len() + 1;
     if needed > size {
         return Err(EINVAL);
@@ -3399,7 +3399,10 @@ fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::str
             return Err(ENOENT);
         }
         if dirfd == AT_FDCWD {
-            return process::user_cwd().ok_or(ENOENT);
+            return process::user_cwd().map_err(|err| match err {
+                fs::vfs::VfsError::OutOfMemory => ENOMEM,
+                _ => ENOENT,
+            });
         }
         let vfs_fd = process::user_vfs_fd(dirfd as usize).ok_or(EBADF)?;
         return fs::fd_path(vfs_fd).map_err(map_vfs_error);
@@ -3452,6 +3455,14 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
         fs::vfs::VfsError::OutOfMemory => ENOMEM,
         _ => EINVAL,
+    }
+}
+
+fn map_cwd_error(err: fs::vfs::VfsError) -> i64 {
+    match err {
+        fs::vfs::VfsError::OutOfMemory => ENOMEM,
+        fs::vfs::VfsError::BadFd => ESRCH,
+        other => map_vfs_error(other),
     }
 }
 

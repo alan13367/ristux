@@ -2952,8 +2952,8 @@ pub fn set_current_nofile_limit(cur: u64, max: u64) -> Result<(), ()> {
     .unwrap_or(Err(()))
 }
 
-pub fn user_cwd() -> Option<String> {
-    with_current_read(|p| p.cwd.clone())
+pub fn user_cwd() -> Result<String, fs::vfs::VfsError> {
+    with_current_read(|p| try_string_from(&p.cwd)).unwrap_or(Err(fs::vfs::VfsError::BadFd))
 }
 
 pub fn user_chdir(path: &str) -> Result<(), ()> {
