@@ -103,6 +103,32 @@ static int check_ignored_signals(void) {
     return 0;
 }
 
+static int check_sigkill_uncatchable(void) {
+    errno = 0;
+    if (signal(SIGKILL, SIG_IGN) != SIG_ERR || errno != EINVAL) {
+        puts("cc_signal: sigkill disposition failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: sigkill fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        raise(SIGKILL);
+        _exit(42);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGKILL) {
+        puts("cc_signal: sigkill delivery failed");
+        return 1;
+    }
+    puts("cc_signal: sigkill ok");
+    return 0;
+}
+
 int main(void) {
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
@@ -222,7 +248,9 @@ int main(void) {
     }
     puts("cc_signal: default disposition ok");
 
-    if (check_stop_wait_once() != 0 || check_ignored_signals() != 0) {
+    if (check_sigkill_uncatchable() != 0 ||
+        check_stop_wait_once() != 0 ||
+        check_ignored_signals() != 0) {
         return 1;
     }
 

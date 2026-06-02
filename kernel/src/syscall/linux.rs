@@ -428,15 +428,18 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
         return false;
     };
     if signum != 0 {
-        let handler =
-            process::signal_handler(pid, signum).unwrap_or(crate::signal::DEFAULT_HANDLER);
-        if handler == crate::signal::IGNORE_HANDLER {
-            return false;
-        }
-        if handler != crate::signal::DEFAULT_HANDLER
-            && deliver_signal_handler(frame, signum, handler).is_ok()
-        {
-            return true;
+        let uncatchable = signum == crate::signal::Signal::Kill.number() as usize;
+        if !uncatchable {
+            let handler =
+                process::signal_handler(pid, signum).unwrap_or(crate::signal::DEFAULT_HANDLER);
+            if handler == crate::signal::IGNORE_HANDLER {
+                return false;
+            }
+            if handler != crate::signal::DEFAULT_HANDLER
+                && deliver_signal_handler(frame, signum, handler).is_ok()
+            {
+                return true;
+            }
         }
         if signum == crate::signal::Signal::Tstp.number() as usize {
             let saved = saved_from_linux_frame(frame);
@@ -3263,6 +3266,9 @@ fn kill_targets(pid: i64) -> Result<Vec<process::Pid>, i64> {
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
     if signum == 0 || signum >= 32 {
+        return Err(EINVAL);
+    }
+    if act != 0 && signum == crate::signal::Signal::Kill.number() as usize {
         return Err(EINVAL);
     }
     let pid = process::current_pid().ok_or(ESRCH)?;
