@@ -317,19 +317,59 @@ impl AddressSpace {
             return Err(PagingError::NotMapped);
         }
         let mut mapped = Vec::new();
+        let mut replacement_frames = Vec::new();
         let page_count = len / FRAME_SIZE;
         mapped
             .try_reserve_exact(page_count)
             .map_err(|_| PagingError::OutOfFrames)?;
+        replacement_frames
+            .try_reserve_exact(page_count)
+            .map_err(|_| PagingError::OutOfFrames)?;
         self.reserve_user_mapping_entries(page_count)?;
-        self.unmap_user_range(addr, len)?;
+        for _ in 0..page_count {
+            let Some(frame) = frame_allocator::allocate_frame() else {
+                for frame in replacement_frames {
+                    frame_allocator::free_frame(frame);
+                }
+                return Err(PagingError::OutOfFrames);
+            };
+            unsafe {
+                ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+            }
+            replacement_frames.push(frame);
+        }
         for page in (addr..end).step_by(FRAME_SIZE) {
-            if let Err(err) = self.map_zero_page_with_protection(page, protection) {
+            if let Err(err) =
+                unsafe { paging::ensure_page_slot_at(self.p4, page, protection.page_flags()) }
+            {
+                for frame in replacement_frames {
+                    frame_allocator::free_frame(frame);
+                }
+                return Err(err);
+            }
+        }
+        if let Err(err) = self.unmap_user_range(addr, len) {
+            for frame in replacement_frames {
+                frame_allocator::free_frame(frame);
+            }
+            return Err(err);
+        }
+        for (index, page) in (addr..end).step_by(FRAME_SIZE).enumerate() {
+            let frame = replacement_frames[index];
+            if let Err(err) =
+                unsafe { self.map_user_page(page, frame.start, protection.page_flags()) }
+            {
+                frame_allocator::free_frame(frame);
+                for frame in replacement_frames.iter().skip(index + 1).copied() {
+                    frame_allocator::free_frame(frame);
+                }
                 for mapped_page in mapped {
                     let _ = self.unmap_user_page(mapped_page);
                 }
                 return Err(err);
             }
+            self.user_mappings.push((page, frame));
+            self.user_protections.push((page, protection));
             mapped.push(page);
         }
         self.mmap_next = end.min(USER_MMAP_END);

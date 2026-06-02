@@ -197,6 +197,23 @@ pub unsafe fn map_page_at(
     Ok(())
 }
 
+pub unsafe fn ensure_page_slot_at(
+    p4: *mut PageTable,
+    virt: usize,
+    flags: PageFlags,
+) -> Result<(), PagingError> {
+    let p3 = unsafe { next_table_or_create(p4, &mut (*p4).entries[p4_index(virt)], flags)? };
+    let p2 = unsafe { next_table_or_create(p4, &mut (*p3).entries[p3_index(virt)], flags)? };
+    let p2_entry = unsafe { &mut (*p2).entries[p2_index(virt)] };
+    if *p2_entry & HUGE_PAGE != 0 {
+        unsafe {
+            split_p2_huge_page(p2_entry, flags)?;
+        }
+    }
+    unsafe { next_table_or_create(p4, p2_entry, flags)? };
+    Ok(())
+}
+
 pub unsafe fn unmap_page(virt: usize) -> Result<usize, PagingError> {
     unsafe { unmap_page_at(boot_root_table(), virt) }
 }
