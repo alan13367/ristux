@@ -2545,7 +2545,9 @@ impl Vfs {
             push_unique_entry(&mut entries, "self", NodeKind::Directory);
             push_unique_entry(&mut entries, "stat", NodeKind::File);
             push_unique_entry(&mut entries, "uptime", NodeKind::File);
-            for pid in crate::process::list_process_ids() {
+            let mut cursor = 0;
+            while let Some(pid) = crate::process::next_process_pid_after(cursor) {
+                cursor = pid;
                 push_unique_entry(&mut entries, &format!("{}", pid), NodeKind::Directory);
             }
         } else if proc_existing_process_dir_pid(path).is_some() {
