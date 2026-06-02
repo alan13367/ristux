@@ -1036,23 +1036,30 @@ impl ProcessTable {
         }
         let init_exists = self.get(INIT_PID).is_some();
         let new_parent = if init_exists { Some(INIT_PID) } else { None };
-        let mut adopted_waitable = Vec::new();
-        for process in &mut self.processes {
-            if process.parent != Some(old_parent) {
-                continue;
+        let mut index = 0;
+        while index < self.processes.len() {
+            let adopted_waitable = {
+                let process = &mut self.processes[index];
+                if process.parent != Some(old_parent) {
+                    None
+                } else {
+                    process.parent = new_parent;
+                    if init_exists
+                        && matches!(
+                            process.state,
+                            ProcessState::Zombie(_) | ProcessState::Stopped(_)
+                        )
+                    {
+                        Some(process.pid)
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(child) = adopted_waitable {
+                self.wake_waiter_for_child(INIT_PID, child, wake);
             }
-            process.parent = new_parent;
-            if init_exists
-                && matches!(
-                    process.state,
-                    ProcessState::Zombie(_) | ProcessState::Stopped(_)
-                )
-            {
-                adopted_waitable.push(process.pid);
-            }
-        }
-        for child in adopted_waitable {
-            self.wake_waiter_for_child(INIT_PID, child, wake);
+            index += 1;
         }
     }
 
