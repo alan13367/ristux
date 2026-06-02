@@ -853,7 +853,7 @@ impl Vfs {
                     Err(err) => return Err(map_ext2_error(err)),
                 }
                 return self.push_open_handle(OpenHandle::Ext2File {
-                    path: String::from(path),
+                    path: try_string_from(path)?,
                     offset: 0,
                     rights: OpenRights::read_write(),
                 });
@@ -879,9 +879,9 @@ impl Vfs {
         }
 
         let now = crate::time::filesystem_timestamp();
-        let node = self.nodes.len();
-        self.nodes.push(Node {
-            path: String::from(path),
+        self.reserve_open_handle_slots(1)?;
+        let node = self.push_node(Node {
+            path: try_string_from(path)?,
             kind: NodeKind::File,
             metadata: FileMetadata::new(creds.euid, creds.egid, mode),
             timestamps: FileTimestamps {
@@ -890,7 +890,7 @@ impl Vfs {
             },
             data: Vec::new(),
             link_target: None,
-        });
+        })?;
         self.push_open_handle(OpenHandle::Node {
             node,
             offset: 0,
@@ -913,6 +913,15 @@ impl Vfs {
         });
     }
 
+    fn push_node(&mut self, node: Node) -> Result<usize, VfsError> {
+        self.nodes
+            .try_reserve_exact(1)
+            .map_err(|_| VfsError::OutOfMemory)?;
+        let index = self.nodes.len();
+        self.nodes.push(node);
+        Ok(index)
+    }
+
     fn open(&mut self, path: &str) -> Result<usize, VfsError> {
         self.open_as(path, Credentials::root(), OpenRights::read_write())
     }
@@ -928,8 +937,9 @@ impl Vfs {
         let node = if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
             index
         } else if let Some(kind) = proc_virtual_kind(path) {
-            self.nodes.push(Node {
-                path: String::from(path),
+            self.reserve_open_handle_slots(1)?;
+            self.push_node(Node {
+                path: try_string_from(path)?,
                 kind,
                 metadata: FileMetadata::new(
                     0,
@@ -946,8 +956,7 @@ impl Vfs {
                 },
                 data: Vec::new(),
                 link_target: None,
-            });
-            self.nodes.len() - 1
+            })?
         } else if Self::use_root_ext2(path) {
             if let Some(fs) = self.root_ext2() {
                 let meta = fs.metadata(path).map_err(|_| VfsError::NotFound)?;
@@ -959,7 +968,7 @@ impl Vfs {
                         return Err(VfsError::PermissionDenied);
                     }
                     return self.push_open_handle(OpenHandle::Ext2Dir {
-                        path: String::from(path),
+                        path: try_string_from(path)?,
                         offset: 0,
                     });
                 }
@@ -970,7 +979,7 @@ impl Vfs {
                     return Err(VfsError::PermissionDenied);
                 }
                 return self.push_open_handle(OpenHandle::Ext2File {
-                    path: String::from(path),
+                    path: try_string_from(path)?,
                     offset: 0,
                     rights,
                 });
@@ -1157,8 +1166,8 @@ impl Vfs {
         }
         self.ensure_parent_directory(path, Some((creds, Access::Write)))?;
         let now = crate::time::filesystem_timestamp();
-        self.nodes.push(Node {
-            path: String::from(path),
+        self.push_node(Node {
+            path: try_string_from(path)?,
             kind: NodeKind::Directory,
             metadata: FileMetadata::new(creds.euid, creds.egid, mode & 0o7777),
             timestamps: FileTimestamps {
@@ -1167,7 +1176,7 @@ impl Vfs {
             },
             data: Vec::new(),
             link_target: None,
-        });
+        })?;
         Ok(())
     }
 
@@ -1358,17 +1367,17 @@ impl Vfs {
         }
         self.ensure_parent_directory(link_path, Some((creds, Access::Write)))?;
         let now = crate::time::filesystem_timestamp();
-        self.nodes.push(Node {
-            path: String::from(link_path),
+        self.push_node(Node {
+            path: try_string_from(link_path)?,
             kind: NodeKind::Symlink,
             metadata: FileMetadata::new(creds.euid, creds.egid, 0o777),
             timestamps: FileTimestamps {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::from(target.as_bytes()),
+            data: try_vec_from_bytes(target.as_bytes())?,
             link_target: None,
-        });
+        })?;
         Ok(())
     }
 
@@ -1413,17 +1422,19 @@ impl Vfs {
             return Err(VfsError::NotFile);
         }
         let now = crate::time::filesystem_timestamp();
-        self.nodes.push(Node {
-            path: String::from(new_path),
+        let metadata = self.nodes[target].metadata;
+        let modified_at = self.nodes[target].timestamps.modified_at;
+        self.push_node(Node {
+            path: try_string_from(new_path)?,
             kind: NodeKind::File,
-            metadata: self.nodes[target].metadata,
+            metadata,
             timestamps: FileTimestamps {
                 created_at: now,
-                modified_at: self.nodes[target].timestamps.modified_at,
+                modified_at,
             },
             data: Vec::new(),
             link_target: Some(target),
-        });
+        })?;
         Ok(())
     }
 
@@ -1445,7 +1456,7 @@ impl Vfs {
         if node.kind != NodeKind::Symlink {
             return Err(VfsError::NotFile);
         }
-        Ok(node.data.clone())
+        try_vec_from_bytes(&node.data)
     }
 
     fn chown_as(
@@ -3154,6 +3165,14 @@ fn try_string_from(value: &str) -> Result<String, VfsError> {
     out.try_reserve_exact(value.len())
         .map_err(|_| VfsError::OutOfMemory)?;
     out.push_str(value);
+    Ok(out)
+}
+
+fn try_vec_from_bytes(bytes: &[u8]) -> Result<Vec<u8>, VfsError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(bytes.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    out.extend_from_slice(bytes);
     Ok(out)
 }
 
