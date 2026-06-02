@@ -3144,6 +3144,7 @@ char *strerror(int errnum) {
     case ESRCH: return "No such process";
     case EINTR: return "Interrupted system call";
     case EIO: return "Input/output error";
+    case E2BIG: return "Argument list too long";
     case EBADF: return "Bad file descriptor";
     case ECHILD: return "No child processes";
     case EAGAIN: return "Resource temporarily unavailable";

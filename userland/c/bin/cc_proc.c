@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -17,6 +18,61 @@ static int contains(const char *haystack, const char *needle) {
             return 1;
         }
     }
+    return 0;
+}
+
+static int wait_for_zero(pid_t child, const char *label) {
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts(label);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_exec_vector_limits(void) {
+    char *too_many_args[66];
+    for (int i = 0; i < 65; i++) {
+        too_many_args[i] = "arg";
+    }
+    too_many_args[65] = NULL;
+    char *empty_env[] = { NULL };
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec argv fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        execve("/bin/false", too_many_args, empty_env);
+        _exit(errno == E2BIG ? 0 : 100);
+    }
+    if (wait_for_zero(child, "cc_proc: exec argv limit failed") != 0) {
+        return 1;
+    }
+
+    char *argv[] = { "/bin/false", NULL };
+    char *too_many_env[66];
+    for (int i = 0; i < 65; i++) {
+        too_many_env[i] = "K=V";
+    }
+    too_many_env[65] = NULL;
+
+    child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec env fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        execve("/bin/false", argv, too_many_env);
+        _exit(errno == E2BIG ? 0 : 101);
+    }
+    if (wait_for_zero(child, "cc_proc: exec env limit failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec vector limits ok");
     return 0;
 }
 
@@ -68,6 +124,9 @@ int main(void) {
 
     puts("cc_proc: pipe exec ok");
     puts("cc_proc: wait ok");
+    if (check_exec_vector_limits() != 0) {
+        return 1;
+    }
     puts("cc_proc: done");
     return 0;
 }

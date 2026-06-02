@@ -2027,8 +2027,8 @@ fn linux_execve(
     envp_ptr: usize,
 ) -> Result<u64, i64> {
     let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
-    let args = read_user_argv(argv_ptr).ok_or(EFAULT)?;
-    let env = read_user_envp(envp_ptr).ok_or(EFAULT)?;
+    let args = read_user_argv(argv_ptr).map_err(map_user_vector_error)?;
+    let env = read_user_envp(envp_ptr).map_err(map_user_vector_error)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -3360,43 +3360,72 @@ fn align8(value: usize) -> usize {
     (value + 7) & !7
 }
 
-fn read_user_argv(argv_ptr: usize) -> Option<Vec<alloc::string::String>> {
+#[derive(Clone, Copy)]
+enum UserVectorError {
+    BadAddress,
+    TooManyEntries,
+}
+
+fn map_user_vector_error(err: UserVectorError) -> i64 {
+    match err {
+        UserVectorError::BadAddress => EFAULT,
+        UserVectorError::TooManyEntries => E2BIG,
+    }
+}
+
+fn read_user_argv(argv_ptr: usize) -> Result<Vec<alloc::string::String>, UserVectorError> {
     let mut args = Vec::new();
     let mut index = 0usize;
     loop {
-        if index >= process::MAX_USER_ARGS {
-            break;
-        }
-        let ptr_bytes = process::read_user(argv_ptr + index * 8, 8)?;
-        let arg_ptr = u64::from_le_bytes(ptr_bytes.try_into().ok()?) as usize;
+        let offset = index.checked_mul(8).ok_or(UserVectorError::BadAddress)?;
+        let ptr_addr = argv_ptr
+            .checked_add(offset)
+            .ok_or(UserVectorError::BadAddress)?;
+        let ptr_bytes = process::read_user(ptr_addr, 8).ok_or(UserVectorError::BadAddress)?;
+        let arg_ptr = u64::from_le_bytes(
+            ptr_bytes
+                .try_into()
+                .map_err(|_| UserVectorError::BadAddress)?,
+        ) as usize;
         if arg_ptr == 0 {
             break;
         }
-        args.push(read_user_cstr(arg_ptr)?);
+        if index >= process::MAX_USER_ARGS {
+            return Err(UserVectorError::TooManyEntries);
+        }
+        args.push(read_user_cstr(arg_ptr).ok_or(UserVectorError::BadAddress)?);
         index += 1;
     }
-    Some(args)
+    Ok(args)
 }
 
-fn read_user_envp(envp_ptr: usize) -> Option<Vec<alloc::string::String>> {
+fn read_user_envp(envp_ptr: usize) -> Result<Vec<alloc::string::String>, UserVectorError> {
     let mut env = Vec::new();
     if envp_ptr == 0 {
-        return Some(env);
+        return Ok(env);
     }
     let mut index = 0usize;
     loop {
-        if index >= process::MAX_USER_ENVS {
-            break;
-        }
-        let ptr_bytes = process::read_user(envp_ptr + index * 8, 8)?;
-        let entry_ptr = u64::from_le_bytes(ptr_bytes.try_into().ok()?) as usize;
+        let offset = index.checked_mul(8).ok_or(UserVectorError::BadAddress)?;
+        let ptr_addr = envp_ptr
+            .checked_add(offset)
+            .ok_or(UserVectorError::BadAddress)?;
+        let ptr_bytes = process::read_user(ptr_addr, 8).ok_or(UserVectorError::BadAddress)?;
+        let entry_ptr = u64::from_le_bytes(
+            ptr_bytes
+                .try_into()
+                .map_err(|_| UserVectorError::BadAddress)?,
+        ) as usize;
         if entry_ptr == 0 {
             break;
         }
-        env.push(read_user_cstr(entry_ptr)?);
+        if index >= process::MAX_USER_ENVS {
+            return Err(UserVectorError::TooManyEntries);
+        }
+        env.push(read_user_cstr(entry_ptr).ok_or(UserVectorError::BadAddress)?);
         index += 1;
     }
-    Some(env)
+    Ok(env)
 }
 
 pub fn self_test() {

@@ -252,6 +252,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_proc"
       "^cc_proc: pipe exec ok$"
       "^cc_proc: wait ok$"
+      "^cc_proc: exec vector limits ok$"
       "^cc_proc: done$"
       "TTY canonical line ready: cc_procfs"
       "^cc_procfs: dir ok$"
