@@ -3137,13 +3137,13 @@ pub fn msync(addr: usize, len: usize) -> Result<(), ()> {
     with_current(|p| p.flush_shared_mappings_range(addr, len).map_err(|_| ())).ok_or(())?
 }
 
-pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), ()> {
+pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), MmapError> {
     with_current(|p| {
         p.address_space
             .protect_user_range(addr, len, protection)
-            .map_err(|_| ())
+            .map_err(map_paging_mmap_error)
     })
-    .ok_or(())?
+    .ok_or(MmapError::Invalid)?
 }
 
 pub fn get_process_info(pid: Pid) -> Option<(String, ProcessState, Option<Pid>, Option<i32>)> {

@@ -2604,7 +2604,7 @@ fn linux_mprotect(addr: usize, len: usize, prot: i32) -> Result<u64, i64> {
     let length = page_aligned_len(len)?;
     process::mprotect(addr, length, protection)
         .map(|_| 0)
-        .map_err(|_| EINVAL)
+        .map_err(map_mmap_error)
 }
 
 fn linux_munmap(addr: usize, len: usize) -> Result<u64, i64> {
