@@ -8,6 +8,7 @@
 
 static volatile int saw_signal;
 static volatile int saw_usr1;
+static volatile int saw_external_usr1;
 
 static void on_sigint(int signum) {
     if (signum == SIGINT) {
@@ -22,6 +23,12 @@ static void on_usr1(int signum) {
         const char *msg = "cc_signal: raise handler\n";
         write(1, msg, strlen(msg));
         saw_usr1 = 1;
+    }
+}
+
+static void on_external_usr1(int signum) {
+    if (signum == SIGUSR1) {
+        saw_external_usr1 = 1;
     }
 }
 
@@ -126,6 +133,61 @@ static int check_sigkill_uncatchable(void) {
         return 1;
     }
     puts("cc_signal: sigkill ok");
+    return 0;
+}
+
+static int check_external_signal_handler(void) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_signal: external pipe failed");
+        return 1;
+    }
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        puts("cc_signal: external fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        if (signal(SIGUSR1, on_external_usr1) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(pipefd[1]);
+        for (int i = 0; i < 200000 && !saw_external_usr1; i++) {
+            syscall(SYS_sched_yield);
+        }
+        _exit(saw_external_usr1 ? 0 : 4);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: external ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: external send failed");
+        return 1;
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_signal: external handler failed");
+        return 1;
+    }
+    puts("cc_signal: external handler ok");
     return 0;
 }
 
@@ -248,7 +310,8 @@ int main(void) {
     }
     puts("cc_signal: default disposition ok");
 
-    if (check_sigkill_uncatchable() != 0 ||
+    if (check_external_signal_handler() != 0 ||
+        check_sigkill_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||
         check_ignored_signals() != 0) {
         return 1;

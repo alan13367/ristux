@@ -216,6 +216,35 @@ fn clear_pending_signal(process: &mut Process, signal: usize) {
     }
 }
 
+fn should_queue_signal(process: &Process, status: i32, current: Option<Pid>) -> bool {
+    if current == Some(process.pid) {
+        return true;
+    }
+    let Some(signal) = signal_from_legacy_status(status) else {
+        return false;
+    };
+    if signal == crate::signal::Signal::Kill.number() {
+        return false;
+    }
+    let masked = signal < 64 && process.signal_mask & (1u64 << signal) != 0;
+    let handler = process
+        .signal_handlers
+        .get(signal as usize)
+        .copied()
+        .unwrap_or(crate::signal::DEFAULT_HANDLER);
+    masked || handler != crate::signal::DEFAULT_HANDLER
+}
+
+fn queue_signal(process: &mut Process, status: i32) {
+    process.pending_signal_status = Some(status);
+    if status >= 128 {
+        let signal = (status - 128) as u64;
+        if signal < 64 {
+            process.pending_signals |= 1 << signal;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecError {
     NotFound,
@@ -1077,23 +1106,15 @@ impl ProcessTable {
     }
 
     fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<Vec<Pid>> {
-        if self
-            .get(pid)
-            .is_some_and(|process| is_ignored_signal(process, status))
-        {
+        let process = self.get(pid)?;
+        if is_ignored_signal(process, status) {
             return Some(Vec::new());
         }
-        if current == Some(pid) {
+        if should_queue_signal(process, status, current) {
             let process = self.get_mut(pid)?;
-            process.pending_signal_status = Some(status);
-            if status >= 128 {
-                let signal = (status - 128) as u64;
-                if signal < 64 {
-                    process.pending_signals |= 1 << signal;
-                }
-            }
+            queue_signal(process, status);
             Some(Vec::new())
-        } else if self.get(pid).is_some() {
+        } else {
             if status == crate::signal::Signal::Tstp.default_status() {
                 return self.stop(pid, crate::signal::Signal::Tstp.number());
             }
@@ -1102,8 +1123,6 @@ impl ProcessTable {
             } else {
                 Some(self.exit(pid, status))
             }
-        } else {
-            None
         }
     }
 }
