@@ -3165,12 +3165,14 @@ pub fn has_child(parent: Pid, child: Pid) -> bool {
     has_wait_child(parent, selector)
 }
 
-pub fn brk(new_break: usize) -> Result<usize, ()> {
+pub fn brk(new_break: usize) -> Result<usize, MmapError> {
     with_current(|p| {
-        p.address_space.grow_heap(new_break).map_err(|_| ())?;
+        p.address_space
+            .grow_heap(new_break)
+            .map_err(map_paging_mmap_error)?;
         Ok(p.address_space.heap_break)
     })
-    .ok_or(())?
+    .ok_or(MmapError::Invalid)?
 }
 
 fn map_paging_mmap_error(err: paging::PagingError) -> MmapError {

@@ -270,7 +270,7 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
         SYS_BRK => {
             frame.rax = match process::brk(frame.rdi as usize) {
                 Ok(addr) => addr as u64,
-                Err(()) => u64::MAX,
+                Err(_) => u64::MAX,
             };
         }
         SYS_LSEEK => {
