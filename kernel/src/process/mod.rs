@@ -2342,50 +2342,35 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
 }
 
 pub fn wake_io_waiters() {
-    let woken: Vec<Pid> = {
-        let mut guard = PROCESS_TABLE.lock();
-        let Some(table) = guard.as_mut() else {
-            return;
-        };
-        let mut woken = Vec::new();
-        for process in &mut table.processes {
-            if matches!(
-                process.state,
-                ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
-            ) {
-                process.state = ProcessState::Ready;
-                woken.push(process.pid);
-            }
-        }
-        woken
-    };
-    for pid in woken {
+    while let Some(pid) = wake_next_io_waiter(None) {
         crate::sched::wake_blocked(pid);
     }
 }
 
 pub fn wake_expired_io_waiters(now_ms: u64) {
-    let woken: Vec<Pid> = {
-        let mut guard = PROCESS_TABLE.lock();
-        let Some(table) = guard.as_mut() else {
-            return;
-        };
-        let mut woken = Vec::new();
-        for process in &mut table.processes {
-            if matches!(
-                process.state,
-                ProcessState::Blocked(BlockReason::WaitIoUntil(deadline_ms))
-                    if now_ms >= deadline_ms
-            ) {
-                process.state = ProcessState::Ready;
-                woken.push(process.pid);
-            }
-        }
-        woken
-    };
-    for pid in woken {
+    while let Some(pid) = wake_next_io_waiter(Some(now_ms)) {
         crate::sched::wake_blocked(pid);
     }
+}
+
+fn wake_next_io_waiter(now_ms: Option<u64>) -> Option<Pid> {
+    let mut guard = PROCESS_TABLE.lock();
+    let table = guard.as_mut()?;
+    for process in &mut table.processes {
+        let should_wake = match (process.state, now_ms) {
+            (ProcessState::Blocked(BlockReason::WaitIo), None)
+            | (ProcessState::Blocked(BlockReason::WaitIoUntil(_)), None) => true,
+            (ProcessState::Blocked(BlockReason::WaitIoUntil(deadline_ms)), Some(now_ms)) => {
+                now_ms >= deadline_ms
+            }
+            _ => false,
+        };
+        if should_wake {
+            process.state = ProcessState::Ready;
+            return Some(process.pid);
+        }
+    }
+    None
 }
 
 pub fn wake_io_waiters_for(pid: Pid) {
