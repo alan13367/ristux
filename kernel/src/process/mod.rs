@@ -632,7 +632,7 @@ impl Process {
         })
     }
 
-    fn commit_exec(&mut self, path: &str, prepared: PreparedExec) {
+    fn commit_exec(&mut self, name: String, prepared: PreparedExec) {
         let PreparedExec {
             address_space,
             entry,
@@ -645,7 +645,7 @@ impl Process {
         old.destroy();
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
-        self.name = String::from(path);
+        self.name = name;
         self.entry = entry;
         self.stack_top = stack.stack_top;
         self.argc = stack.argc;
@@ -947,6 +947,10 @@ impl ProcessTable {
             Ok(prepared) => prepared,
             Err(_) => return false,
         };
+        let name = match try_exec_string(path) {
+            Ok(name) => name,
+            Err(_) => return false,
+        };
         {
             let process = &mut self.processes[index];
             for entry in &process.fds {
@@ -957,7 +961,7 @@ impl ProcessTable {
         }
         let process = &mut self.processes[index];
         process.init_stdio();
-        process.commit_exec(path, prepared);
+        process.commit_exec(name, prepared);
         process.state = ProcessState::Ready;
         clear_current();
         true
@@ -1448,7 +1452,8 @@ fn exec_for_user_inner(
     }
 
     let prepared = table.processes[index].prepare_exec(&data, args, env)?;
-    table.processes[index].commit_exec(path, prepared);
+    let name = try_exec_string(path)?;
+    table.processes[index].commit_exec(name, prepared);
     table.processes[index].close_on_exec_fds();
     table.processes[index].close_on_exec_socket_handles();
     // Preserve fds across exec except descriptors marked FD_CLOEXEC.
