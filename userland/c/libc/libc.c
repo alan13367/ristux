@@ -2334,7 +2334,7 @@ size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
 
 int brk(void *addr) {
     long ret = syscall1(SYS_BRK, (long)addr);
-    if (ret < (long)addr) {
+    if (ret != (long)addr) {
         errno = ENOMEM;
         return -1;
     }

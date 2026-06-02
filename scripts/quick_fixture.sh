@@ -215,6 +215,8 @@ case "$SCENARIO" in
       "^cc_cow: isolation ok$"
       "^cc_cow: done$"
       "TTY canonical line ready: cc_mmap"
+      "^cc_mmap: brk bounds ok$"
+      "^cc_mmap: high pointer ok$"
       "^cc_mmap: anonymous ok$"
       "^cc_mmap: mprotect ok$"
       "^cc_mmap: prot none ok$"

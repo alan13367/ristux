@@ -673,9 +673,10 @@ impl Process {
     ) -> Result<(), ExecError> {
         let end = addr.checked_add(len.max(1)).ok_or(ExecError::OutOfMemory)?;
         let mut page = paging::align_down(addr, FRAME_SIZE);
-        let page_end = paging::align_up(end, FRAME_SIZE);
+        let page_end = paging::checked_align_up(end, FRAME_SIZE).ok_or(ExecError::OutOfMemory)?;
         while page < page_end {
-            if page <= paging::USER_STACK_GUARD || page + FRAME_SIZE > paging::USER_STACK_TOP {
+            let page_limit = page.checked_add(FRAME_SIZE).ok_or(ExecError::OutOfMemory)?;
+            if page <= paging::USER_STACK_GUARD || page_limit > paging::USER_STACK_TOP {
                 return Err(ExecError::OutOfMemory);
             }
             if !address_space.is_user_mapped(page) {
@@ -2338,7 +2339,8 @@ fn map_elf_segment(
         .checked_add(segment.file_bytes.len())
         .ok_or(ExecError::InvalidImage)?;
     let map_start = paging::align_down(segment_start, FRAME_SIZE);
-    let map_end = paging::align_up(segment_end, FRAME_SIZE);
+    let map_end =
+        paging::checked_align_up(segment_end, FRAME_SIZE).ok_or(ExecError::InvalidImage)?;
     let writable = segment.flags & PF_W != 0;
     let executable = segment.flags & PF_X != 0;
     if writable && executable {

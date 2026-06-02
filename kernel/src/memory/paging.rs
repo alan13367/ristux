@@ -430,6 +430,11 @@ pub const fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
+pub fn checked_align_up(addr: usize, align: usize) -> Option<usize> {
+    addr.checked_add(align - 1)
+        .map(|value| value & !(align - 1))
+}
+
 pub const USER_STACK_TOP: usize = 0x7010_0000;
 pub const USER_STACK_GUARD: usize = 0x7000_0000;
 pub const USER_HEAP_START: usize = 0x6000_0000;

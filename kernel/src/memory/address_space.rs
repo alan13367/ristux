@@ -174,7 +174,9 @@ impl AddressSpace {
             return false;
         };
         let mut page = paging::align_down(addr, FRAME_SIZE);
-        let end_page = paging::align_up(end, FRAME_SIZE);
+        let Some(end_page) = paging::checked_align_up(end, FRAME_SIZE) else {
+            return false;
+        };
         while page < end_page {
             if !self.page_allows_user(page, access) {
                 return false;
@@ -190,7 +192,7 @@ impl AddressSpace {
         }
         let end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
         let mut page = paging::align_down(addr, FRAME_SIZE);
-        let end_page = paging::align_up(end, FRAME_SIZE);
+        let end_page = paging::checked_align_up(end, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         while page < end_page {
             self.ensure_user_page_writable(page)?;
             page += FRAME_SIZE;
@@ -254,10 +256,11 @@ impl AddressSpace {
         len: usize,
         protection: UserProtection,
     ) -> Result<usize, PagingError> {
-        let len = paging::align_up(len, FRAME_SIZE);
+        let len = paging::checked_align_up(len, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         let base = self.reserve_mmap_addr(hint, len)?;
         let mut mapped = Vec::new();
-        for page in (base..base + len).step_by(FRAME_SIZE) {
+        let end = base.checked_add(len).ok_or(PagingError::NotMapped)?;
+        for page in (base..end).step_by(FRAME_SIZE) {
             if let Err(err) = self.map_zero_page_with_protection(page, protection) {
                 for mapped_page in mapped {
                     let _ = self.unmap_user_page(mapped_page);
@@ -266,7 +269,7 @@ impl AddressSpace {
             }
             mapped.push(page);
         }
-        self.mmap_next = (base + len).min(USER_MMAP_END);
+        self.mmap_next = end.min(USER_MMAP_END);
         if self.mmap_next >= USER_MMAP_END {
             self.mmap_next = USER_MMAP_START;
         }
@@ -279,7 +282,7 @@ impl AddressSpace {
         len: usize,
         protection: UserProtection,
     ) -> Result<usize, PagingError> {
-        let len = paging::align_up(len, FRAME_SIZE);
+        let len = paging::checked_align_up(len, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         if addr % FRAME_SIZE != 0 || len == 0 {
             return Err(PagingError::NotMapped);
         }
@@ -307,10 +310,8 @@ impl AddressSpace {
 
     pub fn unmap_user_range(&mut self, addr: usize, len: usize) -> Result<(), PagingError> {
         let start = paging::align_down(addr, FRAME_SIZE);
-        let end = paging::align_up(
-            addr.checked_add(len).ok_or(PagingError::NotMapped)?,
-            FRAME_SIZE,
-        );
+        let range_end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
+        let end = paging::checked_align_up(range_end, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         if start < USER_MMAP_START || end > USER_MMAP_END || start >= end {
             return Err(PagingError::NotMapped);
         }
@@ -331,10 +332,8 @@ impl AddressSpace {
         protection: UserProtection,
     ) -> Result<(), PagingError> {
         let start = paging::align_down(addr, FRAME_SIZE);
-        let end = paging::align_up(
-            addr.checked_add(len).ok_or(PagingError::NotMapped)?,
-            FRAME_SIZE,
-        );
+        let range_end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
+        let end = paging::checked_align_up(range_end, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         if start >= end {
             return Err(PagingError::NotMapped);
         }
@@ -379,19 +378,24 @@ impl AddressSpace {
 
     pub fn can_grow_stack(&self, fault_addr: usize) -> bool {
         let page = paging::align_down(fault_addr, FRAME_SIZE);
-        page > paging::USER_STACK_GUARD && page + FRAME_SIZE <= self.stack_top
+        let Some(page_end) = page.checked_add(FRAME_SIZE) else {
+            return false;
+        };
+        page > paging::USER_STACK_GUARD && page_end <= self.stack_top
     }
 
     pub fn grow_heap(&mut self, new_break: usize) -> Result<(), PagingError> {
         if new_break < paging::USER_HEAP_START {
             return Err(PagingError::NotMapped);
         }
-        let aligned = paging::align_up(new_break, FRAME_SIZE);
+        let aligned =
+            paging::checked_align_up(new_break, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         if aligned > paging::USER_HEAP_END {
             return Err(PagingError::NotMapped);
         }
 
-        let old_aligned = paging::align_up(self.heap_break, FRAME_SIZE);
+        let old_aligned =
+            paging::checked_align_up(self.heap_break, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         if aligned < old_aligned {
             let mut page = aligned;
             while page < old_aligned {

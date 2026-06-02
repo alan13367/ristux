@@ -71,8 +71,55 @@ static int check_brk_shrink(void) {
     return 0;
 }
 
+static int check_brk_bounds(void) {
+    void *original = sbrk(0);
+    errno = 0;
+    if (brk((void *)~0UL) != -1 || errno != ENOMEM) {
+        printf("cc_mmap: brk high bound errno=%d\n", errno);
+        return 1;
+    }
+    if (sbrk(0) != original) {
+        puts("cc_mmap: brk high changed break");
+        return 1;
+    }
+    errno = 0;
+    if (brk((void *)0x1000) != -1 || errno != ENOMEM) {
+        printf("cc_mmap: brk low bound errno=%d\n", errno);
+        return 1;
+    }
+    if (sbrk(0) != original) {
+        puts("cc_mmap: brk low changed break");
+        return 1;
+    }
+    puts("cc_mmap: brk bounds ok");
+    return 0;
+}
+
+static int check_high_user_pointer_rejected(void) {
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: high pointer zero open failed");
+        return 1;
+    }
+    errno = 0;
+    int ok = read(zero_fd, (void *)(~0UL - 1), 1) == -1 && errno == EFAULT;
+    close(zero_fd);
+    if (!ok) {
+        printf("cc_mmap: high pointer errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_mmap: high pointer ok");
+    return 0;
+}
+
 int main(void) {
     if (check_brk_shrink() != 0) {
+        return 1;
+    }
+    if (check_brk_bounds() != 0) {
+        return 1;
+    }
+    if (check_high_user_pointer_rejected() != 0) {
         return 1;
     }
 
