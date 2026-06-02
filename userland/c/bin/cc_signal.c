@@ -8,6 +8,7 @@
 
 static volatile int saw_signal;
 static volatile int saw_usr1;
+static volatile int saw_usr2;
 static volatile int saw_external_usr1;
 static volatile int saw_sigchld;
 
@@ -24,6 +25,12 @@ static void on_usr1(int signum) {
         const char *msg = "cc_signal: raise handler\n";
         write(1, msg, strlen(msg));
         saw_usr1 = 1;
+    }
+}
+
+static void on_usr2(int signum) {
+    if (signum == SIGUSR2) {
+        saw_usr2 = 1;
     }
 }
 
@@ -215,6 +222,33 @@ static int check_sigchld_disposition(void) {
     return 0;
 }
 
+static int check_additional_signals(void) {
+    if (signal(SIGUSR2, on_usr2) == SIG_ERR || raise(SIGUSR2) != 0 ||
+        !saw_usr2) {
+        puts("cc_signal: sigusr2 failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: sigpipe fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        raise(SIGPIPE);
+        _exit(42);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGPIPE) {
+        puts("cc_signal: sigpipe failed");
+        return 1;
+    }
+
+    puts("cc_signal: extra signals ok");
+    return 0;
+}
+
 int main(void) {
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
@@ -334,7 +368,8 @@ int main(void) {
     }
     puts("cc_signal: default disposition ok");
 
-    if (check_sigchld_disposition() != 0 ||
+    if (check_additional_signals() != 0 ||
+        check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||
