@@ -946,24 +946,93 @@ impl ProcessTable {
 }
 
 impl Process {
+    fn duplicate_fd_entries(entries: &[FdEntry]) -> Option<Vec<FdEntry>> {
+        let mut duplicated = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let vfs_fd = match fs::duplicate_fd(entry.vfs_fd) {
+                Ok(vfs_fd) => vfs_fd,
+                Err(_) => {
+                    Self::close_fd_entries(&duplicated);
+                    return None;
+                }
+            };
+            duplicated.push(FdEntry { vfs_fd, ..*entry });
+        }
+        Some(duplicated)
+    }
+
+    fn close_fd_entries(entries: &[FdEntry]) {
+        for entry in entries {
+            let _ = fs::close(entry.vfs_fd);
+        }
+    }
+
+    fn duplicate_socket_handles(handles: &[usize]) -> Option<Vec<usize>> {
+        let mut duplicated = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let result = crate::net::socket::with_sockets(|table| table.duplicate(*handle));
+            if result.is_err() {
+                Self::close_socket_handle_list(&duplicated);
+                return None;
+            }
+            duplicated.push(*handle);
+        }
+        Some(duplicated)
+    }
+
+    fn close_socket_handle_list(handles: &[usize]) {
+        for handle in handles {
+            let _ = crate::net::socket::with_sockets(|table| table.close(*handle));
+        }
+    }
+
+    fn duplicate_shared_mappings(mappings: &[SharedMapping]) -> Option<Vec<SharedMapping>> {
+        let mut duplicated = Vec::with_capacity(mappings.len());
+        for mapping in mappings {
+            let vfs_fd = match fs::duplicate_fd(mapping.vfs_fd) {
+                Ok(vfs_fd) => vfs_fd,
+                Err(_) => {
+                    Self::close_shared_mapping_fds(&duplicated);
+                    return None;
+                }
+            };
+            duplicated.push(SharedMapping { vfs_fd, ..*mapping });
+        }
+        Some(duplicated)
+    }
+
+    fn close_shared_mapping_fds(mappings: &[SharedMapping]) {
+        for mapping in mappings {
+            let _ = fs::close(mapping.vfs_fd);
+        }
+    }
+
     fn clone_process(&self) -> Option<Self> {
         let address_space = self.address_space.clone_full_copy().ok()?;
-        let mut fds = self.fds.clone();
-        for entry in &mut fds {
-            if let Ok(dup) = fs::duplicate_fd(entry.vfs_fd) {
-                entry.vfs_fd = dup;
+        let fds = match Self::duplicate_fd_entries(&self.fds) {
+            Some(fds) => fds,
+            None => {
+                address_space.destroy();
+                return None;
             }
-        }
-        let socket_handles = self.socket_handles.clone();
-        for handle in &socket_handles {
-            crate::net::socket::with_sockets(|table| {
-                let _ = table.duplicate(*handle);
-            });
-        }
-        let mut shared_mappings = self.shared_mappings.clone();
-        for mapping in &mut shared_mappings {
-            mapping.vfs_fd = fs::duplicate_fd(mapping.vfs_fd).ok()?;
-        }
+        };
+        let socket_handles = match Self::duplicate_socket_handles(&self.socket_handles) {
+            Some(socket_handles) => socket_handles,
+            None => {
+                Self::close_fd_entries(&fds);
+                address_space.destroy();
+                return None;
+            }
+        };
+        let shared_mappings = match Self::duplicate_shared_mappings(&self.shared_mappings) {
+            Some(shared_mappings) => shared_mappings,
+            None => {
+                Self::close_socket_handle_list(&socket_handles);
+                Self::close_fd_entries(&fds);
+                address_space.destroy();
+                return None;
+            }
+        };
         Some(Self {
             pid: self.pid,
             parent: self.parent,

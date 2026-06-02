@@ -46,7 +46,7 @@ send_text() {
       '|') printf 'sendkey alt-1\n' ;;
       '&') printf 'sendkey shift-6\n' ;;
       '$') printf 'sendkey shift-4\n' ;;
-      '*') printf 'sendkey shift-bracketright\n' ;;
+      '*') printf 'sendkey shift-bracket_right\n' ;;
       '/') printf 'sendkey shift-7\n' ;;
       ':') printf 'sendkey shift-dot\n' ;;
       "'") printf 'sendkey minus\n' ;;
@@ -406,7 +406,7 @@ grep -q "AP 1 entering scheduler idle loop" "$SERIAL_LOG"
 grep -q "Linux syscall ABI ready" "$SERIAL_LOG"
 grep -q "VirtIO block self-test passed" "$SERIAL_LOG"
 grep -q "Ext2 parser self-test passed" "$SERIAL_LOG"
-grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$SERIAL_LOG"
+grep -Eq "Ext2 mounted (from [^[:space:]]+ )?as / with devfs, procfs, and tmpfs overlays\\." "$SERIAL_LOG"
 grep -q "TCP MVP self-test passed" "$SERIAL_LOG"
 grep -q "Socket layer self-test passed" "$SERIAL_LOG"
 grep -q "Framebuffer console self-test passed" "$SERIAL_LOG"
@@ -638,7 +638,7 @@ grep -q "cc_procfs: stat ok" "$SERIAL_LOG"
 grep -q "cc_procfs: self ok" "$SERIAL_LOG"
 grep -q "cc_procfs: done" "$SERIAL_LOG"
 grep -q "Kernel self-test harness passed" "$REBOOT_SERIAL_LOG"
-grep -q "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." "$REBOOT_SERIAL_LOG"
+grep -Eq "Ext2 mounted (from [^[:space:]]+ )?as / with devfs, procfs, and tmpfs overlays\\." "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: alice" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/marker" "$REBOOT_SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /home/ext2_reboot_marker" "$REBOOT_SERIAL_LOG"

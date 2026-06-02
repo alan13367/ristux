@@ -195,28 +195,44 @@ impl AddressSpace {
         let mut clone = Self::new_kernel_clone()?;
         clone.user_mappings = Vec::with_capacity(self.user_mappings.len());
         clone.user_protections = Vec::with_capacity(self.user_protections.len());
-        for &(virt, ref frame) in &self.user_mappings {
+        for &(virt, frame) in &self.user_mappings {
+            let protection = match self.protection_for_page(virt) {
+                Some(protection) => protection,
+                None => {
+                    clone.destroy();
+                    return Err(PagingError::NotMapped);
+                }
+            };
             unsafe {
-                if let Some(pte) = paging::get_pte_mut(self.p4, virt) {
-                    let mut flags = *pte & !paging::ADDR_MASK;
-                    if flags & paging::WRITABLE_FLAG != 0 {
-                        flags &= !paging::WRITABLE_FLAG;
-                        flags |= paging::COW_FLAG;
-                        *pte = (*pte & paging::ADDR_MASK) | flags;
-                        paging::flush(virt);
-                        crate::smp::send_tlb_shootdown();
-                    }
-                    clone.map_user_page(virt, frame.start, PageFlags::from_raw(flags))?;
-                    if !super::refcount::try_increment(frame.start) {
-                        return Err(PagingError::RefcountOverflow);
-                    }
+                let Some(pte) = paging::get_pte_mut(self.p4, virt) else {
+                    clone.destroy();
+                    return Err(PagingError::NotMapped);
+                };
+                let flags = *pte & !paging::ADDR_MASK;
+                let mut clone_flags = flags;
+                if clone_flags & paging::WRITABLE_FLAG != 0 {
+                    clone_flags &= !paging::WRITABLE_FLAG;
+                    clone_flags |= paging::COW_FLAG;
+                }
+                if !super::refcount::try_increment(frame.start) {
+                    clone.destroy();
+                    return Err(PagingError::RefcountOverflow);
+                }
+                if let Err(err) =
+                    clone.map_user_page(virt, frame.start, PageFlags::from_raw(clone_flags))
+                {
+                    let _ = super::refcount::decrement(frame.start);
+                    clone.destroy();
+                    return Err(err);
+                }
+                clone.user_mappings.push((virt, frame));
+                clone.user_protections.push((virt, protection));
+                if clone_flags != flags {
+                    *pte = (*pte & paging::ADDR_MASK) | clone_flags;
+                    paging::flush(virt);
+                    crate::smp::send_tlb_shootdown();
                 }
             }
-            clone.user_mappings.push((virt, *frame));
-            let protection = self
-                .protection_for_page(virt)
-                .ok_or(PagingError::NotMapped)?;
-            clone.user_protections.push((virt, protection));
         }
         clone.heap_break = self.heap_break;
         clone.stack_bottom = self.stack_bottom;
