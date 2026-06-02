@@ -58,14 +58,7 @@ pub fn send(pid: process::Pid, signal: Signal) -> bool {
             process::signal(pid, signal.default_status())
         }
         Signal::Cont => process::continue_process(pid),
-        Signal::Child => {
-            if let Some((_, _, parent, _)) = process::get_process_info(pid) {
-                if let Some(parent) = parent {
-                    let _ = process::wait(parent, pid);
-                }
-            }
-            true
-        }
+        Signal::Child => process::signal(pid, signal.default_status()),
     };
     if delivered && process::current_pid() != Some(pid) {
         crate::println!(

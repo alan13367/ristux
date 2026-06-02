@@ -199,12 +199,16 @@ fn is_ignored_signal(process: &Process, status: i32) -> bool {
     if signal == crate::signal::Signal::Kill.number() {
         return false;
     }
-    process
+    let handler = process
         .signal_handlers
         .get(signal as usize)
         .copied()
-        .unwrap_or(crate::signal::DEFAULT_HANDLER)
-        == crate::signal::IGNORE_HANDLER
+        .unwrap_or(crate::signal::DEFAULT_HANDLER);
+    if handler == crate::signal::DEFAULT_HANDLER && signal == crate::signal::Signal::Child.number()
+    {
+        return true;
+    }
+    handler == crate::signal::IGNORE_HANDLER
 }
 
 fn clear_pending_signal(process: &mut Process, signal: usize) {

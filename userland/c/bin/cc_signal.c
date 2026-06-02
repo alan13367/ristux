@@ -9,6 +9,7 @@
 static volatile int saw_signal;
 static volatile int saw_usr1;
 static volatile int saw_external_usr1;
+static volatile int saw_sigchld;
 
 static void on_sigint(int signum) {
     if (signum == SIGINT) {
@@ -29,6 +30,12 @@ static void on_usr1(int signum) {
 static void on_external_usr1(int signum) {
     if (signum == SIGUSR1) {
         saw_external_usr1 = 1;
+    }
+}
+
+static void on_sigchld(int signum) {
+    if (signum == SIGCHLD) {
+        saw_sigchld = 1;
     }
 }
 
@@ -191,6 +198,23 @@ static int check_external_signal_handler(void) {
     return 0;
 }
 
+static int check_sigchld_disposition(void) {
+    if (raise(SIGCHLD) != 0 || saw_sigchld) {
+        puts("cc_signal: sigchld default failed");
+        return 1;
+    }
+    if (signal(SIGCHLD, on_sigchld) == SIG_ERR) {
+        puts("cc_signal: sigchld handler setup failed");
+        return 1;
+    }
+    if (raise(SIGCHLD) != 0 || !saw_sigchld) {
+        puts("cc_signal: sigchld handler failed");
+        return 1;
+    }
+    puts("cc_signal: sigchld ok");
+    return 0;
+}
+
 int main(void) {
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
@@ -310,7 +334,8 @@ int main(void) {
     }
     puts("cc_signal: default disposition ok");
 
-    if (check_external_signal_handler() != 0 ||
+    if (check_sigchld_disposition() != 0 ||
+        check_external_signal_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||
         check_ignored_signals() != 0) {
