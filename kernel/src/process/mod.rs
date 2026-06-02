@@ -468,22 +468,19 @@ impl Process {
         false
     }
 
-    fn close_on_exec_fds(&mut self) -> Vec<usize> {
-        let mut closed = Vec::new();
+    fn close_on_exec_fds(&mut self) {
         let mut index = 0;
         while index < self.fds.len() {
             if self.fds[index].fd_flags & FD_CLOEXEC != 0 {
-                closed.push(self.fds[index].vfs_fd);
-                self.fds.swap_remove(index);
+                let entry = self.fds.swap_remove(index);
+                let _ = fs::close(entry.vfs_fd);
             } else {
                 index += 1;
             }
         }
-        closed
     }
 
-    fn close_on_exec_socket_handles(&mut self) -> Vec<usize> {
-        let mut closed = Vec::new();
+    fn close_on_exec_socket_handles(&mut self) {
         let mut index = 0;
         while index < self.socket_handles.len() {
             let handle = self.socket_handles[index];
@@ -494,13 +491,12 @@ impl Process {
                     .unwrap_or(false)
             });
             if cloexec {
-                closed.push(handle);
                 self.socket_handles.swap_remove(index);
+                let _ = crate::net::socket::with_sockets(|table| table.close(handle));
             } else {
                 index += 1;
             }
         }
-        closed
     }
 
     fn add_socket_handle(&mut self, handle: usize) {
@@ -1439,14 +1435,8 @@ fn exec_for_user_inner(
 
     let prepared = table.processes[index].prepare_exec(&data, args, env)?;
     table.processes[index].commit_exec(path, prepared);
-    let close_on_exec = table.processes[index].close_on_exec_fds();
-    for fd in close_on_exec {
-        let _ = fs::close(fd);
-    }
-    let close_on_exec_sockets = table.processes[index].close_on_exec_socket_handles();
-    for handle in close_on_exec_sockets {
-        let _ = crate::net::socket::with_sockets(|socket_table| socket_table.close(handle));
-    }
+    table.processes[index].close_on_exec_fds();
+    table.processes[index].close_on_exec_socket_handles();
     // Preserve fds across exec except descriptors marked FD_CLOEXEC.
     if metadata.mode & 0o4000 != 0 {
         table.processes[index].credentials.euid = metadata.owner;
