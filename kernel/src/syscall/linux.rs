@@ -440,7 +440,11 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
             }
         }
     }
-    process::exit(pid, status);
+    if signum != 0 {
+        process::exit_signaled(pid, signum as u8);
+    } else {
+        process::exit(pid, status);
+    }
     let _ = crate::syscall::yield_until_runnable(frame);
     true
 }
@@ -2078,6 +2082,7 @@ fn linux_wait4(
                     if let Some(out) = process::write_user_buffer(status_ptr, 4) {
                         let encoded = match status {
                             process::WaitStatus::Exited(status) => (status & 0xff) << 8,
+                            process::WaitStatus::Signaled(signal) => signal as i32,
                             process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
                         };
                         out.copy_from_slice(&(encoded as u32).to_le_bytes());

@@ -32,7 +32,7 @@ pub enum ProcessState {
     Running,
     Blocked(BlockReason),
     Stopped(u8),
-    Zombie(i32),
+    Zombie(ExitReason),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,7 +140,35 @@ pub struct ProcessTable {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitStatus {
     Exited(i32),
+    Signaled(u8),
     Stopped(u8),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExitReason {
+    Exited(i32),
+    Signaled(u8),
+}
+
+impl ExitReason {
+    pub const fn legacy_status(self) -> i32 {
+        match self {
+            Self::Exited(status) => status,
+            Self::Signaled(signal) => 128 + signal as i32,
+        }
+    }
+}
+
+fn signal_from_legacy_status(status: i32) -> Option<u8> {
+    if status < 128 {
+        return None;
+    }
+    let signal = status - 128;
+    if (1..64).contains(&signal) {
+        Some(signal as u8)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -783,6 +811,14 @@ impl ProcessTable {
     }
 
     fn exit(&mut self, pid: Pid, status: i32) -> Vec<Pid> {
+        self.exit_with_reason(pid, ExitReason::Exited(status))
+    }
+
+    fn exit_signaled(&mut self, pid: Pid, signal: u8) -> Vec<Pid> {
+        self.exit_with_reason(pid, ExitReason::Signaled(signal))
+    }
+
+    fn exit_with_reason(&mut self, pid: Pid, reason: ExitReason) -> Vec<Pid> {
         let was_current = current_pid() == Some(pid);
         let mut wake = Vec::new();
         let parent_pid = self.get(pid).and_then(|p| p.parent);
@@ -791,8 +827,8 @@ impl ProcessTable {
                 Some(p) => p,
                 None => return wake,
             };
-            process.state = ProcessState::Zombie(status);
-            process.exit_status = Some(status);
+            process.state = ProcessState::Zombie(reason);
+            process.exit_status = Some(reason.legacy_status());
             if was_current {
                 process.address_space.activate();
             }
@@ -910,9 +946,9 @@ impl ProcessTable {
         }
         let state = process.state;
         match state {
-            ProcessState::Zombie(status) => {
+            ProcessState::Zombie(reason) => {
                 self.reap(child);
-                Some(status)
+                Some(reason.legacy_status())
             }
             _ => {
                 self.get_mut(parent)?.state = ProcessState::Blocked(BlockReason::WaitChild(child));
@@ -943,7 +979,11 @@ impl ProcessTable {
             if status == crate::signal::Signal::Tstp.default_status() {
                 return self.stop(pid, crate::signal::Signal::Tstp.number());
             }
-            Some(self.exit(pid, status))
+            if let Some(signal) = signal_from_legacy_status(status) {
+                Some(self.exit_signaled(pid, signal))
+            } else {
+                Some(self.exit(pid, status))
+            }
         } else {
             None
         }
@@ -1298,6 +1338,14 @@ pub fn install_pipe_fds_with_flags(
 
 pub fn exit(pid: Pid, status: i32) {
     let wake = with_table(|table| table.exit(pid, status));
+    wake_io_waiters();
+    for pid in wake {
+        scheduler::wake_blocked(pid);
+    }
+}
+
+pub fn exit_signaled(pid: Pid, signal: u8) {
+    let wake = with_table(|table| table.exit_signaled(pid, signal));
     wake_io_waiters();
     for pid in wake {
         scheduler::wake_blocked(pid);
@@ -2178,7 +2226,11 @@ pub fn restore_syscall_frame(pid: Pid, frame: &mut SavedSyscallFrame) -> bool {
 
 pub fn kill_current(status: i32) {
     if let Some(pid) = current_pid() {
-        exit(pid, status);
+        if let Some(signal) = signal_from_legacy_status(status) {
+            exit_signaled(pid, signal);
+        } else {
+            exit(pid, status);
+        }
     }
 }
 
@@ -2599,11 +2651,14 @@ pub fn wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, 
             .collect();
         if let Some(&zombie_pid) = candidates.first() {
             let status = match table.get(zombie_pid)?.state {
-                ProcessState::Zombie(status) => status,
+                ProcessState::Zombie(reason) => match reason {
+                    ExitReason::Exited(status) => WaitStatus::Exited(status),
+                    ExitReason::Signaled(signal) => WaitStatus::Signaled(signal),
+                },
                 _ => return None,
             };
             table.reap(zombie_pid);
-            return Some((zombie_pid, WaitStatus::Exited(status)));
+            return Some((zombie_pid, status));
         }
         None
     })

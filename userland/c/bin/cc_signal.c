@@ -127,6 +127,23 @@ int main(void) {
     }
     puts("cc_signal: permission ok");
 
+    pid_t fatal = fork();
+    if (fatal < 0) {
+        puts("cc_signal: default fork failed");
+        return 1;
+    }
+    if (fatal == 0) {
+        raise(SIGTERM);
+        _exit(42);
+    }
+    status = 0;
+    if (waitpid(fatal, &status, 0) != fatal || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGTERM) {
+        puts("cc_signal: default disposition failed");
+        return 1;
+    }
+    puts("cc_signal: default disposition ok");
+
     puts("cc_signal: after handler");
     return 0;
 }
