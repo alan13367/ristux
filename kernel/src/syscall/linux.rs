@@ -500,8 +500,49 @@ fn linux_rt_sigreturn(frame: &mut SyscallInterruptFrame, saved_ptr: usize) -> Re
         )
     };
     out.copy_from_slice(bytes);
+    sanitize_linux_saved_frame(&mut saved)?;
     apply_linux_saved_frame(frame, &saved);
     Err(CONTEXT_SWITCHED)
+}
+
+fn sanitize_linux_saved_frame(saved: &mut process::SavedSyscallFrame) -> Result<(), i64> {
+    const USER_CODE: u64 = 0x33;
+    const USER_DATA: u64 = 0x2b;
+    const USER_ADDRESS_TOP: u64 = 0x8000_0000;
+    const RFLAGS_CF: u64 = 1 << 0;
+    const RFLAGS_FIXED: u64 = 1 << 1;
+    const RFLAGS_PF: u64 = 1 << 2;
+    const RFLAGS_AF: u64 = 1 << 4;
+    const RFLAGS_ZF: u64 = 1 << 6;
+    const RFLAGS_SF: u64 = 1 << 7;
+    const RFLAGS_TF: u64 = 1 << 8;
+    const RFLAGS_IF: u64 = 1 << 9;
+    const RFLAGS_DF: u64 = 1 << 10;
+    const RFLAGS_OF: u64 = 1 << 11;
+    const RFLAGS_AC: u64 = 1 << 18;
+    const USER_RFLAGS_MASK: u64 = RFLAGS_CF
+        | RFLAGS_PF
+        | RFLAGS_AF
+        | RFLAGS_ZF
+        | RFLAGS_SF
+        | RFLAGS_TF
+        | RFLAGS_DF
+        | RFLAGS_OF
+        | RFLAGS_AC;
+
+    if saved.cs != USER_CODE || saved.ss != USER_DATA {
+        return Err(EINVAL);
+    }
+    if saved.rip == 0
+        || saved.rip >= USER_ADDRESS_TOP
+        || saved.rsp == 0
+        || saved.rsp >= USER_ADDRESS_TOP
+    {
+        return Err(EINVAL);
+    }
+    process::read_user(saved.rip as usize, 1).ok_or(EFAULT)?;
+    saved.rflags = (saved.rflags & USER_RFLAGS_MASK) | RFLAGS_FIXED | RFLAGS_IF;
+    Ok(())
 }
 
 fn saved_from_linux_frame(frame: &SyscallInterruptFrame) -> process::SavedSyscallFrame {

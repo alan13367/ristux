@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -88,6 +89,15 @@ int main(void) {
         puts("cc_signal: invalid signal failed");
         return 1;
     }
+    unsigned long fake_frame[20];
+    memset(fake_frame, 0, sizeof(fake_frame));
+    errno = 0;
+    if (syscall(SYS_rt_sigreturn, (long)fake_frame, 0, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_signal: invalid sigreturn failed");
+        return 1;
+    }
+    puts("cc_signal: sigreturn validation ok");
 
     pid_t parent = getpid();
     pid_t child = fork();
