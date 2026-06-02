@@ -223,6 +223,7 @@ case "$SCENARIO" in
       "^cc_mmap: munmap ok$"
       "^cc_mmap: fixed ok$"
       "^cc_mmap: file ok$"
+      "^cc_mmap: file multi ok$"
       "^cc_mmap: shared ok$"
       "^cc_mmap: done$"
       "TTY canonical line ready: cc_path"

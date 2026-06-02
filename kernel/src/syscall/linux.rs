@@ -2550,7 +2550,7 @@ fn linux_mmap(
             return Err(EINVAL);
         }
         let vfs_fd = process::user_vfs_fd(fd as usize).ok_or(EBADF)?;
-        Some((vfs_fd, read_mmap_file_from_vfs_dup(vfs_fd, length, offset)?))
+        Some(vfs_fd)
     };
 
     let mapped = if flags & MAP_FIXED != 0 {
@@ -2561,10 +2561,10 @@ fn linux_mmap(
     } else {
         process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(|_| ENOMEM)?
     };
-    if let Some((vfs_fd, bytes)) = file_mapping {
-        if !bytes.is_empty() {
-            let out = process::write_user_buffer(mapped, bytes.len()).ok_or(EFAULT)?;
-            out.copy_from_slice(&bytes);
+    if let Some(vfs_fd) = file_mapping {
+        if let Err(err) = copy_mmap_file_from_vfs_dup(vfs_fd, mapped, length, offset) {
+            let _ = process::munmap(mapped, length);
+            return Err(err);
         }
         if shared {
             let writable = prot & PROT_WRITE != 0;
@@ -2639,28 +2639,42 @@ fn page_aligned_len(len: usize) -> Result<usize, i64> {
         .ok_or(ENOMEM)
 }
 
-fn read_mmap_file_from_vfs_dup(vfs_fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
+fn copy_mmap_file_from_vfs_dup(
+    vfs_fd: usize,
+    mapped: usize,
+    len: usize,
+    offset: usize,
+) -> Result<(), i64> {
     let dup = fs::duplicate_fd(vfs_fd).map_err(map_vfs_error)?;
-    let result = read_mmap_file_from_vfs(dup, len, offset);
+    let result = copy_mmap_file_from_vfs(dup, mapped, len, offset);
     let _ = fs::close(dup);
     result
 }
 
-fn read_mmap_file_from_vfs(vfs_fd: usize, len: usize, offset: usize) -> Result<Vec<u8>, i64> {
+fn copy_mmap_file_from_vfs(
+    vfs_fd: usize,
+    mapped: usize,
+    len: usize,
+    offset: usize,
+) -> Result<(), i64> {
     fs::lseek(vfs_fd, offset as isize, 0).map_err(map_vfs_error)?;
-    let mut bytes = Vec::new();
-    bytes.resize(len, 0);
+    let mut buffer = [0u8; FRAME_SIZE];
     let mut read = 0usize;
     while read < len {
-        match fs::read(vfs_fd, &mut bytes[read..]) {
+        let chunk_len = (len - read).min(buffer.len());
+        match fs::read(vfs_fd, &mut buffer[..chunk_len]) {
             Ok(0) => break,
-            Ok(n) => read += n,
+            Ok(n) => {
+                let target = mapped.checked_add(read).ok_or(EFAULT)?;
+                let out = process::write_user_buffer(target, n).ok_or(EFAULT)?;
+                out.copy_from_slice(&buffer[..n]);
+                read += n;
+            }
             Err(fs::vfs::VfsError::WouldBlock) => break,
             Err(err) => return Err(map_vfs_error(err)),
         }
     }
-    bytes.truncate(read);
-    Ok(bytes)
+    Ok(())
 }
 
 fn linux_time(tloc: usize) -> Result<u64, i64> {

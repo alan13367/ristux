@@ -270,6 +270,51 @@ int main(void) {
         return 1;
     }
 
+    fd = open("/tmp/cc_mmap_multi.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (fd < 0) {
+        puts("cc_mmap: multi open failed");
+        return 1;
+    }
+    char page[4096];
+    memset(page, 'a', sizeof(page));
+    page[0] = '0';
+    if (write(fd, page, sizeof(page)) != (ssize_t)sizeof(page)) {
+        close(fd);
+        puts("cc_mmap: multi write first failed");
+        return 1;
+    }
+    memset(page, 'b', sizeof(page));
+    page[0] = '1';
+    if (write(fd, page, sizeof(page)) != (ssize_t)sizeof(page)) {
+        close(fd);
+        puts("cc_mmap: multi write second failed");
+        return 1;
+    }
+    memset(page, 'c', sizeof(page));
+    page[0] = '2';
+    page[sizeof(page) - 1] = 'z';
+    if (write(fd, page, sizeof(page)) != (ssize_t)sizeof(page)) {
+        close(fd);
+        puts("cc_mmap: multi write third failed");
+        return 1;
+    }
+    char *multi = mmap(NULL, sizeof(page) * 3, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (multi == MAP_FAILED) {
+        printf("cc_mmap: multi mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    if (multi[0] != '0' || multi[4096] != '1' || multi[8192] != '2' ||
+        multi[12287] != 'z') {
+        puts("cc_mmap: multi contents failed");
+        return 1;
+    }
+    if (munmap(multi, sizeof(page) * 3) < 0) {
+        puts("cc_mmap: multi munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: file multi ok");
+
     const char *shared_initial = "shared mmap initial";
     const char *shared_changed = "shared mmap changed";
     fd = open("/tmp/cc_mmap_shared.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
