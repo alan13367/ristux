@@ -3344,7 +3344,8 @@ fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut offset = 0usize;
     while offset < 4096 {
-        let slice = process::read_user(addr + offset, 1)?;
+        let ptr = addr.checked_add(offset)?;
+        let slice = process::read_user(ptr, 1)?;
         if slice[0] == 0 {
             return String::from_utf8(buf).ok();
         }

@@ -229,6 +229,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_path"
       "^cc_path: normalized io ok$"
       "^cc_path: symlink ok$"
+      "^cc_path: fault ok$"
       "^cc_path: done$"
       "TTY canonical line ready: cc_poll"
       "^cc_poll: stdin ok$"

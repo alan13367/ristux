@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +63,13 @@ int main(void) {
         return 1;
     }
     puts("cc_path: symlink ok");
+
+    errno = 0;
+    if (open((const char *)~0UL, O_RDONLY, 0) != -1 || errno != EFAULT) {
+        printf("cc_path: invalid pointer errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_path: fault ok");
 
     unlink(link_path);
     unlink(read_path);
