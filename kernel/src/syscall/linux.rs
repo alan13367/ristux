@@ -2845,7 +2845,8 @@ fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {
     let hz = crate::config::PIT_TARGET_HZ as u64;
     let sec_ticks = (sec as u64).saturating_mul(hz);
     let nsec_ticks = ((nsec as u64).saturating_mul(hz) + 999_999_999) / 1_000_000_000;
-    let target = crate::time::monotonic_ticks().saturating_add(sec_ticks + nsec_ticks);
+    let sleep_ticks = sec_ticks.saturating_add(nsec_ticks);
+    let target = crate::time::monotonic_ticks().saturating_add(sleep_ticks);
     while crate::time::monotonic_ticks() < target {
         core::hint::spin_loop();
     }

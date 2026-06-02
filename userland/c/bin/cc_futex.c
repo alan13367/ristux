@@ -52,11 +52,23 @@ static int check_wake(void) {
     return 0;
 }
 
+static int check_nanosleep_invalid(void) {
+    struct timespec req = { 0, 1000000000L };
+    errno = 0;
+    if (nanosleep(&req, NULL) != -1 || errno != EINVAL) {
+        puts("cc_futex: nanosleep invalid failed");
+        return 1;
+    }
+    puts("cc_futex: nanosleep invalid ok");
+    return 0;
+}
+
 int main(void) {
     if (check_gettid() != 0 ||
         check_wait_mismatch() != 0 ||
         check_wait_timeout() != 0 ||
-        check_wake() != 0) {
+        check_wake() != 0 ||
+        check_nanosleep_invalid() != 0) {
         return 1;
     }
     puts("cc_futex: done");

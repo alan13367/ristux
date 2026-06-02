@@ -124,6 +124,7 @@ case "$SCENARIO" in
       "cc_futex: mismatch ok"
       "cc_futex: timeout ok"
       "cc_futex: wake ok"
+      "cc_futex: nanosleep invalid ok"
       "cc_futex: done"
     )
     ;;
@@ -209,6 +210,7 @@ case "$SCENARIO" in
       "^cc_futex: mismatch ok$"
       "^cc_futex: timeout ok$"
       "^cc_futex: wake ok$"
+      "^cc_futex: nanosleep invalid ok$"
       "^cc_futex: done$"
       "TTY canonical line ready: cc_cow"
       "^cc_cow: fork storm ok$"
