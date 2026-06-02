@@ -139,12 +139,7 @@ fn drain_master(master: i32, child: isize, output: &mut Vec<u8>, polls: usize) -
 fn drive_shell(master: i32, child: isize) -> i32 {
     let mut output = Vec::new();
     if !write_master(master, b"printf pty_shell_check:%s-ok\\n shell\n", child)
-        || !read_until(
-            master,
-            child,
-            &mut output,
-            b"pty_shell_check:shell-ok",
-        )
+        || !read_until(master, child, &mut output, b"pty_shell_check:shell-ok")
     {
         let _ = sys::write(2, b"pty_shell_check: shell output missing\n");
         cleanup_child(child);

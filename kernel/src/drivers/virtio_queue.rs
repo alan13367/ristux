@@ -46,7 +46,7 @@ pub const VIRTQ_DESC_F_NEXT: u16 = 1;
 pub const VIRTQ_DESC_F_WRITE: u16 = 2;
 
 pub struct VirtQueue {
-    pub index: u32,
+    pub _index: u32,
     pub mem: *mut VirtQueueMem,
     pub size: u16,
     pub last_used_idx: u16,
@@ -59,7 +59,7 @@ impl VirtQueue {
             (*mem).used.idx = 0;
         }
         Self {
-            index,
+            _index: index,
             mem,
             size: QUEUE_SIZE as u16,
             last_used_idx: 0,
@@ -159,7 +159,7 @@ static mut QUEUE_MEM: VirtQueueMem = VirtQueueMem {
 };
 
 pub fn queue_memory() -> *mut VirtQueueMem {
-    unsafe { core::ptr::addr_of_mut!(QUEUE_MEM) }
+    core::ptr::addr_of_mut!(QUEUE_MEM)
 }
 
 pub fn self_test() -> bool {

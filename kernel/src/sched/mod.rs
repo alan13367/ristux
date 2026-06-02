@@ -107,6 +107,12 @@ pub fn init(cpu_count: usize, apic_ids: &[u32]) {
     );
 }
 
+pub fn activate_cpu_count(cpu_count: usize) {
+    let count = cpu_count.min(MAX_CPUS).max(1);
+    CPU_COUNT.store(count, Ordering::Release);
+    crate::println!("Per-CPU scheduler active CPU count set to {}.", count);
+}
+
 pub fn init_ap(cpu_index: usize) {
     let guard = PER_CPU.lock();
     let Some(cpu) = guard[cpu_index].as_ref() else {

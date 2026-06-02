@@ -30,11 +30,18 @@ pub enum DeviceKind {
     URandom,
     Console,
     Serial,
+    Block(BlockDevice),
     Keyboard,
     Tty,
     Ptmx,
     PtySlave(usize),
     Framebuffer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BlockDevice {
+    pub start_sector: u64,
+    pub sector_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,7 +317,11 @@ impl PtyState {
 
         let mut written = 0usize;
         for byte in input {
-            let required = if translate_newline && *byte == b'\n' { 2 } else { 1 };
+            let required = if translate_newline && *byte == b'\n' {
+                2
+            } else {
+                1
+            };
             if self.slave_to_master.len().saturating_add(required) > self.capacity {
                 break;
             }
@@ -456,11 +467,7 @@ fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
     const TERMIOS_CC: usize = 17;
     let byte = *termios.get(TERMIOS_CC + index)?;
-    if byte == 0 {
-        None
-    } else {
-        Some(byte)
-    }
+    if byte == 0 { None } else { Some(byte) }
 }
 
 fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {
@@ -507,7 +514,6 @@ pub struct Vfs {
 #[derive(Clone)]
 struct MountPoint {
     mountpoint: String,
-    fstype: String,
     ext2: Option<ext2::Ext2Fs>,
 }
 
@@ -538,6 +544,13 @@ impl Vfs {
         vfs.add_device("/dev/urandom", DeviceKind::URandom);
         vfs.add_device("/dev/console", DeviceKind::Console);
         vfs.add_device("/dev/serial", DeviceKind::Serial);
+        vfs.add_device(
+            "/dev/vda",
+            DeviceKind::Block(BlockDevice {
+                start_sector: 0,
+                sector_count: 0,
+            }),
+        );
         vfs.add_device("/dev/keyboard", DeviceKind::Keyboard);
         vfs.add_device("/dev/tty", DeviceKind::Tty);
         vfs.add_device("/dev/ptmx", DeviceKind::Ptmx);
@@ -554,23 +567,99 @@ impl Vfs {
     }
 
     fn mount(&mut self, device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsError> {
-        let _ = device;
         let mountpoint = normalize_path(mountpoint)?;
         let mountpoint = mountpoint.as_str();
         if !self.nodes.iter().any(|node| node.path == mountpoint) {
             self.add_directory(mountpoint);
         }
         if fstype == "ext2" {
-            let fs = ext2::Ext2Fs::mount().map_err(|_| VfsError::NotFound)?;
+            let start_sector = self
+                .block_device_for_name(device)
+                .map(|device| device.start_sector)
+                .unwrap_or(0);
+            let fs = ext2::Ext2Fs::mount_at(start_sector).map_err(|_| VfsError::NotFound)?;
             self.mounts.push(MountPoint {
                 mountpoint: String::from(mountpoint),
-                fstype: String::from(fstype),
                 ext2: Some(fs),
             });
             crate::println!("VFS mounted {} on {}.", fstype, mountpoint);
             return Ok(());
         }
         Err(VfsError::NotFound)
+    }
+
+    fn refresh_block_devices(&mut self) {
+        let sectors = drivers::virtio_blk::sector_count();
+        self.upsert_device(
+            "/dev/vda",
+            DeviceKind::Block(BlockDevice {
+                start_sector: 0,
+                sector_count: sectors,
+            }),
+        );
+        for index in 1..=4 {
+            self.remove_node_path(&format!("/dev/vda{}", index));
+        }
+        let mut mbr = [0u8; 512];
+        if sectors == 0 || drivers::virtio_blk::read_sectors(0, 1, &mut mbr).is_err() {
+            return;
+        }
+        if mbr[510] != 0x55 || mbr[511] != 0xaa {
+            return;
+        }
+        for index in 0..4 {
+            let offset = 446 + index * 16;
+            let part_type = mbr[offset + 4];
+            let start = u32::from_le_bytes([
+                mbr[offset + 8],
+                mbr[offset + 9],
+                mbr[offset + 10],
+                mbr[offset + 11],
+            ]) as u64;
+            let count = u32::from_le_bytes([
+                mbr[offset + 12],
+                mbr[offset + 13],
+                mbr[offset + 14],
+                mbr[offset + 15],
+            ]) as u64;
+            if part_type == 0 || start == 0 || count == 0 {
+                continue;
+            }
+            self.upsert_device(
+                &format!("/dev/vda{}", index + 1),
+                DeviceKind::Block(BlockDevice {
+                    start_sector: start,
+                    sector_count: count,
+                }),
+            );
+        }
+    }
+
+    fn upsert_device(&mut self, path: &str, kind: DeviceKind) {
+        if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
+            node.kind = NodeKind::Device(kind);
+            node.metadata = FileMetadata::new(0, 0, 0o666);
+            return;
+        }
+        self.add_device(path, kind);
+    }
+
+    fn remove_node_path(&mut self, path: &str) {
+        if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
+            self.nodes.remove(index);
+        }
+    }
+
+    fn block_device_for_name(&self, name: &str) -> Option<BlockDevice> {
+        let path = if name.starts_with("/dev/") {
+            String::from(name)
+        } else {
+            format!("/dev/{}", name)
+        };
+        self.nodes.iter().find_map(|node| match node.kind {
+            NodeKind::Device(DeviceKind::Block(device)) if node.path == path => Some(device),
+            _ => None,
+        })
     }
 
     fn root_ext2(&self) -> Option<&ext2::Ext2Fs> {
@@ -1445,6 +1534,11 @@ impl Vfs {
                             fill_random(output);
                             Ok(output.len())
                         }
+                        NodeKind::Device(DeviceKind::Block(device)) => {
+                            let count = block_device_read(device, *offset as u64, output)?;
+                            *offset += count;
+                            Ok(count)
+                        }
                         NodeKind::Device(DeviceKind::Keyboard) => {
                             let mut count = 0;
                             for byte in output.iter_mut() {
@@ -1596,8 +1690,17 @@ impl Vfs {
                             DeviceKind::Zero
                             | DeviceKind::Random
                             | DeviceKind::URandom
+                            | DeviceKind::Block(_)
                             | DeviceKind::Keyboard,
-                        ) => Ok(input.len()),
+                        ) => {
+                            if let NodeKind::Device(DeviceKind::Block(device)) = kind {
+                                let count = block_device_write(device, *offset as u64, input)?;
+                                *offset += count;
+                                Ok(count)
+                            } else {
+                                Ok(input.len())
+                            }
+                        }
                         NodeKind::Device(DeviceKind::Ptmx | DeviceKind::PtySlave(_)) => {
                             Err(VfsError::BadFd)
                         }
@@ -1832,11 +1935,18 @@ impl Vfs {
                 offset: cursor,
                 ..
             } => {
-                let size = if let Some(text) = format_proc_virtual(&self.nodes[*node].path) {
-                    text.len()
-                } else {
-                    let data_node = canonical_node_index(&self.nodes, *node);
-                    self.nodes[data_node].data.len()
+                let size = match self.nodes[*node].kind {
+                    NodeKind::Device(DeviceKind::Block(device)) => {
+                        block_device_len(device) as usize
+                    }
+                    _ => {
+                        if let Some(text) = format_proc_virtual(&self.nodes[*node].path) {
+                            text.len()
+                        } else {
+                            let data_node = canonical_node_index(&self.nodes, *node);
+                            self.nodes[data_node].data.len()
+                        }
+                    }
                 };
                 (size, cursor)
             }
@@ -1876,7 +1986,10 @@ impl Vfs {
                 let node = &self.nodes[data_node];
                 let size = format_proc_virtual(&visible_node.path)
                     .map(|text| text.len() as u64)
-                    .unwrap_or(node.data.len() as u64);
+                    .unwrap_or_else(|| match node.kind {
+                        NodeKind::Device(DeviceKind::Block(device)) => block_device_len(device),
+                        _ => node.data.len() as u64,
+                    });
                 Ok(Stat {
                     kind: stat_kind_from_node(node.kind),
                     owner: node.metadata.owner,
@@ -1988,6 +2101,11 @@ impl Vfs {
                         write: rights.write,
                         ..PollReady::default()
                     },
+                    NodeKind::Device(DeviceKind::Block(_)) => PollReady {
+                        read: rights.read,
+                        write: rights.write,
+                        ..PollReady::default()
+                    },
                     NodeKind::Device(DeviceKind::Console | DeviceKind::Serial) => PollReady {
                         write: rights.write,
                         ..PollReady::default()
@@ -2088,6 +2206,16 @@ impl Vfs {
     fn pty_number(&self, fd: usize) -> Option<usize> {
         match self.open_files.get(fd).and_then(|slot| slot.as_ref())? {
             OpenHandle::PtyMaster { pty, .. } | OpenHandle::PtySlave { pty, .. } => Some(*pty),
+            _ => None,
+        }
+    }
+
+    fn block_device_size(&self, fd: usize) -> Option<u64> {
+        match self.open_files.get(fd).and_then(|slot| slot.as_ref())? {
+            OpenHandle::Node { node, .. } => match self.nodes.get(*node)?.kind {
+                NodeKind::Device(DeviceKind::Block(device)) => Some(block_device_len(device)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -2218,7 +2346,10 @@ impl Vfs {
             owner: node.metadata.owner,
             group: node.metadata.group,
             mode: node.metadata.mode.0,
-            size: node.data.len() as u64,
+            size: match node.kind {
+                NodeKind::Device(DeviceKind::Block(device)) => block_device_len(device),
+                _ => node.data.len() as u64,
+            },
             nlink: self.node_link_count(data_node),
             mtime: node.timestamps.modified_at,
         })
@@ -2454,9 +2585,24 @@ pub fn mount(device: &str, mountpoint: &str, fstype: &str) -> Result<(), VfsErro
 }
 
 pub fn mount_hybrid_ext2() {
-    if mount("virtio0", "/", "ext2").is_ok() {
-        crate::println!("Ext2 mounted as / with devfs, procfs, and tmpfs overlays.");
+    let root_device = crate::boot_config::value("root").unwrap_or("/dev/vda");
+    if mount(root_device, "/", "ext2").is_ok() {
+        crate::println!(
+            "Ext2 mounted from {} as / with devfs, procfs, and tmpfs overlays.",
+            root_device
+        );
+    } else if root_device != "/dev/vda" && mount("/dev/vda", "/", "ext2").is_ok() {
+        crate::println!("Ext2 mounted from /dev/vda as / with devfs, procfs, and tmpfs overlays.");
     }
+}
+
+pub fn refresh_block_devices() {
+    with_vfs(|vfs| vfs.refresh_block_devices());
+}
+
+pub fn block_device_size(fd: usize) -> Option<u64> {
+    let guard = VFS.lock();
+    guard.as_ref().and_then(|vfs| vfs.block_device_size(fd))
 }
 
 pub fn open(path: &str) -> Result<usize, VfsError> {
@@ -2801,6 +2947,45 @@ fn fill_random(output: &mut [u8]) {
     crate::entropy::fill_random(output);
 }
 
+fn block_device_len(device: BlockDevice) -> u64 {
+    let sectors = if device.sector_count == 0 {
+        drivers::virtio_blk::sector_count().saturating_sub(device.start_sector)
+    } else {
+        device.sector_count
+    };
+    sectors.saturating_mul(512)
+}
+
+fn block_device_read(
+    device: BlockDevice,
+    offset: u64,
+    output: &mut [u8],
+) -> Result<usize, VfsError> {
+    let len = block_device_len(device);
+    if offset >= len {
+        return Ok(0);
+    }
+    let count = output.len().min((len - offset) as usize);
+    let absolute = device
+        .start_sector
+        .saturating_mul(512)
+        .saturating_add(offset);
+    drivers::virtio_blk::read_bytes(absolute, &mut output[..count]).map_err(|_| VfsError::BadFd)
+}
+
+fn block_device_write(device: BlockDevice, offset: u64, input: &[u8]) -> Result<usize, VfsError> {
+    let len = block_device_len(device);
+    if offset >= len {
+        return Ok(0);
+    }
+    let count = input.len().min((len - offset) as usize);
+    let absolute = device
+        .start_sector
+        .saturating_mul(512)
+        .saturating_add(offset);
+    drivers::virtio_blk::write_bytes(absolute, &input[..count]).map_err(|_| VfsError::BadFd)
+}
+
 fn normalize_path(path: &str) -> Result<String, VfsError> {
     if !path.starts_with('/') {
         return Err(VfsError::NotFound);
@@ -2851,7 +3036,7 @@ fn proc_existing_process_dir_pid(path: &str) -> Option<u64> {
 fn proc_virtual_kind(path: &str) -> Option<NodeKind> {
     if matches!(
         path,
-        "/proc/meminfo" | "/proc/mounts" | "/proc/stat" | "/proc/uptime"
+        "/proc/cmdline" | "/proc/meminfo" | "/proc/mounts" | "/proc/stat" | "/proc/uptime"
     ) || proc_status_pid(path).is_some()
     {
         return Some(NodeKind::File);
@@ -2879,6 +3064,10 @@ fn format_proc_virtual(path: &str) -> Option<String> {
              devfs /dev devfs rw 0 0\n\
              procfs /proc procfs ro 0 0\n\
              tmpfs /tmp tmpfs rw 0 0\n",
+        )),
+        "/proc/cmdline" => Some(format!(
+            "{}\n",
+            crate::boot_config::command_line().unwrap_or("")
         )),
         "/proc/stat" => {
             let stats = crate::process::stats();

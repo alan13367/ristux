@@ -8,6 +8,12 @@ use alloc::vec::Vec;
 use core::ptr;
 use ristux_userland::sys;
 
+const TCGETS: usize = 0x5401;
+const TCSETS: usize = 0x5402;
+const TERMIOS_SIZE: usize = 60;
+const TERMIOS_LFLAG: usize = 12;
+const ECHO: u32 = 0x0008;
+
 struct Account {
     name: Vec<u8>,
     uid: u32,
@@ -50,6 +56,53 @@ fn read_line() -> Option<Vec<u8>> {
             line.push(byte);
         }
     }
+}
+
+struct EchoGuard {
+    original: [u8; TERMIOS_SIZE],
+    active: bool,
+}
+
+impl EchoGuard {
+    fn disable() -> Self {
+        let mut original = [0u8; TERMIOS_SIZE];
+        if sys::ioctl(0, TCGETS, original.as_mut_ptr() as usize) < 0 {
+            return Self {
+                original,
+                active: false,
+            };
+        }
+        let mut raw = original;
+        let lflag = read_u32(&raw, TERMIOS_LFLAG) & !ECHO;
+        raw[TERMIOS_LFLAG..TERMIOS_LFLAG + 4].copy_from_slice(&lflag.to_le_bytes());
+        if sys::ioctl(0, TCSETS, raw.as_ptr() as usize) < 0 {
+            return Self {
+                original,
+                active: false,
+            };
+        }
+        Self {
+            original,
+            active: true,
+        }
+    }
+}
+
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = sys::ioctl(0, TCSETS, self.original.as_ptr() as usize);
+        }
+    }
+}
+
+fn read_u32(buf: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
 }
 
 fn read_file(path: &[u8]) -> Option<Vec<u8>> {
@@ -106,6 +159,99 @@ fn find_account(passwd: &[u8], name: &[u8]) -> Option<Account> {
     None
 }
 
+fn find_shadow_hash(shadow: &[u8], name: &[u8]) -> Option<Vec<u8>> {
+    for line in shadow.split(|byte| *byte == b'\n') {
+        let fields: Vec<&[u8]> = line.split(|byte| *byte == b':').collect();
+        if fields.len() >= 2 && fields[0] == name {
+            return Some(fields[1].to_vec());
+        }
+    }
+    None
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_hex(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let high = hex_nibble(bytes[index])?;
+        let low = hex_nibble(bytes[index + 1])?;
+        out.push((high << 4) | low);
+        index += 2;
+    }
+    Some(out)
+}
+
+fn parse_hex_u64(bytes: &[u8]) -> Option<u64> {
+    let mut value = 0u64;
+    if bytes.is_empty() {
+        return None;
+    }
+    for &byte in bytes {
+        value = value.checked_mul(16)?;
+        value = value.checked_add(hex_nibble(byte)? as u64)?;
+    }
+    Some(value)
+}
+
+fn password_hash(salt: &[u8], password: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in salt {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash ^= b':' as u64;
+    hash = hash.wrapping_mul(0x100_0000_01b3);
+    for &byte in password {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+fn verify_password(encoded: &[u8], password: &[u8]) -> bool {
+    if encoded.is_empty() {
+        return true;
+    }
+    let fields: Vec<&[u8]> = encoded.split(|byte| *byte == b'$').collect();
+    if fields.len() != 3 || fields[0] != b"ristux1" {
+        return false;
+    }
+    let Some(salt) = decode_hex(fields[1]) else {
+        return false;
+    };
+    let Some(expected) = parse_hex_u64(fields[2]) else {
+        return false;
+    };
+    password_hash(&salt, password) == expected
+}
+
+fn authenticate(account: &Account) -> bool {
+    let shadow = read_file(b"/etc/shadow").unwrap_or_default();
+    let hash = find_shadow_hash(&shadow, &account.name).unwrap_or_default();
+    if hash.is_empty() {
+        return true;
+    }
+    let _ = sys::write(1, b"Password: ");
+    let password = {
+        let _guard = EchoGuard::disable();
+        read_line().unwrap_or_default()
+    };
+    let _ = sys::write(1, b"\n");
+    verify_password(&hash, &password)
+}
+
 fn exec_shell(account: &Account) -> ! {
     let groups = [account.gid];
     let _ = sys::setgroups(&groups);
@@ -152,6 +298,10 @@ fn main(_args: &[&[u8]]) -> i32 {
             continue;
         }
         if let Some(account) = find_account(&passwd, &name) {
+            if !authenticate(&account) {
+                let _ = sys::write(1, b"login: authentication failed\n");
+                continue;
+            }
             exec_shell(&account);
         }
         let _ = sys::write(1, b"login: unknown user\n");

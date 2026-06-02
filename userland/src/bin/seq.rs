@@ -47,11 +47,7 @@ fn parse_i64(bytes: &[u8]) -> Option<i64> {
         value = value.checked_mul(10)?.checked_add((byte - b'0') as i64)?;
         index += 1;
     }
-    if negative {
-        Some(-value)
-    } else {
-        Some(value)
-    }
+    if negative { Some(-value) } else { Some(value) }
 }
 
 fn push_i64(out: &mut Vec<u8>, mut value: i64) {
@@ -100,11 +96,7 @@ fn print_sequence(first: i64, increment: i64, last: i64, separator: &[u8]) -> i3
         value = next;
     }
     output.push(b'\n');
-    if write_all(1, &output) {
-        0
-    } else {
-        1
-    }
+    if write_all(1, &output) { 0 } else { 1 }
 }
 
 fn main(args: &[&[u8]]) -> i32 {

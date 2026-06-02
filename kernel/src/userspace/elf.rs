@@ -3,11 +3,13 @@ use core::fmt;
 
 const PT_LOAD: u32 = 1;
 
+#[allow(dead_code)]
 pub struct LoadedElf {
     pub entry: u64,
     segments: Vec<LoadedSegment>,
 }
 
+#[allow(dead_code)]
 pub struct LoadedSegment {
     pub vaddr: usize,
     pub flags: u32,
@@ -39,6 +41,7 @@ impl fmt::Display for ElfError {
     }
 }
 
+#[allow(dead_code)]
 impl LoadedElf {
     pub fn parse(data: &[u8]) -> Result<Self, ElfError> {
         if data.len() < 64 {

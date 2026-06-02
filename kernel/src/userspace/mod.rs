@@ -4,6 +4,7 @@ use core::{arch::global_asm, ptr};
 
 use crate::{fs, process, security::Credentials, sync::spinlock::SpinLock, syscall};
 
+#[allow(dead_code)]
 const USER_PROGRAMS: [&str; 4] = ["/bin/init", "/bin/echo", "/bin/true", "/bin/false"];
 
 global_asm!(
@@ -96,6 +97,7 @@ impl UserReturnContext {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct UserProgramResult {
     pub status: i32,
     pub unmapped_pages: usize,
@@ -119,12 +121,14 @@ pub struct UserspaceStats {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum ProcessState {
     Ready,
     Running,
     Exited(i32),
 }
 
+#[allow(dead_code)]
 pub struct UserProcess {
     pid: u64,
     name: &'static str,
@@ -132,6 +136,7 @@ pub struct UserProcess {
     state: ProcessState,
 }
 
+#[allow(dead_code)]
 impl UserProcess {
     pub fn load(pid: u64, name: &'static str, data: &[u8]) -> Result<Self, elf::ElfError> {
         Ok(Self {
@@ -188,6 +193,7 @@ pub fn stats() -> UserspaceStats {
     unsafe { USERSPACE_STATS }
 }
 
+#[allow(dead_code)]
 pub fn run_userland_program_sequence() {
     for (index, path) in USER_PROGRAMS.iter().enumerate() {
         let pid = if index == 0 {
@@ -364,6 +370,7 @@ pub fn return_from_active_user() -> ! {
     }
 }
 
+#[allow(dead_code)]
 fn run_init_process(process: &mut UserProcess) {
     const MESSAGE: &[u8] = b"init: hello from user space\n";
 

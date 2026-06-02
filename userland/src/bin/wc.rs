@@ -186,11 +186,7 @@ fn main(args: &[&[u8]]) -> i32 {
     if args.len() - start > 1 {
         print_counts(total, opts, Some(b"total"));
     }
-    if ok {
-        0
-    } else {
-        1
-    }
+    if ok { 0 } else { 1 }
 }
 
 ristux_userland::program_main!(main);

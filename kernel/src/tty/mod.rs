@@ -282,11 +282,7 @@ impl Tty {
 
     fn control_char(&self, index: usize) -> Option<u8> {
         let byte = self.termios.cc.get(index).copied().unwrap_or(0);
-        if byte == 0 {
-            None
-        } else {
-            Some(byte)
-        }
+        if byte == 0 { None } else { Some(byte) }
     }
 
     fn termios(&self) -> Termios {

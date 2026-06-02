@@ -135,11 +135,7 @@ fn print_fields(fields: &[bool; FIELD_COUNT]) -> i32 {
         }
         printed = true;
     }
-    if write_all(1, b"\n") {
-        0
-    } else {
-        1
-    }
+    if write_all(1, b"\n") { 0 } else { 1 }
 }
 
 fn main(args: &[&[u8]]) -> i32 {

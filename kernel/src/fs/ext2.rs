@@ -33,6 +33,7 @@ pub enum Ext2Error {
 
 #[derive(Clone)]
 pub struct Ext2Fs {
+    start_sector: u64,
     block_size: usize,
     blocks_count: u32,
     inodes_count: u32,
@@ -116,7 +117,6 @@ impl Inode {
 struct DirEntry {
     ino: u32,
     name: String,
-    file_type: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,8 +137,12 @@ pub struct Ext2Metadata {
 
 impl Ext2Fs {
     pub fn mount() -> Result<Self, Ext2Error> {
+        Self::mount_at(0)
+    }
+
+    pub fn mount_at(start_sector: u64) -> Result<Self, Ext2Error> {
         let mut superblock = [0u8; 1024];
-        read_block_sized(1, 1024, &mut superblock)?;
+        read_block_sized(start_sector, 1, 1024, &mut superblock)?;
         let magic = le_u16(&superblock, 56);
         if magic != EXT2_MAGIC {
             crate::println!("Ext2 superblock magic read {:#x}.", magic);
@@ -177,6 +181,7 @@ impl Ext2Fs {
         for block in 0..desc_blocks {
             let mut bytes = vec![0u8; block_size];
             read_block_sized(
+                start_sector,
                 desc_table_block as u64 + block as u64,
                 block_size,
                 &mut bytes,
@@ -195,6 +200,7 @@ impl Ext2Fs {
         }
 
         Ok(Self {
+            start_sector,
             block_size,
             blocks_count,
             inodes_count,
@@ -290,9 +296,7 @@ impl Ext2Fs {
             let _ = self.free_inode(ino);
             return Err(err);
         }
-        if let Err(err) =
-            self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_SYMLINK)
-        {
+        if let Err(err) = self.insert_dir_entry(parent_ino, &parent, ino, &name, EXT2_FT_SYMLINK) {
             let _ = self.free_inode_blocks(&inode);
             let _ = self.free_inode(ino);
             return Err(err);
@@ -576,7 +580,7 @@ impl Ext2Fs {
             {
                 put_u32(&mut indirect_data, index * 4, *block);
             }
-            write_block_sized(indirect as u64, self.block_size, &indirect_data)?;
+            self.write_block_sized(indirect as u64, &indirect_data)?;
             inode.blocks[12] = indirect;
         }
         let double_start = EXT2_DIRECT_BLOCKS + indirect_count;
@@ -592,10 +596,10 @@ impl Ext2Fs {
                 for (block_index, block) in chunk.iter().enumerate() {
                     put_u32(&mut indirect_data, block_index * 4, *block);
                 }
-                write_block_sized(indirect as u64, self.block_size, &indirect_data)?;
+                self.write_block_sized(indirect as u64, &indirect_data)?;
                 put_u32(&mut double_data, index * 4, indirect);
             }
-            write_block_sized(double_indirect as u64, self.block_size, &double_data)?;
+            self.write_block_sized(double_indirect as u64, &double_data)?;
             inode.blocks[13] = double_indirect;
         }
         inode.size = data.len() as u64;
@@ -603,10 +607,6 @@ impl Ext2Fs {
         inode.mtime = now;
         inode.ctime = now;
         Ok(())
-    }
-
-    pub fn block_size(&self) -> usize {
-        self.block_size
     }
 
     pub fn stats(&self) -> Ext2Stats {
@@ -702,7 +702,7 @@ impl Ext2Fs {
         let block = group.inode_table as u64 + (byte_offset / self.block_size) as u64;
         let offset = byte_offset % self.block_size;
         let mut data = vec![0u8; self.block_size];
-        read_block_sized(block, self.block_size, &mut data)?;
+        self.read_block_sized(block, &mut data)?;
         if offset + 128 > data.len() {
             return Err(Ext2Error::IoError);
         }
@@ -755,7 +755,7 @@ impl Ext2Fs {
 
         if remaining > 0 && inode.blocks[12] != 0 {
             let mut indirect = vec![0u8; self.block_size];
-            read_block_sized(inode.blocks[12] as u64, self.block_size, &mut indirect)?;
+            self.read_block_sized(inode.blocks[12] as u64, &mut indirect)?;
             for offset in (0..self.block_size).step_by(4) {
                 let block = le_u32(&indirect, offset);
                 if block == 0 {
@@ -792,7 +792,7 @@ impl Ext2Fs {
         out: &mut Vec<u8>,
     ) -> Result<(), Ext2Error> {
         let mut data = vec![0u8; self.block_size];
-        read_block_sized(block as u64, self.block_size, &mut data)?;
+        self.read_block_sized(block as u64, &mut data)?;
         let count = (*remaining).min(self.block_size);
         out.extend_from_slice(&data[..count]);
         *remaining -= count;
@@ -808,7 +808,6 @@ impl Ext2Fs {
             let ino = le_u32(&data, offset);
             let rec_len = le_u16(&data, offset + 4) as usize;
             let name_len = data[offset + 6] as usize;
-            let file_type = data[offset + 7];
             if rec_len < 8 || offset + rec_len > limit {
                 break;
             }
@@ -818,7 +817,6 @@ impl Ext2Fs {
                     entries.push(DirEntry {
                         ino,
                         name: String::from(name),
-                        file_type,
                     });
                 }
             }
@@ -849,7 +847,7 @@ impl Ext2Fs {
         let block = group.inode_table as u64 + (byte_offset / self.block_size) as u64;
         let offset = byte_offset % self.block_size;
         let mut data = [0u8; 1024];
-        read_block_sized(block, self.block_size, &mut data)?;
+        self.read_block_sized(block, &mut data)?;
         {
             let raw = &mut data[offset..offset + 128];
             raw.fill(0);
@@ -869,7 +867,7 @@ impl Ext2Fs {
             put_u16(raw, 120, (inode.uid >> 16) as u16);
             put_u16(raw, 122, (inode.gid >> 16) as u16);
         }
-        write_block_sized(block, self.block_size, &data)
+        self.write_block_sized(block, &data)
     }
 
     fn inode_sector_count(&self, inode: &Inode) -> u32 {
@@ -899,7 +897,7 @@ impl Ext2Fs {
 
     fn read_indirect_blocks(&self, block: u32) -> Result<Vec<u32>, Ext2Error> {
         let mut indirect = vec![0u8; self.block_size];
-        read_block_sized(block as u64, self.block_size, &mut indirect)?;
+        self.read_block_sized(block as u64, &mut indirect)?;
         let mut blocks = Vec::new();
         for offset in (0..self.block_size).step_by(4) {
             let block = le_u32(&indirect, offset);
@@ -952,7 +950,7 @@ impl Ext2Fs {
             return Err(Ext2Error::Unsupported);
         }
         let mut data = [0u8; 1024];
-        read_block_sized(block as u64, self.block_size, &mut data)?;
+        self.read_block_sized(block as u64, &mut data)?;
         let needed = align4(8 + name.len());
         let mut offset = 0usize;
         while offset + 8 <= self.block_size {
@@ -971,7 +969,7 @@ impl Ext2Fs {
                 data[new_offset + 6] = name.len() as u8;
                 data[new_offset + 7] = file_type;
                 data[new_offset + 8..new_offset + 8 + name.len()].copy_from_slice(name.as_bytes());
-                write_block_sized(block as u64, self.block_size, &data)?;
+                self.write_block_sized(block as u64, &data)?;
                 return Ok(());
             }
             offset += rec_len;
@@ -988,7 +986,7 @@ impl Ext2Fs {
             return Err(Ext2Error::Unsupported);
         }
         let mut data = [0u8; 1024];
-        read_block_sized(block as u64, self.block_size, &mut data)?;
+        self.read_block_sized(block as u64, &mut data)?;
         let mut offset = 0usize;
         let mut previous_offset = None;
         while offset + 8 <= self.block_size {
@@ -1011,7 +1009,7 @@ impl Ext2Fs {
                     } else {
                         put_u32(&mut data, offset, 0);
                     }
-                    write_block_sized(block as u64, self.block_size, &data)?;
+                    self.write_block_sized(block as u64, &data)?;
                     return Ok(ino);
                 }
             }
@@ -1032,13 +1030,13 @@ impl Ext2Fs {
             "..",
             EXT2_FT_DIR,
         );
-        write_block_sized(block as u64, self.block_size, &data)
+        self.write_block_sized(block as u64, &data)
     }
 
     fn allocate_inode(&mut self) -> Result<u32, Ext2Error> {
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut bitmap = [0u8; 1024];
-            read_block_sized(group.inode_bitmap as u64, self.block_size, &mut bitmap)?;
+            self.read_block_sized(group.inode_bitmap as u64, &mut bitmap)?;
             let start = if group_index == 0 {
                 (EXT2_FIRST_NORMAL_INO - 1) as usize
             } else {
@@ -1051,7 +1049,7 @@ impl Ext2Fs {
                 }
                 if !bitmap_bit(&bitmap, bit) {
                     set_bitmap_bit(&mut bitmap, bit, true);
-                    write_block_sized(group.inode_bitmap as u64, self.block_size, &bitmap)?;
+                    self.write_block_sized(group.inode_bitmap as u64, &bitmap)?;
                     return Ok(ino);
                 }
             }
@@ -1063,7 +1061,7 @@ impl Ext2Fs {
         let mut free = 0u32;
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut bitmap = [0u8; 1024];
-            read_block_sized(group.inode_bitmap as u64, self.block_size, &mut bitmap)?;
+            self.read_block_sized(group.inode_bitmap as u64, &mut bitmap)?;
             for bit in 0..self.inodes_per_group as usize {
                 let ino = group_index as u32 * self.inodes_per_group + bit as u32 + 1;
                 if ino > self.inodes_count {
@@ -1086,15 +1084,15 @@ impl Ext2Fs {
         let group = self.groups.get(group_index).ok_or(Ext2Error::NotFound)?;
         let bit = (index % self.inodes_per_group) as usize;
         let mut bitmap = [0u8; 1024];
-        read_block_sized(group.inode_bitmap as u64, self.block_size, &mut bitmap)?;
+        self.read_block_sized(group.inode_bitmap as u64, &mut bitmap)?;
         set_bitmap_bit(&mut bitmap, bit, false);
-        write_block_sized(group.inode_bitmap as u64, self.block_size, &bitmap)
+        self.write_block_sized(group.inode_bitmap as u64, &bitmap)
     }
 
     fn allocate_block(&mut self) -> Result<u32, Ext2Error> {
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut bitmap = [0u8; 1024];
-            read_block_sized(group.block_bitmap as u64, self.block_size, &mut bitmap)?;
+            self.read_block_sized(group.block_bitmap as u64, &mut bitmap)?;
             for bit in 0..self.blocks_per_group as usize {
                 let block = group_index as u32 * self.blocks_per_group + bit as u32;
                 if block >= self.blocks_count {
@@ -1102,7 +1100,7 @@ impl Ext2Fs {
                 }
                 if !bitmap_bit(&bitmap, bit) {
                     set_bitmap_bit(&mut bitmap, bit, true);
-                    write_block_sized(group.block_bitmap as u64, self.block_size, &bitmap)?;
+                    self.write_block_sized(group.block_bitmap as u64, &bitmap)?;
                     return Ok(block);
                 }
             }
@@ -1114,7 +1112,7 @@ impl Ext2Fs {
         let mut free = 0u32;
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut bitmap = [0u8; 1024];
-            read_block_sized(group.block_bitmap as u64, self.block_size, &mut bitmap)?;
+            self.read_block_sized(group.block_bitmap as u64, &mut bitmap)?;
             for bit in 0..self.blocks_per_group as usize {
                 let block = group_index as u32 * self.blocks_per_group + bit as u32;
                 if block >= self.blocks_count {
@@ -1136,16 +1134,24 @@ impl Ext2Fs {
         let group = self.groups.get(group_index).ok_or(Ext2Error::NotFound)?;
         let bit = (block % self.blocks_per_group) as usize;
         let mut bitmap = [0u8; 1024];
-        read_block_sized(group.block_bitmap as u64, self.block_size, &mut bitmap)?;
+        self.read_block_sized(group.block_bitmap as u64, &mut bitmap)?;
         set_bitmap_bit(&mut bitmap, bit, false);
-        write_block_sized(group.block_bitmap as u64, self.block_size, &bitmap)
+        self.write_block_sized(group.block_bitmap as u64, &bitmap)
     }
 
     fn write_data_block(&self, block: u32, data: &[u8]) -> Result<(), Ext2Error> {
         let mut full = [0u8; 1024];
         let count = data.len().min(self.block_size);
         full[..count].copy_from_slice(&data[..count]);
-        write_block_sized(block as u64, self.block_size, &full)
+        self.write_block_sized(block as u64, &full)
+    }
+
+    fn read_block_sized(&self, block: u64, output: &mut [u8]) -> Result<(), Ext2Error> {
+        read_block_sized(self.start_sector, block, self.block_size, output)
+    }
+
+    fn write_block_sized(&self, block: u64, input: &[u8]) -> Result<(), Ext2Error> {
+        write_block_sized(self.start_sector, block, self.block_size, input)
     }
 }
 
@@ -1173,11 +1179,16 @@ pub struct Ext2Stats {
     pub groups: usize,
 }
 
-fn read_block_sized(block: u64, block_size: usize, output: &mut [u8]) -> Result<(), Ext2Error> {
+fn read_block_sized(
+    start_sector: u64,
+    block: u64,
+    block_size: usize,
+    output: &mut [u8],
+) -> Result<(), Ext2Error> {
     if output.len() < block_size || block_size != 1024 {
         return Err(Ext2Error::IoError);
     }
-    let sector = block * (block_size / 512) as u64;
+    let sector = start_sector + block * (block_size / 512) as u64;
     let mut bounce = [0u8; 1024];
     virtio_blk::read_sectors(sector, 1, &mut bounce[..512]).map_err(|_| Ext2Error::IoError)?;
     virtio_blk::read_sectors(sector + 1, 1, &mut bounce[512..]).map_err(|_| Ext2Error::IoError)?;
@@ -1185,11 +1196,16 @@ fn read_block_sized(block: u64, block_size: usize, output: &mut [u8]) -> Result<
     Ok(())
 }
 
-fn write_block_sized(block: u64, block_size: usize, input: &[u8]) -> Result<(), Ext2Error> {
+fn write_block_sized(
+    start_sector: u64,
+    block: u64,
+    block_size: usize,
+    input: &[u8],
+) -> Result<(), Ext2Error> {
     if input.len() < block_size || block_size != 1024 {
         return Err(Ext2Error::IoError);
     }
-    let sector = block * (block_size / 512) as u64;
+    let sector = start_sector + block * (block_size / 512) as u64;
     virtio_blk::write_sectors(sector, 1, &input[..512]).map_err(|_| Ext2Error::IoError)?;
     virtio_blk::write_sectors(sector + 1, 1, &input[512..1024]).map_err(|_| Ext2Error::IoError)?;
     Ok(())
@@ -1289,7 +1305,11 @@ fn join_ext2_path(base: &str, leaf: &str) -> String {
     if base == "/" {
         format!("/{}", leaf.trim_start_matches('/'))
     } else {
-        format!("{}/{}", base.trim_end_matches('/'), leaf.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            leaf.trim_start_matches('/')
+        )
     }
 }
 

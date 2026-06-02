@@ -3,6 +3,9 @@ RUSTC ?= rustc
 CLANG ?= clang
 GRUB_FILE ?= $(shell command -v grub-file 2>/dev/null || command -v i686-elf-grub-file 2>/dev/null || command -v x86_64-elf-grub-file 2>/dev/null || printf grub-file)
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v i686-elf-grub-mkrescue 2>/dev/null || command -v x86_64-elf-grub-mkrescue 2>/dev/null || printf grub-mkrescue)
+GRUB_MKIMAGE ?= $(shell command -v grub-mkimage 2>/dev/null || command -v i686-elf-grub-mkimage 2>/dev/null || command -v x86_64-elf-grub-mkimage 2>/dev/null || printf grub-mkimage)
+GRUB_BIOS_DIR ?= $(shell for d in /usr/lib/grub/i386-pc /usr/local/lib/grub/i386-pc /opt/homebrew/lib/grub/i386-pc $$(find /opt/homebrew/Cellar -path '*/lib/*/grub/i386-pc' -type d 2>/dev/null | sort -r); do if test -f "$$d/boot.img"; then printf '%s' "$$d"; break; fi; done)
+QEMU_IMG ?= qemu-img
 QEMU ?= qemu-system-x86_64
 QEMU_FLAGS ?= -m 256M -smp 4
 QEMU_DISPLAY ?= $(shell if $(QEMU) -display help 2>/dev/null | grep -qx cocoa; then printf '%s' '-display cocoa,zoom-to-fit=on'; fi)
@@ -21,6 +24,18 @@ ISO_KERNEL := $(ISO_DIR)/boot/ristux.elf
 ISO_INITRD := $(ISO_DIR)/boot/initrd.bin
 ISO_IMAGE := build/ristux.iso
 DISK_IMAGE := build/disk.img
+INSTALLER_ISO_DIR := build/installer-iso
+INSTALLER_INITRD := build/installer/initrd.bin
+INSTALLER_ISO_IMAGE := build/ristux-installer.iso
+INSTALLED_GRUB_CFG := build/install/grub.cfg
+INSTALLER_GRUB_CFG := build/installer/grub.cfg
+GRUB_BOOT_IMG := build/grub/boot.img
+GRUB_CORE_IMG := build/grub/core.img
+GRUB_EMBEDDED_CFG := build/grub/embedded.cfg
+VM_DISK_SIZE ?= 1073741824
+VM_BLANK_IMAGE := build/ristux-blank.raw
+VM_IMAGE := build/ristux-vm.raw
+VM_QCOW2_IMAGE := build/ristux-vm.qcow2
 USERLAND_RS_TARGET := x86_64-ristux-user
 USERLAND_RS_OUT := userland/target/$(USERLAND_RS_TARGET)/release
 USERLAND_RS_SRC := \
@@ -29,7 +44,7 @@ USERLAND_RS_SRC := \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	targets/x86_64-ristux-user.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill pwd udp grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
+USERLAND_RS_BINS := init sh cat echo true false touch mount login ristux_install fdisk mkfs_ext2 id su sleep ping curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain cp mv ls mkdir rm chmod kill pwd udp grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -40,6 +55,9 @@ USER_FALSE_ELF := build/userland/false.elf
 USER_TOUCH_ELF := build/userland/touch.elf
 USER_MOUNT_ELF := build/userland/mount.elf
 USER_LOGIN_ELF := build/userland/login.elf
+USER_RISTUX_INSTALL_ELF := build/userland/ristux_install.elf
+USER_FDISK_ELF := build/userland/fdisk.elf
+USER_MKFS_EXT2_ELF := build/userland/mkfs_ext2.elf
 USER_ID_ELF := build/userland/id.elf
 USER_SU_ELF := build/userland/su.elf
 USER_SLEEP_ELF := build/userland/sleep.elf
@@ -181,8 +199,10 @@ USER_DROPBEAR_ELF := build/userland/dropbear.elf
 USER_DBCLIENT_ELF := build/userland/dbclient.elf
 ROOTFS_BUILDER := build/build_rootfs
 EXT2_DISK_BUILDER := build/build_ext2_disk
+VM_DISK_BUILDER := build/build_vm_disk
 PACKAGE_TAR_BUILDER := build/build_package_tar
 ROOTFS_MANIFEST := rootfs/manifest.txt
+INSTALLER_ROOTFS_MANIFEST := rootfs/installer-manifest.txt
 ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
 ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
 ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
@@ -205,7 +225,7 @@ ROOTFS_MAKE_IMPLICIT_DIR := rootfs/testdata/make-implicit
 ROOTFS_MAKE_IMPLICIT_INPUTS := $(shell find $(ROOTFS_MAKE_IMPLICIT_DIR) -type f 2>/dev/null | sort)
 ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/libc.pc rootfs/usr/lib/pkgconfig/ristux.pc rootfs/testdata/ristuxpkg.patch rootfs/testdata/tinycc-hello.c userland/c/linker.ld $(USER_C_HEADERS) $(USER_CRT0_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(USER_C_LIBC_A) $(TINYCC_PORT_STAMP) $(ROOTFS_TINYCC_PROJECT_INPUTS) $(ROOTFS_MAKE_IMPLICIT_INPUTS) $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(ROOTFS_NATIVEPKG_ARCHIVE)
 
-.PHONY: all build rootfs disk dropbear-port newlib-port-check newlib-sysroot check-multiboot iso run run-headless run-ssh smoke quick quick-% debug test clean
+.PHONY: all build rootfs disk dropbear-port newlib-port-check newlib-sysroot check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% debug test clean
 
 all: build
 
@@ -232,6 +252,9 @@ $(USER_FALSE_ELF): $(USERLAND_RS_STAMP)
 $(USER_TOUCH_ELF): $(USERLAND_RS_STAMP)
 $(USER_MOUNT_ELF): $(USERLAND_RS_STAMP)
 $(USER_LOGIN_ELF): $(USERLAND_RS_STAMP)
+$(USER_RISTUX_INSTALL_ELF): $(USERLAND_RS_STAMP)
+$(USER_FDISK_ELF): $(USERLAND_RS_STAMP)
+$(USER_MKFS_EXT2_ELF): $(USERLAND_RS_STAMP)
 $(USER_ID_ELF): $(USERLAND_RS_STAMP)
 $(USER_SU_ELF): $(USERLAND_RS_STAMP)
 $(USER_SLEEP_ELF): $(USERLAND_RS_STAMP)
@@ -574,6 +597,10 @@ $(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs tools/package_archive.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
 
+$(VM_DISK_BUILDER): tools/build_vm_disk.rs
+	mkdir -p build
+	$(RUSTC) $< -o $@
+
 $(PACKAGE_TAR_BUILDER): tools/build_package_tar.rs
 	mkdir -p build
 	$(RUSTC) $< -o $@
@@ -603,15 +630,64 @@ $(ROOTFS_NATIVEPKG_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_NATIVEPKG_INPUTS)
 $(ROOTFS_NATIVEPKG_ARCHIVE): $(ROOTFS_NATIVEPKG_TAR)
 	gzip -n -c $< > $@
 
-$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_CHECK_ELF) $(USER_SSH_BANNER_ELF) $(USER_PTY_SHELL_CHECK_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_TAR_ELF) $(USER_PKG_ELF) $(USER_AR_ELF) $(USER_PKGCONF_ELF) $(USER_MAKE_ELF) $(USER_TOOLCHAIN_ELF) $(USER_TCC_ELF) $(USER_CP_ELF) $(USER_MV_ELF) $(USER_GREP_ELF) $(USER_PRINTF_ELF) $(USER_TEST_ELF) $(USER_LN_ELF) $(USER_READLINK_ELF) $(USER_WC_ELF) $(USER_HEAD_ELF) $(USER_TAIL_ELF) $(USER_TEE_ELF) $(USER_SORT_ELF) $(USER_UNIQ_ELF) $(USER_BASENAME_ELF) $(USER_DIRNAME_ELF) $(USER_INSTALL_ELF) $(USER_ENV_ELF) $(USER_CUT_ELF) $(USER_FIND_ELF) $(USER_XARGS_ELF) $(USER_SED_ELF) $(USER_UNAME_ELF) $(USER_TR_ELF) $(USER_DATE_ELF) $(USER_WHICH_ELF) $(USER_CMP_ELF) $(USER_DD_ELF) $(USER_SEQ_ELF) $(USER_EXPR_ELF) $(USER_YES_ELF) $(USER_DIFF_ELF) $(USER_AWK_ELF) $(USER_PATCH_ELF) $(USER_GZIP_ELF) $(USER_XZ_ELF) $(USER_STAT_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_NEWLIB_HELLO_ELF) $(USER_CC_NEWLIB_POSIX_ELF) $(USER_CC_CRED_ELF) $(USER_CC_PASSWD_ELF) $(USER_CC_SESSION_ELF) $(USER_CC_DEV_ELF) $(USER_CC_DNS_ELF) $(USER_CC_HTTP_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_FILE_SYNC_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_SOCKET_ELF) $(USER_CC_TCP_ELF) $(USER_CC_UIO_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_FUTEX_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_SSE_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_LIBC_COMPAT_ELF) $(USER_CC_LIBC_HOSTED_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(USER_CC_STATFS_ELF) $(USER_DROPBEAR_ELF) $(USER_DBCLIENT_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USER_INIT_ELF) $(USER_SH_ELF) $(USER_CAT_ELF) $(USER_ECHO_ELF) $(USER_TRUE_ELF) $(USER_FALSE_ELF) $(USER_TOUCH_ELF) $(USER_MOUNT_ELF) $(USER_LOGIN_ELF) $(USER_RISTUX_INSTALL_ELF) $(USER_FDISK_ELF) $(USER_MKFS_EXT2_ELF) $(USER_ID_ELF) $(USER_SU_ELF) $(USER_SLEEP_ELF) $(USER_STTY_ELF) $(USER_PING_ELF) $(USER_CURL_LITE_ELF) $(USER_LOOPBACK_CHECK_ELF) $(USER_SSH_BANNER_ELF) $(USER_PTY_SHELL_CHECK_ELF) $(USER_SIG_DEMO_ELF) $(USER_EDIT_ELF) $(USER_ANSI_DEMO_ELF) $(USER_TAR_ELF) $(USER_PKG_ELF) $(USER_AR_ELF) $(USER_PKGCONF_ELF) $(USER_MAKE_ELF) $(USER_TOOLCHAIN_ELF) $(USER_TCC_ELF) $(USER_CP_ELF) $(USER_MV_ELF) $(USER_GREP_ELF) $(USER_PRINTF_ELF) $(USER_TEST_ELF) $(USER_LN_ELF) $(USER_READLINK_ELF) $(USER_WC_ELF) $(USER_HEAD_ELF) $(USER_TAIL_ELF) $(USER_TEE_ELF) $(USER_SORT_ELF) $(USER_UNIQ_ELF) $(USER_BASENAME_ELF) $(USER_DIRNAME_ELF) $(USER_INSTALL_ELF) $(USER_ENV_ELF) $(USER_CUT_ELF) $(USER_FIND_ELF) $(USER_XARGS_ELF) $(USER_SED_ELF) $(USER_UNAME_ELF) $(USER_TR_ELF) $(USER_DATE_ELF) $(USER_WHICH_ELF) $(USER_CMP_ELF) $(USER_DD_ELF) $(USER_SEQ_ELF) $(USER_EXPR_ELF) $(USER_YES_ELF) $(USER_DIFF_ELF) $(USER_AWK_ELF) $(USER_PATCH_ELF) $(USER_GZIP_ELF) $(USER_XZ_ELF) $(USER_STAT_ELF) $(USER_LS_ELF) $(USER_PWD_ELF) $(USER_CHMOD_ELF) $(USER_KILL_ELF) $(USER_MKDIR_ELF) $(USER_RM_ELF) $(USER_UDP_ELF) $(USER_LIBC_SO) $(USER_CC_HELLO_ELF) $(USER_CC_NEWLIB_HELLO_ELF) $(USER_CC_NEWLIB_POSIX_ELF) $(USER_CC_CRED_ELF) $(USER_CC_PASSWD_ELF) $(USER_CC_SESSION_ELF) $(USER_CC_DEV_ELF) $(USER_CC_DNS_ELF) $(USER_CC_HTTP_ELF) $(USER_CC_COW_ELF) $(USER_CC_EXT2_ELF) $(USER_CC_FCNTL_ELF) $(USER_CC_FILE_SYNC_ELF) $(USER_CC_MMAP_ELF) $(USER_CC_POLL_ELF) $(USER_CC_SELECT_ELF) $(USER_CC_SOCKET_ELF) $(USER_CC_TCP_ELF) $(USER_CC_UIO_ELF) $(USER_CC_PATH_ELF) $(USER_CC_FS_ELF) $(USER_CC_FUTEX_ELF) $(USER_CC_SIGNAL_ELF) $(USER_CC_STACK_ELF) $(USER_CC_SSE_ELF) $(USER_CC_TTY_ELF) $(USER_CC_PTY_ELF) $(USER_CC_LINKS_ELF) $(USER_CC_LIBC_COMPAT_ELF) $(USER_CC_LIBC_HOSTED_ELF) $(USER_CC_PROC_ELF) $(USER_CC_PROCFS_ELF) $(USER_CC_STATFS_ELF) $(USER_DROPBEAR_ELF) $(USER_DBCLIENT_ELF) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)
 
-$(DISK_IMAGE): $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(ROOTFS_MANIFEST) $(ROOTFS_INPUTS)
-	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST)
+$(INSTALLED_GRUB_CFG):
+	mkdir -p $(@D)
+	printf '%s\n' \
+	  'set timeout=0' \
+	  'set default=0' \
+	  'terminal_output console' \
+	  '' \
+	  'menuentry "ristux" {' \
+	  '    multiboot2 /boot/ristux.elf root=/dev/vda1' \
+	  '    module2 /boot/initrd.bin initrd' \
+	  '    boot' \
+	  '}' > $@
+
+$(DISK_IMAGE): $(ISO_KERNEL) $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(INSTALLED_GRUB_CFG) $(ROOTFS_MANIFEST) $(ROOTFS_INPUTS)
+	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST) $(ISO_KERNEL) $(ISO_INITRD) $(INSTALLED_GRUB_CFG)
 
 disk: $(DISK_IMAGE)
+
+$(GRUB_BOOT_IMG):
+	@test -n "$(GRUB_BIOS_DIR)" || { echo "GRUB i386-pc boot.img not found; set GRUB_BIOS_DIR" >&2; exit 1; }
+	mkdir -p $(@D)
+	cp "$(GRUB_BIOS_DIR)/boot.img" $@
+
+$(GRUB_EMBEDDED_CFG):
+	mkdir -p $(@D)
+	printf '%s\n' \
+	  'set root=(hd0,msdos1)' \
+	  'set prefix=(hd0,msdos1)/boot/grub' \
+	  'multiboot2 /boot/ristux.elf root=/dev/vda1' \
+	  'module2 /boot/initrd.bin initrd' \
+	  'boot' > $@
+
+$(GRUB_CORE_IMG): $(GRUB_EMBEDDED_CFG)
+	mkdir -p $(@D)
+	$(GRUB_MKIMAGE) -O i386-pc -o $@ -p /boot/grub -c $(GRUB_EMBEDDED_CFG) biosdisk part_msdos ext2 multiboot2
+
+$(INSTALLER_INITRD): $(ROOTFS_BUILDER) $(INSTALLER_ROOTFS_MANIFEST) $(DISK_IMAGE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(ISO_KERNEL) $(ISO_INITRD) $(ROOTFS_INPUTS)
+	mkdir -p $(@D)
+	$(ROOTFS_BUILDER) $@ $(INSTALLER_ROOTFS_MANIFEST)
+
+$(INSTALLER_GRUB_CFG):
+	mkdir -p $(@D)
+	printf '%s\n' \
+	  'set timeout=0' \
+	  'set default=0' \
+	  'set gfxpayload=text' \
+	  'terminal_output console' \
+	  '' \
+	  'menuentry "Install ristux" {' \
+	  '    multiboot2 /boot/ristux.elf ristux.mode=install' \
+	  '    module2 /boot/initrd.bin initrd' \
+	  '    boot' \
+	  '}' > $@
 
 check-multiboot: $(ISO_KERNEL)
 	$(GRUB_FILE) --is-x86-multiboot2 $(ISO_KERNEL)
@@ -619,6 +695,26 @@ check-multiboot: $(ISO_KERNEL)
 iso: check-multiboot $(ISO_INITRD) $(DISK_IMAGE)
 	mkdir -p build
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_DIR)
+
+installer-iso: check-multiboot $(INSTALLER_INITRD) $(INSTALLER_GRUB_CFG)
+	rm -rf $(INSTALLER_ISO_DIR)
+	mkdir -p $(INSTALLER_ISO_DIR)/boot/grub
+	cp $(ISO_KERNEL) $(INSTALLER_ISO_DIR)/boot/ristux.elf
+	cp $(INSTALLER_INITRD) $(INSTALLER_ISO_DIR)/boot/initrd.bin
+	cp $(INSTALLER_GRUB_CFG) $(INSTALLER_ISO_DIR)/boot/grub/grub.cfg
+	$(GRUB_MKRESCUE) -o $(INSTALLER_ISO_IMAGE) $(INSTALLER_ISO_DIR)
+
+vm-blank:
+	mkdir -p build
+	dd if=/dev/zero of=$(VM_BLANK_IMAGE) bs=1m count=0 seek=$$(($(VM_DISK_SIZE) / 1048576))
+
+$(VM_IMAGE): $(VM_DISK_BUILDER) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(DISK_IMAGE)
+	$(VM_DISK_BUILDER) $@ $(VM_DISK_SIZE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(DISK_IMAGE)
+
+vm-image: $(VM_IMAGE)
+
+vm-qcow2: $(VM_IMAGE)
+	$(QEMU_IMG) convert -f raw -O qcow2 $(VM_IMAGE) $(VM_QCOW2_IMAGE)
 
 run: iso disk
 	QEMU="$(QEMU)" QEMU_FLAGS="$(QEMU_FLAGS)" QEMU_DISPLAY="$(QEMU_DISPLAY)" QEMU_KEYMAP="$(QEMU_KEYMAP)" QEMU_WINDOW_BOUNDS="$(QEMU_WINDOW_BOUNDS)" QEMU_WINDOW_TITLE="$(QEMU_WINDOW_TITLE)" ISO_IMAGE="$(ISO_IMAGE)" DISK_IMAGE="$(DISK_IMAGE)" scripts/run_qemu_display.sh

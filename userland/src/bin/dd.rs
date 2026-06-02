@@ -143,11 +143,7 @@ fn open_input(path: Option<&[u8]>) -> Option<i32> {
     };
     let path = cstr(path);
     let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
-    if fd < 0 {
-        None
-    } else {
-        Some(fd as i32)
-    }
+    if fd < 0 { None } else { Some(fd as i32) }
 }
 
 fn open_output(path: Option<&[u8]>, notrunc: bool) -> Option<i32> {
@@ -157,11 +153,7 @@ fn open_output(path: Option<&[u8]>, notrunc: bool) -> Option<i32> {
     let path = cstr(path);
     let flags = O_WRONLY | O_CREAT | if notrunc { 0 } else { O_TRUNC };
     let fd = sys::open(path.as_ptr(), flags, 0o644);
-    if fd < 0 {
-        None
-    } else {
-        Some(fd as i32)
-    }
+    if fd < 0 { None } else { Some(fd as i32) }
 }
 
 fn copy_blocks(input: i32, output: i32, block_size: usize, count: Option<usize>) -> i32 {

@@ -173,8 +173,7 @@ fn expand_vars_depth(
                     let name = &input[index + 2..index + 2 + end];
                     if depth < 8 {
                         if let Some(value) = lookup_var(vars, name) {
-                            let expanded =
-                                expand_vars_depth(value, vars, target, deps, depth + 1);
+                            let expanded = expand_vars_depth(value, vars, target, deps, depth + 1);
                             out.extend_from_slice(&expanded);
                         }
                     }
@@ -459,11 +458,7 @@ fn run_command(
         let _ = write_all(1, b"\n");
     }
     let status = run_shell(command, vars);
-    if ignore {
-        0
-    } else {
-        status
-    }
+    if ignore { 0 } else { status }
 }
 
 fn contains_name(names: &[Vec<u8>], name: &[u8]) -> bool {
@@ -614,7 +609,10 @@ fn load_makefile(path: Option<&[u8]>) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 fn usage() {
-    let _ = write_all(2, b"usage: make [-s] [-C dir] [-f file] [VAR=value] [target...]\n");
+    let _ = write_all(
+        2,
+        b"usage: make [-s] [-C dir] [-f file] [VAR=value] [target...]\n",
+    );
 }
 
 fn main(args: &[&[u8]]) -> i32 {

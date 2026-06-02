@@ -449,8 +449,57 @@ pub fn sector_count() -> u64 {
     BLOCK_DRIVER
         .lock()
         .as_ref()
-        .map(|d| d.sector_count)
+        .map(VirtioBlockDriver::sector_count)
         .unwrap_or(0)
+}
+
+pub fn read_bytes(offset: u64, output: &mut [u8]) -> Result<usize, BlockError> {
+    if output.is_empty() {
+        return Ok(0);
+    }
+    let disk_bytes = sector_count().saturating_mul(512);
+    if offset >= disk_bytes {
+        return Ok(0);
+    }
+    let count = output.len().min((disk_bytes - offset) as usize);
+    let mut done = 0usize;
+    while done < count {
+        let absolute = offset + done as u64;
+        let sector = absolute / 512;
+        let sector_offset = (absolute % 512) as usize;
+        let chunk = (512 - sector_offset).min(count - done);
+        let mut bounce = [0u8; 512];
+        read_sectors(sector, 1, &mut bounce)?;
+        output[done..done + chunk].copy_from_slice(&bounce[sector_offset..sector_offset + chunk]);
+        done += chunk;
+    }
+    Ok(done)
+}
+
+pub fn write_bytes(offset: u64, input: &[u8]) -> Result<usize, BlockError> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+    let disk_bytes = sector_count().saturating_mul(512);
+    if offset >= disk_bytes {
+        return Ok(0);
+    }
+    let count = input.len().min((disk_bytes - offset) as usize);
+    let mut done = 0usize;
+    while done < count {
+        let absolute = offset + done as u64;
+        let sector = absolute / 512;
+        let sector_offset = (absolute % 512) as usize;
+        let chunk = (512 - sector_offset).min(count - done);
+        let mut bounce = [0u8; 512];
+        if sector_offset != 0 || chunk != 512 {
+            read_sectors(sector, 1, &mut bounce)?;
+        }
+        bounce[sector_offset..sector_offset + chunk].copy_from_slice(&input[done..done + chunk]);
+        write_sectors(sector, 1, &bounce)?;
+        done += chunk;
+    }
+    Ok(done)
 }
 
 fn software_read(sector: u64, count: u32, buf: &mut [u8]) -> Result<(), BlockError> {

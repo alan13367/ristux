@@ -78,6 +78,9 @@ file /bin/id ../build/userland/id.elf
 file /bin/install ../build/userland/install.elf
 file /bin/kill ../build/userland/kill.elf
 file /bin/login ../build/userland/login.elf
+file /bin/ristux-install ../build/userland/ristux_install.elf
+file /bin/fdisk ../build/userland/fdisk.elf
+file /bin/mkfs.ext2 ../build/userland/mkfs_ext2.elf
 file /bin/ln ../build/userland/ln.elf
 file /bin/ld ../build/userland/toolchain.elf
 file /bin/loopback_check ../build/userland/loopback_check.elf
@@ -230,6 +233,9 @@ package libc-dev 0.1.0 /lib/crtn.o deps=libc
 package libc-dev 0.1.0 /lib/libc.a deps=libc
 package libc-dev 0.1.0 /lib/ristux.ld deps=libc
 package login 0.1.0 /bin/login
+package ristux-install 0.1.0 /bin/ristux-install
+package fdisk 0.1.0 /bin/fdisk
+package mkfs.ext2 0.1.0 /bin/mkfs.ext2
 package ln 0.1.0 /bin/ln
 package loopback_check 0.1.0 /bin/loopback_check
 package ls 0.1.0 /bin/ls

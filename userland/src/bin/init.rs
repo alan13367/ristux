@@ -6,7 +6,7 @@ extern crate ristux_userland;
 
 use alloc::vec;
 use core::ptr;
-use ristux_userland::sys;
+use ristux_userland::{installer_support as inst, sys};
 
 fn spawn_dropbear() -> isize {
     let pid = sys::fork();
@@ -44,7 +44,40 @@ fn spawn_dropbear() -> isize {
     pid
 }
 
+fn installer_mode() -> bool {
+    let Some(cmdline) = inst::read_file(b"/proc/cmdline") else {
+        return false;
+    };
+    cmdline
+        .split(|byte| byte.is_ascii_whitespace())
+        .any(|part| part == b"ristux.mode=install")
+}
+
+fn run_installer() {
+    let _ = sys::write(1, b"init: installer mode; spawning /bin/ristux-install\n");
+    let pid = sys::fork();
+    if pid < 0 {
+        let _ = sys::write(2, b"init: installer fork failed\n");
+        return;
+    }
+    if pid == 0 {
+        let path = b"/bin/ristux-install\0";
+        let argv: [*const u8; 2] = [path.as_ptr(), ptr::null()];
+        let envp: [*const u8; 1] = [ptr::null()];
+        let _ = sys::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
+        let _ = sys::write(2, b"init: execve /bin/ristux-install failed\n");
+        sys::exit(127);
+    }
+    let mut status: i32 = 0;
+    let _ = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    let _ = sys::write(1, b"init: installer exited; spawning /bin/login\n");
+}
+
 fn main(_args: &[&[u8]]) -> i32 {
+    if installer_mode() {
+        run_installer();
+    }
+
     let mut dropbear_pid = spawn_dropbear();
     let _ = sys::write(1, b"init: spawning /bin/login\n");
 

@@ -41,11 +41,7 @@ fn is_leap(year: i32) -> bool {
 }
 
 fn days_in_year(year: i32) -> i64 {
-    if is_leap(year) {
-        366
-    } else {
-        365
-    }
+    if is_leap(year) { 366 } else { 365 }
 }
 
 fn days_in_month(year: i32, month: u8) -> i64 {
@@ -249,11 +245,7 @@ fn push_format(out: &mut Vec<u8>, dt: &DateTime, format: &[u8]) {
 
 fn now() -> Option<i64> {
     let rc = unsafe { sys::syscall1(NR_TIME, 0) };
-    if rc < 0 {
-        None
-    } else {
-        Some(rc as i64)
-    }
+    if rc < 0 { None } else { Some(rc as i64) }
 }
 
 fn main(args: &[&[u8]]) -> i32 {
@@ -295,11 +287,7 @@ fn main(args: &[&[u8]]) -> i32 {
         push_default(&mut out, &dt);
     }
     out.push(b'\n');
-    if write_all(1, &out) {
-        0
-    } else {
-        1
-    }
+    if write_all(1, &out) { 0 } else { 1 }
 }
 
 ristux_userland::program_main!(main);

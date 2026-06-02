@@ -48,7 +48,9 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    haystack.windows(needle.len()).any(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn parse_addressed_command(bytes: &[u8], command: u8) -> Option<Option<&[u8]>> {
@@ -122,11 +124,7 @@ fn substitute_line(line: &[u8], pattern: &[u8], replacement: &[u8], global: bool
             index += 1;
         }
     }
-    if replaced {
-        out
-    } else {
-        line.to_vec()
-    }
+    if replaced { out } else { line.to_vec() }
 }
 
 fn address_matches(line: &[u8], address: Option<&[u8]>) -> bool {

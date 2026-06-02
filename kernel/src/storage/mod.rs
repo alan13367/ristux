@@ -2,6 +2,7 @@ pub mod ramdisk;
 
 pub fn init() {
     crate::drivers::virtio_blk::init();
+    crate::fs::refresh_block_devices();
     ramdisk::init();
     ramdisk::self_test();
     mount_hybrid_ext2();

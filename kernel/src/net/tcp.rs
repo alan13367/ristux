@@ -22,7 +22,6 @@ pub enum TcpState {
     Closed,
     Listen,
     SynSent,
-    SynReceived,
     Established,
     CloseWait,
     FinWait1,
@@ -127,7 +126,6 @@ impl TcpSocket {
 
 pub struct TcpStack {
     pub sockets: Vec<TcpSocket>,
-    pub syn_queue: Vec<TcpSocket>,
     pub accept_queue: Vec<TcpSocket>,
     pending_outbound: VecDeque<TcpOutbound>,
     retransmits: Vec<TcpRetransmit>,
@@ -137,18 +135,10 @@ impl TcpStack {
     pub fn new() -> Self {
         Self {
             sockets: Vec::new(),
-            syn_queue: Vec::new(),
             accept_queue: Vec::new(),
             pending_outbound: VecDeque::new(),
             retransmits: Vec::new(),
         }
-    }
-
-    pub fn bind(&mut self, local_port: u16) -> usize {
-        let mut socket = TcpSocket::new(local_port);
-        socket.listen();
-        self.sockets.push(socket);
-        self.sockets.len() - 1
     }
 
     pub fn open(&mut self) -> usize {
@@ -411,15 +401,9 @@ impl TcpStack {
         let outbound = match socket.state {
             TcpState::Established => handle_established_like(socket, &packet, TcpState::CloseWait),
             TcpState::CloseWait => handle_established_like(socket, &packet, TcpState::CloseWait),
-            TcpState::FinWait1 => {
-                handle_fin_wait1(socket, &packet)
-            }
-            TcpState::FinWait2 => {
-                handle_fin_wait2(socket, &packet)
-            }
-            TcpState::Closing => {
-                handle_closing(socket, &packet)
-            }
+            TcpState::FinWait1 => handle_fin_wait1(socket, &packet),
+            TcpState::FinWait2 => handle_fin_wait2(socket, &packet),
+            TcpState::Closing => handle_closing(socket, &packet),
             TcpState::TimeWait => {
                 if packet.flags & TCP_FLAG_FIN != 0 {
                     enter_time_wait(socket);
@@ -509,11 +493,6 @@ impl TcpStack {
         TcpStats {
             sockets: self.sockets.len(),
             established: self.sockets.iter().filter(|s| s.established()).count(),
-            listen: self
-                .sockets
-                .iter()
-                .filter(|s| s.state == TcpState::Listen)
-                .count(),
         }
     }
 
@@ -590,7 +569,9 @@ fn handle_established_like(
             let accepted = packet.payload.len().min(socket.recv_window_available());
             if accepted > 0 {
                 socket.ack = packet.seq.wrapping_add(accepted as u32);
-                socket.rx_buffer.extend(packet.payload[..accepted].iter().copied());
+                socket
+                    .rx_buffer
+                    .extend(packet.payload[..accepted].iter().copied());
             }
         }
         ack_needed = true;
@@ -662,7 +643,9 @@ fn accept_in_order_payload(socket: &mut TcpSocket, packet: &TcpPacket) -> bool {
         let accepted = packet.payload.len().min(socket.recv_window_available());
         if accepted > 0 {
             socket.ack = packet.seq.wrapping_add(accepted as u32);
-            socket.rx_buffer.extend(packet.payload[..accepted].iter().copied());
+            socket
+                .rx_buffer
+                .extend(packet.payload[..accepted].iter().copied());
         }
     }
     true
@@ -756,7 +739,6 @@ fn tcp_sequence_span(flags: u8, payload_len: usize) -> u32 {
 pub struct TcpStats {
     pub sockets: usize,
     pub established: usize,
-    pub listen: usize,
 }
 
 pub fn build_tcp_segment(socket: &TcpSocket, flags: u8, payload: &[u8]) -> Vec<u8> {
@@ -838,10 +820,6 @@ fn add_words(sum: &mut u32, bytes: &[u8]) {
     }
 }
 
-pub fn pseudo_header_checksum(src: Ipv4Addr, dst: Ipv4Addr, _tcp_len: u16, segment: &[u8]) -> u16 {
-    checksum(src, dst, segment)
-}
-
 pub fn self_test() {
     let mut stack = TcpStack::new();
     let socket = stack.open();
@@ -903,7 +881,9 @@ pub fn self_test() {
     let mut drained = 0usize;
     let mut drain = [0u8; 128];
     while drained < TCP_RECV_WINDOW as usize {
-        let read = stack.recv(socket, &mut drain).expect("tcp window drain failed");
+        let read = stack
+            .recv(socket, &mut drain)
+            .expect("tcp window drain failed");
         if read == 0 {
             break;
         }
@@ -968,9 +948,8 @@ pub fn self_test() {
         panic!("tcp close did not enter TIME_WAIT");
     }
     let _ = close_stack.pop_outbound().expect("tcp FIN ACK missing");
-    close_stack.poll_retransmit(
-        crate::time::monotonic_ticks().saturating_add(TCP_TIME_WAIT_TICKS + 1),
-    );
+    close_stack
+        .poll_retransmit(crate::time::monotonic_ticks().saturating_add(TCP_TIME_WAIT_TICKS + 1));
     if close_stack.sockets[active].state != TcpState::Closed {
         panic!("tcp TIME_WAIT did not expire");
     }
@@ -1030,9 +1009,7 @@ pub fn self_test() {
         socket.ack = 4001;
     }
     close_stack.close(passive).expect("tcp passive close");
-    let _ = close_stack
-        .pop_outbound()
-        .expect("tcp passive FIN missing");
+    let _ = close_stack.pop_outbound().expect("tcp passive FIN missing");
     close_stack.handle_packet(TcpPacket {
         src_ip: Ipv4Addr([10, 0, 2, 4]),
         dst_ip: Ipv4Addr([10, 0, 2, 15]),

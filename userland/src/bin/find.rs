@@ -288,7 +288,10 @@ fn walk(path: &[u8], depth: usize, kind: FileType, expr: &Expr) -> i32 {
 }
 
 fn usage() {
-    let _ = write_all(2, b"usage: find [PATH...] [-name PATTERN] [-type f|d|l] [-maxdepth N] [-print]\n");
+    let _ = write_all(
+        2,
+        b"usage: find [PATH...] [-name PATTERN] [-type f|d|l] [-maxdepth N] [-print]\n",
+    );
 }
 
 fn main(args: &[&[u8]]) -> i32 {

@@ -31,10 +31,37 @@ fn main() {
     let output = PathBuf::from(&args[1]);
     let manifest_path = PathBuf::from(&args[2]);
     let manifest_dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let manifest = fs::read_to_string(&manifest_path).expect("read rootfs manifest");
     let mut files = Vec::new();
     let mut packages = Vec::new();
 
+    process_manifest(&manifest_path, manifest_dir, &mut files, &mut packages);
+
+    let package_index = package_index(&packages, &files).into_bytes();
+    insert_file(&mut files, PACKAGE_INDEX.to_owned(), package_index);
+    insert_package_metadata(&mut files, &packages);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut archive = Vec::new();
+    archive.extend_from_slice(MAGIC);
+    archive.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    archive.extend_from_slice(&0u32.to_le_bytes());
+    for file in &files {
+        append_file(&mut archive, &file.path, &file.data);
+    }
+
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).expect("create rootfs output directory");
+    }
+    fs::write(output, archive).expect("write rootfs image");
+}
+
+fn process_manifest(
+    manifest_path: &Path,
+    manifest_dir: &Path,
+    files: &mut Vec<FileEntry>,
+    packages: &mut Vec<PackageEntry>,
+) {
+    let manifest = fs::read_to_string(manifest_path).expect("read rootfs manifest");
     for (line_index, line) in manifest.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -43,10 +70,15 @@ fn main() {
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
+            ["include", include_path] => {
+                let include_path = manifest_dir.join(include_path);
+                let include_dir = include_path.parent().unwrap_or(Path::new("."));
+                process_manifest(&include_path, include_dir, files, packages);
+            }
             ["file", path, source] => {
                 let source = manifest_dir.join(source);
                 insert_file(
-                    &mut files,
+                    files,
                     (*path).to_owned(),
                     fs::read(&source).unwrap_or_else(|err| {
                         panic!("read rootfs source {}: {}", source.display(), err)
@@ -69,7 +101,7 @@ fn main() {
                 for file in package_archive::extract_package_archive(&source, prefix) {
                     let path = file.path;
                     let data = file.data;
-                    insert_file(&mut files, path.clone(), data);
+                    insert_file(files, path.clone(), data);
                     packages.push(PackageEntry {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
@@ -85,7 +117,7 @@ fn main() {
                 for file in collect_tree_files(&source, prefix) {
                     let path = file.path;
                     let data = file.data;
-                    insert_file(&mut files, path.clone(), data);
+                    insert_file(files, path.clone(), data);
                     packages.push(PackageEntry {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
@@ -98,24 +130,6 @@ fn main() {
             _ => panic!("invalid rootfs manifest line {}: {}", line_index + 1, line),
         }
     }
-
-    let package_index = package_index(&packages, &files).into_bytes();
-    insert_file(&mut files, PACKAGE_INDEX.to_owned(), package_index);
-    insert_package_metadata(&mut files, &packages);
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let mut archive = Vec::new();
-    archive.extend_from_slice(MAGIC);
-    archive.extend_from_slice(&(files.len() as u32).to_le_bytes());
-    archive.extend_from_slice(&0u32.to_le_bytes());
-    for file in &files {
-        append_file(&mut archive, &file.path, &file.data);
-    }
-
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).expect("create rootfs output directory");
-    }
-    fs::write(output, archive).expect("write rootfs image");
 }
 
 fn parse_package_options(options: &[&str]) -> (Vec<String>, String) {

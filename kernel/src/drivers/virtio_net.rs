@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::{
     ptr,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{Ordering, compiler_fence},
 };
 
 use super::{pci, virtio_mmio};
@@ -845,7 +845,9 @@ unsafe fn write_ethernet_frame(frame: &EthernetFrame, out: *mut u8, frame_len: u
 }
 
 fn rx_buffer_ptr(index: usize) -> *mut u8 {
-    unsafe { (core::ptr::addr_of_mut!(LEGACY_RX_BUFFERS) as *mut u8).add(index * NET_FRAME_BUFFER_SIZE) }
+    unsafe {
+        (core::ptr::addr_of_mut!(LEGACY_RX_BUFFERS) as *mut u8).add(index * NET_FRAME_BUFFER_SIZE)
+    }
 }
 
 fn tx_header_ptr() -> *mut u8 {

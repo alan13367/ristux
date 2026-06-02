@@ -135,11 +135,7 @@ impl SocketTable {
             }
             (SocketDomain::Inet, SocketType::RawIcmp) => {
                 let icmp = super::icmp_socket_open()?;
-                Some(self.insert_entry(SocketEntry::new(
-                    domain,
-                    kind,
-                    SocketBackend::Icmp(icmp),
-                )))
+                Some(self.insert_entry(SocketEntry::new(domain, kind, SocketBackend::Icmp(icmp))))
             }
         }
     }
@@ -601,15 +597,12 @@ impl SocketTable {
     }
 
     fn bound_port_in_use(&self, handle: usize, kind: SocketType, local_port: u16) -> bool {
-        self.sockets
-            .iter()
-            .enumerate()
-            .any(|(index, entry)| {
-                index != handle
-                    && entry.kind == kind
-                    && entry.ref_count > 0
-                    && self.backend_local_port(entry.backend) == Some(local_port)
-            })
+        self.sockets.iter().enumerate().any(|(index, entry)| {
+            index != handle
+                && entry.kind == kind
+                && entry.ref_count > 0
+                && self.backend_local_port(entry.backend) == Some(local_port)
+        })
     }
 
     fn backend_local_port(&self, backend: SocketBackend) -> Option<u16> {

@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-extern crate ristux_userland;
 extern crate alloc;
+extern crate ristux_userland;
 
 use ristux_userland::sys;
 
@@ -96,7 +96,10 @@ fn signal_by_name(name: &[u8]) -> Option<u8> {
 }
 
 fn usage() {
-    let _ = write_all(2, b"usage: kill [-SIGNAL | -s SIGNAL] PID...\n       kill -l\n");
+    let _ = write_all(
+        2,
+        b"usage: kill [-SIGNAL | -s SIGNAL] PID...\n       kill -l\n",
+    );
 }
 
 fn parse_options(args: &[&[u8]]) -> Option<Options> {
@@ -139,10 +142,7 @@ fn parse_options(args: &[&[u8]]) -> Option<Options> {
 }
 
 fn print_signal_list() -> i32 {
-    let _ = write_all(
-        1,
-        b"HUP INT QUIT KILL USR1 TERM CHLD CONT TSTP\n",
-    );
+    let _ = write_all(1, b"HUP INT QUIT KILL USR1 TERM CHLD CONT TSTP\n");
     0
 }
 

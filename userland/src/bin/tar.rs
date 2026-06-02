@@ -128,11 +128,7 @@ fn parse_octal(field: &[u8]) -> Option<usize> {
         saw_digit = true;
         value = value.checked_mul(8)?.checked_add((byte - b'0') as usize)?;
     }
-    if saw_digit {
-        Some(value)
-    } else {
-        Some(0)
-    }
+    if saw_digit { Some(value) } else { Some(0) }
 }
 
 fn archive_name(path: &[u8]) -> &[u8] {

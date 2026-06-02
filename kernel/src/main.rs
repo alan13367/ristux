@@ -11,6 +11,7 @@ global_asm!(include_str!("../boot/multiboot2_header.asm"));
 global_asm!(include_str!("../boot/boot.asm"));
 
 mod arch;
+mod boot_config;
 mod config;
 mod drivers;
 mod dynamic_linker;
@@ -60,6 +61,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info_addr: u32) ->
             .unwrap_or_else(|message| panic!("{}", message))
     };
     boot_info.print_summary();
+    boot_config::init(boot_info.command_line());
     tty::configure_keyboard_layout(boot_info.command_line());
     memory::init(&boot_info);
     time::init();

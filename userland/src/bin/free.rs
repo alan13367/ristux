@@ -109,11 +109,7 @@ fn parse_meminfo(bytes: &[u8]) -> Option<MemInfo> {
             info.heap_free = value;
         }
     });
-    if info.total_kb > 0 {
-        Some(info)
-    } else {
-        None
-    }
+    if info.total_kb > 0 { Some(info) } else { None }
 }
 
 fn push_u64(out: &mut Vec<u8>, mut value: u64) {
@@ -172,11 +168,7 @@ fn main(args: &[&[u8]]) -> i32 {
     push_padded(&mut out, info.heap_used, 12);
     push_padded(&mut out, info.heap_free, 12);
     out.push(b'\n');
-    if write_all(1, &out) {
-        0
-    } else {
-        1
-    }
+    if write_all(1, &out) { 0 } else { 1 }
 }
 
 ristux_userland::program_main!(main);

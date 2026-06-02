@@ -5,6 +5,7 @@ use crate::{arch::x86_64::port, sync::spinlock::SpinLock};
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 const BUFFER_CELLS: usize = BUFFER_HEIGHT * BUFFER_WIDTH;
+const TEXT_HEIGHT: usize = BUFFER_HEIGHT - 1;
 const VGA_BUFFER: *mut VgaChar = 0xb8000 as *mut VgaChar;
 const VGA_CRTC_INDEX: u16 = 0x3d4;
 const VGA_CRTC_DATA: u16 = 0x3d5;
@@ -157,7 +158,7 @@ impl VgaWriter {
 
     fn new_line(&mut self) {
         self.column = 0;
-        if self.row + 1 >= BUFFER_HEIGHT {
+        if self.row + 1 >= TEXT_HEIGHT {
             self.scroll();
         } else {
             self.row += 1;
@@ -165,13 +166,14 @@ impl VgaWriter {
     }
 
     fn scroll(&mut self) {
-        for row in 1..BUFFER_HEIGHT {
+        for row in 1..TEXT_HEIGHT {
             for column in 0..BUFFER_WIDTH {
                 let ch = self.read_at(row, column);
                 self.write_char_at(row - 1, column, ch);
             }
         }
 
+        self.clear_row(TEXT_HEIGHT - 1);
         self.clear_row(BUFFER_HEIGHT - 1);
     }
 
@@ -320,7 +322,7 @@ impl VgaWriter {
     }
 
     fn set_cursor(&mut self, row: usize, column: usize) {
-        self.row = row.saturating_sub(1).min(BUFFER_HEIGHT - 1);
+        self.row = row.saturating_sub(1).min(TEXT_HEIGHT - 1);
         self.column = column.saturating_sub(1).min(BUFFER_WIDTH - 1);
     }
 
@@ -333,7 +335,7 @@ impl VgaWriter {
     }
 
     fn cursor_down(&mut self, count: usize) {
-        self.row = (self.row + count).min(BUFFER_HEIGHT - 1);
+        self.row = (self.row + count).min(TEXT_HEIGHT - 1);
     }
 
     fn cursor_forward(&mut self, count: usize) {
@@ -350,9 +352,10 @@ impl VgaWriter {
                 for column in self.column..BUFFER_WIDTH {
                     self.write_at(self.row, column, b' ');
                 }
-                for row in self.row + 1..BUFFER_HEIGHT {
+                for row in self.row + 1..TEXT_HEIGHT {
                     self.clear_row(row);
                 }
+                self.clear_row(BUFFER_HEIGHT - 1);
             }
             1 => {
                 for row in 0..self.row {
@@ -424,7 +427,7 @@ impl VgaWriter {
     }
 
     fn restore_cursor(&mut self) {
-        self.row = self.saved_row.min(BUFFER_HEIGHT - 1);
+        self.row = self.saved_row.min(TEXT_HEIGHT - 1);
         self.column = self.saved_column.min(BUFFER_WIDTH - 1);
     }
 
@@ -466,7 +469,7 @@ impl VgaWriter {
         for index in 0..BUFFER_CELLS {
             self.write_index(index, self.alternate_screen[index]);
         }
-        self.row = self.alternate_saved_row.min(BUFFER_HEIGHT - 1);
+        self.row = self.alternate_saved_row.min(TEXT_HEIGHT - 1);
         self.column = self.alternate_saved_column.min(BUFFER_WIDTH - 1);
         self.alternate_active = false;
         self.state = EscapeState::Ground;
@@ -524,6 +527,12 @@ pub fn self_test() -> bool {
     let clear_ok = writer.row == 0 && writer.column == 0 && writer.read_at(1, 3).ascii == b' ';
     let _ = writer.write_str("p\x1b[?1049hALT\x1b[?1049l");
     let alternate_ok = !writer.alternate_active && writer.read_at(0, 0).ascii == b'p';
+    writer.reset_terminal();
+    for _ in 0..(BUFFER_HEIGHT + 2) {
+        let _ = writer.write_str("$\n");
+    }
+    let bottom_margin_ok =
+        writer.row == TEXT_HEIGHT - 1 && writer.read_at(BUFFER_HEIGHT - 1, 0).ascii == b' ';
 
     for index in 0..BUFFER_CELLS {
         writer.write_index(index, saved_shadow_screen[index]);
@@ -540,11 +549,11 @@ pub fn self_test() -> bool {
     writer.screen = saved_shadow_screen;
     writer.alternate_screen = saved_alternate_screen;
 
-    let ok = cursor_move_ok && color_ok && clear_ok && alternate_ok;
+    let ok = cursor_move_ok && color_ok && clear_ok && alternate_ok && bottom_margin_ok;
     if !ok {
         let _ = crate::drivers::serial::write_fmt(format_args!(
-            "VGA ANSI self-test detail: cursor={} color={} clear={} alternate={}\n",
-            cursor_move_ok, color_ok, clear_ok, alternate_ok
+            "VGA ANSI self-test detail: cursor={} color={} clear={} alternate={} bottom_margin={}\n",
+            cursor_move_ok, color_ok, clear_ok, alternate_ok, bottom_margin_ok
         ));
     }
     ok

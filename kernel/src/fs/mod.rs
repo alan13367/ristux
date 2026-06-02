@@ -144,6 +144,14 @@ pub fn mount_hybrid_ext2() {
     vfs::mount_hybrid_ext2();
 }
 
+pub fn refresh_block_devices() {
+    vfs::refresh_block_devices();
+}
+
+pub fn block_device_size(fd: usize) -> Option<u64> {
+    vfs::block_device_size(fd)
+}
+
 pub fn stat(path: &str) -> Result<Stat, vfs::VfsError> {
     vfs::stat(path)
 }

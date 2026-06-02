@@ -4,6 +4,7 @@
 extern crate alloc;
 
 pub mod alloc_impl;
+pub mod installer_support;
 pub mod io;
 pub mod prelude;
 pub mod sys;

@@ -17,7 +17,7 @@ extern "C" fn handle_sigint(signum: usize, frame: usize) -> ! {
 }
 
 fn main(_args: &[&[u8]]) -> i32 {
-    if sys::rt_sigaction(2, handle_sigint as usize) < 0 {
+    if sys::rt_sigaction(2, handle_sigint as *const () as usize) < 0 {
         let _ = sys::write(2, b"sig_demo: sigaction failed\n");
         return 1;
     }

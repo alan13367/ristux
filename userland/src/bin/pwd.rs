@@ -45,7 +45,10 @@ fn current_dir() -> Option<Vec<u8>> {
         buf.resize(size, 0);
         let rc = sys::getcwd(buf.as_mut_ptr(), buf.len());
         if rc >= 0 {
-            let len = buf.iter().position(|byte| *byte == 0).unwrap_or(rc as usize);
+            let len = buf
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(rc as usize);
             buf.truncate(len);
             return Some(buf);
         }

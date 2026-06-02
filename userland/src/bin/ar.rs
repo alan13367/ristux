@@ -120,11 +120,7 @@ fn member_name(header: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn safe_name(name: &[u8]) -> bool {
-    !name.is_empty()
-        && name != b"."
-        && name != b".."
-        && !name.contains(&b'/')
-        && !name.contains(&0)
+    !name.is_empty() && name != b"." && name != b".." && !name.contains(&b'/') && !name.contains(&0)
 }
 
 fn basename(path: &[u8]) -> &[u8] {
@@ -331,7 +327,10 @@ fn parse_command(flags: &[u8]) -> Option<Command> {
 
 fn main(args: &[&[u8]]) -> i32 {
     if args.len() < 3 {
-        let _ = sys::write(2, b"usage: ar rcs ARCHIVE FILE... | ar t ARCHIVE | ar x ARCHIVE\n");
+        let _ = sys::write(
+            2,
+            b"usage: ar rcs ARCHIVE FILE... | ar t ARCHIVE | ar x ARCHIVE\n",
+        );
         return 2;
     }
     let Some(command) = parse_command(args[1]) else {

@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
+        address_space::{USER_MMAP_END, USER_MMAP_START, UserProtection},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -115,6 +115,7 @@ pub const NR_utime: u64 = 132;
 pub const NR_statfs: u64 = 137;
 pub const NR_fstatfs: u64 = 138;
 pub const NR_setrlimit: u64 = 160;
+pub const NR_mount: u64 = 165;
 pub const NR_sethostname: u64 = 170;
 pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
@@ -358,6 +359,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_lstat => linux_lstat(a0 as usize, a1 as usize),
         NR_statfs => linux_statfs(a0 as usize, a1 as usize),
         NR_fstatfs => linux_fstatfs(a0 as usize, a1 as usize),
+        NR_mount => linux_mount(a0 as usize, a1 as usize, a2 as usize),
         NR_kill => linux_kill(a0 as i64, a1 as u8),
         NR_getuid => Ok(process::current_uid() as u64),
         NR_geteuid => Ok(process::current_euid() as u64),
@@ -585,7 +587,7 @@ fn linux_write(
                         Ok(total as u64)
                     } else {
                         Err(EBADF)
-                    }
+                    };
                 }
             }
         }
@@ -2734,6 +2736,9 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const TIOCSWINSZ: u64 = 0x5414;
     const TIOCGPTN: u64 = 0x8004_5430;
     const TIOCSPTLCK: u64 = 0x4004_5431;
+    const BLKRRPART: u64 = 0x125f;
+    const BLKSSZGET: u64 = 0x1268;
+    const BLKGETSIZE64: u64 = 0x8008_1272;
 
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let is_tty = fs::is_tty_fd(vfs_fd);
@@ -2752,6 +2757,22 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             let input = process::read_user(argp, 4).ok_or(EFAULT)?;
             let locked = u32::from_le_bytes([input[0], input[1], input[2], input[3]]) != 0;
             fs::set_pty_locked(vfs_fd, locked).map_err(|_| ENOTTY)?;
+            Ok(0)
+        }
+        BLKRRPART => {
+            fs::refresh_block_devices();
+            Ok(0)
+        }
+        BLKSSZGET => {
+            fs::block_device_size(vfs_fd).ok_or(ENOTTY)?;
+            let out = process::write_user_buffer(argp, 4).ok_or(EFAULT)?;
+            out.copy_from_slice(&512u32.to_le_bytes());
+            Ok(0)
+        }
+        BLKGETSIZE64 => {
+            let bytes = fs::block_device_size(vfs_fd).ok_or(ENOTTY)?;
+            let out = process::write_user_buffer(argp, 8).ok_or(EFAULT)?;
+            out.copy_from_slice(&bytes.to_le_bytes());
             Ok(0)
         }
         TIOCSCTTY => {
@@ -3042,6 +3063,21 @@ fn write_linux_statfs(buf_ptr: usize, stats: fs::FsStat) -> Result<u64, i64> {
     Ok(0)
 }
 
+fn linux_mount(source_ptr: usize, target_ptr: usize, fstype_ptr: usize) -> Result<u64, i64> {
+    if process::current_euid() != 0 {
+        return Err(EPERM);
+    }
+    let source = read_user_cstr(source_ptr).ok_or(EFAULT)?;
+    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
+    let fstype = read_user_cstr(fstype_ptr).ok_or(EFAULT)?;
+    if target != "/" || fstype != "ext2" {
+        return Err(EINVAL);
+    }
+    fs::mount(&source, &target, &fstype)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
 fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     if sig == 0 {
         let exists = if pid < 0 {
@@ -3065,11 +3101,7 @@ fn linux_kill(pid: i64, sig: u8) -> Result<u64, i64> {
     } else {
         crate::signal::send(pid as u64, signal)
     };
-    if delivered {
-        Ok(0)
-    } else {
-        Err(ESRCH)
-    }
+    if delivered { Ok(0) } else { Err(ESRCH) }
 }
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {

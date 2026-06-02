@@ -35,22 +35,8 @@ const SERIAL_LOG_PATH: &[u8] = b"/dev/serial";
 const HISTORY_LIMIT: usize = 64;
 
 const BUILTIN_NAMES: [&[u8]; 16] = [
-    b"exit",
-    b"cd",
-    b".",
-    b"source",
-    b"return",
-    b"unset",
-    b"export",
-    b"read",
-    b"shift",
-    b"set",
-    b"jobs",
-    b"fg",
-    b"bg",
-    b"command",
-    b":",
-    b"type",
+    b"exit", b"cd", b".", b"source", b"return", b"unset", b"export", b"read", b"shift", b"set",
+    b"jobs", b"fg", b"bg", b"command", b":", b"type",
 ];
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -198,11 +184,7 @@ impl ShellEnv {
     }
 
     fn unset(&mut self, name: &[u8]) {
-        if let Some(index) = self
-            .vars
-            .iter()
-            .position(|var| var.name.as_slice() == name)
-        {
+        if let Some(index) = self.vars.iter().position(|var| var.name.as_slice() == name) {
             self.vars.remove(index);
         }
     }
@@ -278,13 +260,13 @@ impl ShellEnv {
 fn env_entries_from_vars(vars: &[EnvVar]) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(vars.len());
     for var in vars {
-            let mut entry = Vec::with_capacity(var.name.len() + var.value.len() + 2);
-            entry.extend_from_slice(&var.name);
-            entry.push(b'=');
-            entry.extend_from_slice(&var.value);
-            entry.push(0);
-            out.push(entry);
-        }
+        let mut entry = Vec::with_capacity(var.name.len() + var.value.len() + 2);
+        entry.extend_from_slice(&var.name);
+        entry.push(b'=');
+        entry.extend_from_slice(&var.value);
+        entry.push(0);
+        out.push(entry);
+    }
     out
 }
 
@@ -448,7 +430,9 @@ fn parse_status(bytes: &[u8]) -> Option<i32> {
         if !byte.is_ascii_digit() {
             return None;
         }
-        value = value.saturating_mul(10).saturating_add((byte - b'0') as i32);
+        value = value
+            .saturating_mul(10)
+            .saturating_add((byte - b'0') as i32);
     }
     Some(value & 0xff)
 }
@@ -908,7 +892,13 @@ fn run_command_substitution(command: &[u8], env: &ShellEnv, last_status: i32) ->
         sub_env.stdin_pending.clear();
         let mut jobs = Vec::new();
         let mut next_job_id = 1usize;
-        let status = run_line(&command, &mut jobs, &mut next_job_id, &mut sub_env, last_status);
+        let status = run_line(
+            &command,
+            &mut jobs,
+            &mut next_job_id,
+            &mut sub_env,
+            last_status,
+        );
         sys::exit(status);
     }
     sys::close(fds[1]);
@@ -1133,7 +1123,10 @@ fn split_parameter_operator(body: &[u8]) -> (&[u8], Option<(u8, bool, &[u8])>) {
                 return (&body[..index], Some((op, true, &body[index + 2..])));
             }
         } else if body[index] == b'-' || body[index] == b'+' {
-            return (&body[..index], Some((body[index], false, &body[index + 1..])));
+            return (
+                &body[..index],
+                Some((body[index], false, &body[index + 1..])),
+            );
         }
         index += 1;
     }
@@ -1148,7 +1141,8 @@ fn expand_inline_bytes(bytes: &[u8], env: &ShellEnv, last_status: i32) -> Vec<u8
             b'$' => push_var_expansion(&mut out, bytes, &mut index, env, last_status),
             b'`' => {
                 if let Some(end) = find_backtick_end(bytes, index + 1) {
-                    let expanded = run_command_substitution(&bytes[index + 1..end], env, last_status);
+                    let expanded =
+                        run_command_substitution(&bytes[index + 1..end], env, last_status);
                     out.extend_from_slice(&expanded);
                     index = end;
                 } else {
@@ -1205,8 +1199,7 @@ fn push_var_expansion(
     if next == b'(' {
         if bytes.get(*index + 2) == Some(&b'(') {
             if let Some(end) = find_arithmetic_expansion_end(bytes, *index + 3) {
-                let value =
-                    eval_arithmetic_expression(&bytes[*index + 3..end], env).unwrap_or(0);
+                let value = eval_arithmetic_expression(&bytes[*index + 3..end], env).unwrap_or(0);
                 out.extend_from_slice(value.to_string().as_bytes());
                 *index = end + 1;
             } else {
@@ -1366,8 +1359,7 @@ fn parse_stage(segment: &[u8], env: &mut ShellEnv, last_status: i32) -> (Stage, 
         let mut redir_fd = None;
         let mut redir_op_index = i;
         if let Some(fd) = parse_redirect_fd(tokens[i].bytes.as_slice()) {
-            if i + 1 < tokens.len()
-                && matches!(tokens[i + 1].bytes.as_slice(), b"<" | b">" | b">>")
+            if i + 1 < tokens.len() && matches!(tokens[i + 1].bytes.as_slice(), b"<" | b">" | b">>")
             {
                 redir_fd = Some(fd);
                 redir_op_index = i + 1;
@@ -1540,7 +1532,9 @@ fn external_command_path_with_assignments(
         }
         return None;
     }
-    let path_env = env.assignment_value(assignments, b"PATH").unwrap_or(b"/bin");
+    let path_env = env
+        .assignment_value(assignments, b"PATH")
+        .unwrap_or(b"/bin");
     for dir in path_env.split(|byte| *byte == b':') {
         let mut path = Vec::with_capacity(dir.len() + name.len() + 2);
         append_path_candidate(&mut path, dir, name);
@@ -2463,13 +2457,25 @@ fn builtin_command(
         }
         b"command" => {
             let mut index = 1usize;
-            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-p") {
+            if stage
+                .argv
+                .get(index)
+                .is_some_and(|arg| arg.as_slice() == b"-p")
+            {
                 index += 1;
             }
-            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"--") {
+            if stage
+                .argv
+                .get(index)
+                .is_some_and(|arg| arg.as_slice() == b"--")
+            {
                 index += 1;
             }
-            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-v") {
+            if stage
+                .argv
+                .get(index)
+                .is_some_and(|arg| arg.as_slice() == b"-v")
+            {
                 index += 1;
                 let mut status = 0;
                 for arg in &stage.argv[index..] {
@@ -2504,10 +2510,18 @@ fn builtin_command(
         }
         b"read" => {
             let mut index = 1usize;
-            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"-r") {
+            if stage
+                .argv
+                .get(index)
+                .is_some_and(|arg| arg.as_slice() == b"-r")
+            {
                 index += 1;
             }
-            if stage.argv.get(index).is_some_and(|arg| arg.as_slice() == b"--") {
+            if stage
+                .argv
+                .get(index)
+                .is_some_and(|arg| arg.as_slice() == b"--")
+            {
                 index += 1;
             }
             let names: Vec<Vec<u8>> = if index < stage.argv.len() {
@@ -2859,13 +2873,7 @@ fn run_line(
             ListOp::Or if status == 0 => continue,
             ListOp::And | ListOp::Or => {}
         }
-        status = run_pipeline(
-            trim_ascii(&command.bytes),
-            jobs,
-            next_job_id,
-            env,
-            status,
-        );
+        status = run_pipeline(trim_ascii(&command.bytes), jobs, next_job_id, env, status);
     }
     status
 }
@@ -3025,10 +3033,7 @@ fn parse_for_clause(
     let rest = trim_ascii(&rest[name_end..]);
     let after_in = if rest == b"in" {
         &[][..]
-    } else if rest.starts_with(b"in")
-        && rest
-            .get(2)
-            .is_some_and(|byte| byte.is_ascii_whitespace())
+    } else if rest.starts_with(b"in") && rest.get(2).is_some_and(|byte| byte.is_ascii_whitespace())
     {
         trim_ascii(&rest[2..])
     } else {
@@ -3074,10 +3079,7 @@ fn parse_case_word(line: &[u8], env: &ShellEnv, last_status: i32) -> Option<Vec<
     None
 }
 
-fn find_if_bounds(
-    lines: &[Vec<u8>],
-    body_start: usize,
-) -> Option<(Option<usize>, usize)> {
+fn find_if_bounds(lines: &[Vec<u8>], body_start: usize) -> Option<(Option<usize>, usize)> {
     let mut depth = 0usize;
     let mut else_index = None;
     let mut index = body_start;
@@ -3465,7 +3467,11 @@ fn execute_script_lines(
                         *last_status = 0;
                     }
                 }
-                arm = if arm_end < esac_index { arm_end + 1 } else { arm_end };
+                arm = if arm_end < esac_index {
+                    arm_end + 1
+                } else {
+                    arm_end
+                };
             }
             if !matched {
                 *last_status = 0;
@@ -3635,7 +3641,13 @@ fn main(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         break;
     }
     if let Some(script) = script {
-        if !run_script_file(script, &mut jobs, &mut next_job_id, &mut env, &mut last_status) {
+        if !run_script_file(
+            script,
+            &mut jobs,
+            &mut next_job_id,
+            &mut env,
+            &mut last_status,
+        ) {
             let _ = sys::write(FD_STDERR, b"sh: cannot open script\n");
             return 127;
         }

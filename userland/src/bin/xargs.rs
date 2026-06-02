@@ -37,11 +37,7 @@ fn parse_usize(bytes: &[u8]) -> Option<usize> {
         }
         value = value.checked_mul(10)?.checked_add((byte - b'0') as usize)?;
     }
-    if value == 0 {
-        None
-    } else {
-        Some(value)
-    }
+    if value == 0 { None } else { Some(value) }
 }
 
 fn read_stdin_words() -> Option<Vec<Vec<u8>>> {

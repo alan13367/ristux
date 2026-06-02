@@ -81,11 +81,7 @@ fn parse_i64(bytes: &[u8]) -> Option<i64> {
         value = value.checked_mul(10)?.checked_add((byte - b'0') as i64)?;
         index += 1;
     }
-    if negative {
-        Some(-value)
-    } else {
-        Some(value)
-    }
+    if negative { Some(-value) } else { Some(value) }
 }
 
 fn push_i64(out: &mut Vec<u8>, mut value: i64) {
@@ -186,7 +182,10 @@ impl<'a> Parser<'a> {
             let Some(op) = self.peek() else {
                 break;
             };
-            let is_cmp = matches!(op, b"=" | b"==" | b"!=" | b"<" | b"<=" | b">" | b">=" | b":");
+            let is_cmp = matches!(
+                op,
+                b"=" | b"==" | b"!=" | b"<" | b"<=" | b">" | b">=" | b":"
+            );
             if !is_cmp {
                 break;
             }
@@ -444,7 +443,8 @@ fn match_value(text: &Value, pattern: &Value) -> Value {
                 if suffix_matches.is_empty() {
                     continue;
                 }
-                let total = prefix_len + inner_len + suffix_matches.iter().copied().max().unwrap_or(0);
+                let total =
+                    prefix_len + inner_len + suffix_matches.iter().copied().max().unwrap_or(0);
                 if best.is_none_or(|(best_total, _, _)| total >= best_total) {
                     best = Some((total, prefix_len, prefix_len + inner_len));
                 }
@@ -477,11 +477,7 @@ fn main(args: &[&[u8]]) -> i32 {
     if !write_all(1, &value.bytes) || !write_all(1, b"\n") {
         return 2;
     }
-    if value.truthy() {
-        0
-    } else {
-        1
-    }
+    if value.truthy() { 0 } else { 1 }
 }
 
 ristux_userland::program_main!(main);

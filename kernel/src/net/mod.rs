@@ -390,7 +390,8 @@ impl NetworkStack {
     }
 
     fn handle_tcp(&mut self, packet: Ipv4Packet) {
-        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload) else {
+        let Some(tcp_packet) = tcp::parse_tcp_packet(packet.src, packet.dst, &packet.payload)
+        else {
             return;
         };
         self.tcp_inbox.push(tcp_packet);
@@ -590,11 +591,7 @@ pub(crate) fn icmp_socket_close(socket: IcmpSocketId) -> bool {
     stack.close_icmp(socket)
 }
 
-pub(crate) fn icmp_socket_send(
-    socket: IcmpSocketId,
-    dst_ip: Ipv4Addr,
-    payload: &[u8],
-) -> bool {
+pub(crate) fn icmp_socket_send(socket: IcmpSocketId, dst_ip: Ipv4Addr, payload: &[u8]) -> bool {
     let mut guard = NET_STACK.lock();
     let Some(stack) = guard.as_mut() else {
         return false;

@@ -156,7 +156,13 @@ fn push_hunk_range(out: &mut Vec<u8>, sign: u8, start: usize, len: usize) {
     push_usize(out, len);
 }
 
-fn print_unified(left_path: &[u8], right_path: &[u8], left: &[Vec<u8>], right: &[Vec<u8>], ops: &[Op]) -> bool {
+fn print_unified(
+    left_path: &[u8],
+    right_path: &[u8],
+    left: &[Vec<u8>],
+    right: &[Vec<u8>],
+    ops: &[Op],
+) -> bool {
     let mut out = Vec::new();
     out.extend_from_slice(b"--- ");
     out.extend_from_slice(left_path);
@@ -266,7 +272,11 @@ fn main(args: &[&[u8]]) -> i32 {
         return 0;
     }
     if options.brief {
-        return if print_brief(left_path, right_path) { 1 } else { 2 };
+        return if print_brief(left_path, right_path) {
+            1
+        } else {
+            2
+        };
     }
 
     let left = split_lines(&left_bytes);
@@ -277,11 +287,7 @@ fn main(args: &[&[u8]]) -> i32 {
     } else {
         print_simple(&left, &right, &ops)
     };
-    if ok {
-        1
-    } else {
-        2
-    }
+    if ok { 1 } else { 2 }
 }
 
 ristux_userland::program_main!(main);

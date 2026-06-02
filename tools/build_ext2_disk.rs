@@ -502,8 +502,8 @@ impl Builder {
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 3 {
-        eprintln!("usage: build_ext2_disk <output-disk> <manifest>");
+    if args.len() != 3 && args.len() != 6 {
+        eprintln!("usage: build_ext2_disk <output-disk> <manifest> [kernel initrd grub-cfg]");
         std::process::exit(2);
     }
 
@@ -524,6 +524,8 @@ fn main() {
     builder.ensure_dir("/pkg", 0o755, 0, 0);
     builder.ensure_dir("/proc", 0o755, 0, 0);
     builder.ensure_dir("/initrd", 0o755, 0, 0);
+    builder.ensure_dir("/boot", 0o755, 0, 0);
+    builder.ensure_dir("/boot/grub", 0o755, 0, 0);
 
     let mut init_data = None;
     let mut installed_files = BTreeMap::new();
@@ -622,6 +624,7 @@ fn main() {
         0,
         0,
     );
+    builder.add_file("/etc/hostname", b"ristux\n".to_vec(), 0o644, 0, 0);
     builder.add_file(
         "/etc/profile",
         b"# Ristux system profile\nexport system_profile=profile-system\n".to_vec(),
@@ -643,6 +646,29 @@ fn main() {
         1000,
         1000,
     );
+    if args.len() == 6 {
+        builder.add_file(
+            "/boot/ristux.elf",
+            fs::read(&args[3]).expect("read installed kernel"),
+            0o644,
+            0,
+            0,
+        );
+        builder.add_file(
+            "/boot/initrd.bin",
+            fs::read(&args[4]).expect("read installed initrd"),
+            0o644,
+            0,
+            0,
+        );
+        builder.add_file(
+            "/boot/grub/grub.cfg",
+            fs::read(&args[5]).expect("read installed grub cfg"),
+            0o644,
+            0,
+            0,
+        );
+    }
 
     builder.finish(&output);
 }

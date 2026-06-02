@@ -51,12 +51,9 @@ pub fn init() {
 
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
     let delivered = match signal {
-        Signal::Kill
-        | Signal::Term
-        | Signal::Int
-        | Signal::Usr1
-        | Signal::Tstp
-        | Signal::Quit => process::signal(pid, signal.default_status()),
+        Signal::Kill | Signal::Term | Signal::Int | Signal::Usr1 | Signal::Tstp | Signal::Quit => {
+            process::signal(pid, signal.default_status())
+        }
         Signal::Cont => process::continue_process(pid),
         Signal::Child => {
             if let Some((_, _, parent, _)) = process::get_process_info(pid) {

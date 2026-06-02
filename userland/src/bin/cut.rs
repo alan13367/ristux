@@ -49,11 +49,7 @@ fn parse_usize(bytes: &[u8]) -> Option<usize> {
         }
         value = value.checked_mul(10)?.checked_add((byte - b'0') as usize)?;
     }
-    if value == 0 {
-        None
-    } else {
-        Some(value)
-    }
+    if value == 0 { None } else { Some(value) }
 }
 
 fn parse_ranges(spec: &[u8]) -> Option<Vec<Range>> {
@@ -186,7 +182,10 @@ fn process_file(path: &[u8], mode: &Mode, delimiter: u8, ranges: &[Range]) -> i3
 }
 
 fn usage() {
-    let _ = write_all(2, b"usage: cut -f LIST [-d DELIM] [FILE...]\n       cut -c LIST [FILE...]\n");
+    let _ = write_all(
+        2,
+        b"usage: cut -f LIST [-d DELIM] [FILE...]\n       cut -c LIST [FILE...]\n",
+    );
 }
 
 fn main(args: &[&[u8]]) -> i32 {

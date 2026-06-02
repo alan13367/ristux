@@ -45,11 +45,7 @@ fn dirname(path: &[u8]) -> &[u8] {
     while end > 1 && trimmed[end - 1] == b'/' {
         end -= 1;
     }
-    if end == 0 {
-        b"/"
-    } else {
-        &trimmed[..end]
-    }
+    if end == 0 { b"/" } else { &trimmed[..end] }
 }
 
 fn usage() {

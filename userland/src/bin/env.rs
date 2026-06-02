@@ -52,21 +52,18 @@ fn envp_slice(envp: *const *const u8) -> Vec<Vec<u8>> {
 
 fn var_name_len(entry: &[u8]) -> Option<usize> {
     let eq = entry.iter().position(|byte| *byte == b'=')?;
-    if eq == 0 {
-        None
-    } else {
-        Some(eq)
-    }
+    if eq == 0 { None } else { Some(eq) }
 }
 
 fn set_env(env: &mut Vec<Vec<u8>>, assignment: &[u8]) {
     let Some(name_len) = var_name_len(assignment) else {
         return;
     };
-    if let Some(existing) = env
-        .iter_mut()
-        .find(|entry| entry.len() > name_len && entry[..name_len] == assignment[..name_len] && entry[name_len] == b'=')
-    {
+    if let Some(existing) = env.iter_mut().find(|entry| {
+        entry.len() > name_len
+            && entry[..name_len] == assignment[..name_len]
+            && entry[name_len] == b'='
+    }) {
         existing.clear();
         existing.extend_from_slice(assignment);
         return;

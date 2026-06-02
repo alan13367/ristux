@@ -180,11 +180,7 @@ fn parse_options(args: &[&[u8]]) -> Option<(bool, bool, usize)> {
 }
 
 fn run(delete: bool, squeeze: bool, set1: &[u8], set2: Option<&[u8]>) -> i32 {
-    let delete_set = if delete {
-        mark_set(set1)
-    } else {
-        [false; 256]
-    };
+    let delete_set = if delete { mark_set(set1) } else { [false; 256] };
     let squeeze_source = if delete && squeeze {
         set2.unwrap_or(set1)
     } else if squeeze {

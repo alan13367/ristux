@@ -235,11 +235,7 @@ fn main(args: &[&[u8]]) -> i32 {
     for status in &statuses {
         append_status(&mut out, status);
     }
-    if write_all(1, &out) {
-        0
-    } else {
-        1
-    }
+    if write_all(1, &out) { 0 } else { 1 }
 }
 
 ristux_userland::program_main!(main);

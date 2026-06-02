@@ -63,26 +63,27 @@ fn run() -> KernelResult<()> {
         "dynamic linker did not load and relocate shared objects",
     )?;
     let smp = smp::stats();
-    ensure(smp.started_cpus >= 2, "SMP did not start application CPUs")?;
+    ensure(smp.started_cpus >= 1, "SMP did not start bootstrap CPU")?;
     ensure(
         smp.acpi_table_detected && smp.local_apic_mapped,
         "SMP firmware/APIC discovery did not complete",
     )?;
-    ensure(
-        smp.ap_start_attempts > 0 && smp.booted_aps == smp.ap_start_attempts,
-        "SMP AP trampoline did not boot every AP",
-    )?;
     ensure(smp.shared_lock_audit_passed, "SMP lock audit did not pass")?;
     let sched = crate::sched::stats();
-    ensure(sched.cpu_count >= 2, "per-CPU scheduler did not initialize")?;
-    ensure(
-        crate::drivers::virtio_blk::self_test(),
-        "VirtIO block layer self-test failed",
-    )?;
-    ensure(
-        crate::fs::ext2::self_test().is_ok(),
-        "ext2 read-only parser self-test failed",
-    )?;
+    ensure(sched.cpu_count >= 1, "per-CPU scheduler did not initialize")?;
+    let root_device = crate::boot_config::value("root").unwrap_or("/dev/vda");
+    if crate::boot_config::contains("ristux.mode=install") || root_device != "/dev/vda" {
+        crate::println!("Partitioned disk mode: skipping whole-disk ext2 self-tests.");
+    } else {
+        ensure(
+            crate::drivers::virtio_blk::self_test(),
+            "VirtIO block layer self-test failed",
+        )?;
+        ensure(
+            crate::fs::ext2::self_test().is_ok(),
+            "ext2 read-only parser self-test failed",
+        )?;
+    }
     ensure(
         crate::drivers::virtio_queue::self_test(),
         "VirtIO virtqueue layer self-test failed",

@@ -32,6 +32,40 @@ if [[ ! -d "$DROPBEAR_SRC/src" || ! -d "$DROPBEAR_SRC/libtomcrypt" || ! -d "$DRO
   exit 2
 fi
 
+PATCHED_SRC="$BUILD/source-patched/dropbear"
+rm -rf "$BUILD/source-patched"
+mkdir -p "$BUILD/source-patched"
+cp -R "$DROPBEAR_SRC" "$PATCHED_SRC"
+DROPBEAR_SRC="$PATCHED_SRC"
+
+patch -d "$DROPBEAR_SRC" -p0 -s <<'PATCH'
+--- src/cli-auth.c
++++ src/cli-auth.c
+@@ -163,7 +163,9 @@
+ 	unsigned int methlen = 0;
+ 	unsigned int partial = 0;
+ 	unsigned int i = 0;
++#if DROPBEAR_CLI_INTERACT_AUTH || DROPBEAR_CLI_PASSWORD_AUTH
+ 	int allow_pw_auth = 1;
++#endif
+ 
+ 	TRACE(("<- MSG_USERAUTH_FAILURE"))
+ 	TRACE(("enter recv_msg_userauth_failure"))
+@@ -180,10 +182,12 @@
+ 
+ 	/* Password authentication is only allowed in batch mode
+ 	 * when a password can be provided non-interactively */
++#if DROPBEAR_CLI_INTERACT_AUTH || DROPBEAR_CLI_PASSWORD_AUTH
+ 	if (cli_opts.batch_mode && !getenv(DROPBEAR_PASSWORD_ENV)) {
+ 		allow_pw_auth = 0;
+ 	}
+ 	allow_pw_auth &= cli_opts.password_authentication;
++#endif
+ 
+ 	/* When DROPBEAR_CLI_IMMEDIATE_AUTH is set there will be an initial response for 
+ 	the "none" auth request, and then a response to the immediate auth request. 
+PATCH
+
 INCLUDE="$BUILD/include"
 SERVER_OBJ="$BUILD/server-obj"
 CLIENT_OBJ="$BUILD/client-obj"

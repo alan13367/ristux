@@ -552,11 +552,7 @@ fn parse_rules(script: &[u8]) -> Option<Vec<Rule<'_>>> {
         index = close + 1;
     }
 
-    if rules.is_empty() {
-        None
-    } else {
-        Some(rules)
-    }
+    if rules.is_empty() { None } else { Some(rules) }
 }
 
 fn split_fields_whitespace(line: &[u8]) -> Vec<&[u8]> {
@@ -744,11 +740,7 @@ fn run_action(action: &Action, record: &Record) -> i32 {
                     return 1;
                 }
             }
-            if write_all(1, b"\n") {
-                0
-            } else {
-                1
-            }
+            if write_all(1, b"\n") { 0 } else { 1 }
         }
     }
 }
@@ -864,11 +856,7 @@ fn main(args: &[&[u8]]) -> i32 {
     }
 
     let end_rc = run_special(&rules, false, nr);
-    if end_rc != 0 {
-        end_rc
-    } else {
-        rc
-    }
+    if end_rc != 0 { end_rc } else { rc }
 }
 
 ristux_userland::program_main!(main);

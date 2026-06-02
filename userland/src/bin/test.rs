@@ -91,11 +91,7 @@ fn parse_int(bytes: &[u8]) -> Option<i64> {
         value = value.checked_mul(10)?.checked_add((byte - b'0') as i64)?;
         index += 1;
     }
-    if negative {
-        Some(-value)
-    } else {
-        Some(value)
-    }
+    if negative { Some(-value) } else { Some(value) }
 }
 
 fn eval_unary(op: &[u8], value: &[u8]) -> Option<bool> {

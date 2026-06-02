@@ -205,10 +205,6 @@ pub fn stats() -> Stats {
     FRAME_ALLOCATOR.lock().stats()
 }
 
-pub fn max_frame() -> usize {
-    FRAME_ALLOCATOR.lock().max_frame
-}
-
 #[allow(dead_code)]
 pub fn reserve_range(start: usize, end: usize) {
     FRAME_ALLOCATOR.lock().mark_range(start, end, true);

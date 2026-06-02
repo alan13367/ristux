@@ -185,7 +185,9 @@ unsafe fn load_idt() {
         base: idt as u64,
     };
 
-    asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags));
+    unsafe {
+        asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags));
+    }
 }
 
 pub fn trigger_breakpoint() {

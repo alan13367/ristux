@@ -40,10 +40,14 @@ pub const NR_KILL: usize = 62;
 pub const NR_UNAME: usize = 63;
 pub const NR_FCNTL: usize = 72;
 pub const NR_GETCWD: usize = 79;
+pub const NR_CHDIR: usize = 80;
+pub const NR_MKDIR: usize = 83;
+pub const NR_CHMOD: usize = 90;
+pub const NR_CHOWN: usize = 92;
 pub const NR_STATFS: usize = 137;
 pub const NR_FSTATFS: usize = 138;
+pub const NR_MOUNT: usize = 165;
 pub const NR_GETDENTS64: usize = 217;
-pub const NR_CHDIR: usize = 80;
 pub const NR_GETUID: usize = 102;
 pub const NR_GETGID: usize = 104;
 pub const NR_SETUID: usize = 105;
@@ -298,6 +302,11 @@ pub fn close(fd: i32) -> isize {
 }
 
 #[inline]
+pub fn lseek(fd: i32, offset: usize, whence: usize) -> isize {
+    unsafe { syscall3(NR_LSEEK, fd as usize, offset, whence) }
+}
+
+#[inline]
 pub fn dup(fd: i32) -> isize {
     unsafe { syscall1(NR_DUP, fd as usize) }
 }
@@ -458,6 +467,21 @@ pub fn chdir(path: *const u8) -> isize {
 }
 
 #[inline]
+pub fn mkdir(path: *const u8, mode: u32) -> isize {
+    unsafe { syscall2(NR_MKDIR, path as usize, mode as usize) }
+}
+
+#[inline]
+pub fn chmod(path: *const u8, mode: u32) -> isize {
+    unsafe { syscall2(NR_CHMOD, path as usize, mode as usize) }
+}
+
+#[inline]
+pub fn chown(path: *const u8, uid: u32, gid: u32) -> isize {
+    unsafe { syscall3(NR_CHOWN, path as usize, uid as usize, gid as usize) }
+}
+
+#[inline]
 pub fn getcwd(buf: *mut u8, len: usize) -> isize {
     unsafe { syscall2(NR_GETCWD, buf as usize, len) }
 }
@@ -482,6 +506,11 @@ pub fn statfs(path: *const u8, buf: *mut StatFs) -> isize {
 #[inline]
 pub fn fstatfs(fd: i32, buf: *mut StatFs) -> isize {
     unsafe { syscall2(NR_FSTATFS, fd as usize, buf as usize) }
+}
+
+#[inline]
+pub fn mount(source: *const u8, target: *const u8, fstype: *const u8) -> isize {
+    unsafe { syscall3(NR_MOUNT, source as usize, target as usize, fstype as usize) }
 }
 
 #[inline]

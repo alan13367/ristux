@@ -88,11 +88,7 @@ fn tail_fd(fd: i32, max_lines: usize) -> i32 {
         Err(()) => return 1,
     };
     let start = tail_start(&bytes, max_lines);
-    if write_all(1, &bytes[start..]) {
-        0
-    } else {
-        1
-    }
+    if write_all(1, &bytes[start..]) { 0 } else { 1 }
 }
 
 fn tail_file(path: &[u8], max_lines: usize) -> i32 {
@@ -117,7 +113,11 @@ fn write_header(path: &[u8], first: bool) -> bool {
     if !first && !write_all(1, b"\n") {
         return false;
     }
-    let name = if path == b"-" { b"standard input" } else { path };
+    let name = if path == b"-" {
+        b"standard input"
+    } else {
+        path
+    };
     write_all(1, b"==> ") && write_all(1, name) && write_all(1, b" <==\n")
 }
 

@@ -298,6 +298,7 @@ fn dispatch_interrupt_syscall(frame: &mut SyscallInterruptFrame) {
     }
 }
 
+#[allow(dead_code)]
 pub fn dispatch(process: &mut UserProcess, number: u64, args: [usize; 6]) -> SyscallResult {
     match number {
         SYS_WRITE => sys_write(process, args[0], args[1], args[2]),
@@ -334,6 +335,7 @@ pub fn dispatch(process: &mut UserProcess, number: u64, args: [usize; 6]) -> Sys
     }
 }
 
+#[allow(dead_code)]
 fn sys_write(process: &UserProcess, fd: usize, ptr: usize, len: usize) -> SyscallResult {
     if fd != 1 && fd != 2 {
         return Err(SyscallError(EBADF));
@@ -673,6 +675,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
     }
 }
 
+#[allow(dead_code)]
 fn sys_read(_process: &mut UserProcess, fd: usize, _ptr: usize, _len: usize) -> SyscallResult {
     if fd != 0 {
         return Err(SyscallError(EBADF));

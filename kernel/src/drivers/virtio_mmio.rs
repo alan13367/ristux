@@ -108,9 +108,9 @@ pub fn device_id(mmio: *mut u8) -> u32 {
 }
 
 pub fn validate(mmio: *mut u8, expected_device: u32) -> bool {
-    unsafe {
+    let header_matches = unsafe {
         read32(mmio, MMIO_MAGIC_VALUE) == MMIO_MAGIC
             && read32(mmio, MMIO_VERSION_REG) == MMIO_VERSION
-            && read32(mmio, MMIO_DEVICE_ID) == expected_device
-    }
+    };
+    header_matches && device_id(mmio) == expected_device
 }

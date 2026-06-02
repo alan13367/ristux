@@ -1068,10 +1068,6 @@ pub fn get_parent(pid: Pid) -> Option<Pid> {
     with_table(|table| table.get(pid).and_then(|p| p.parent))
 }
 
-pub fn install_pipe_fds(pipefd: usize, read_vfs: usize, write_vfs: usize) -> Result<(), ()> {
-    install_pipe_fds_with_flags(pipefd, read_vfs, write_vfs, 0, 0)
-}
-
 pub fn install_pipe_fds_with_flags(
     pipefd: usize,
     read_vfs: usize,
@@ -1942,16 +1938,6 @@ pub fn restore_syscall_frame(pid: Pid, frame: &mut SavedSyscallFrame) -> bool {
         }
         false
     })
-}
-
-pub fn wait_pid_blocking(parent: Pid, child: Pid) -> Option<i32> {
-    loop {
-        if let Some(status) = wait(parent, child) {
-            return Some(status);
-        }
-        block_current(BlockReason::WaitChild(child));
-        crate::arch::x86_64::instructions::halt();
-    }
 }
 
 pub fn kill_current(status: i32) {

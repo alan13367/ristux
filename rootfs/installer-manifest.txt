@@ -1,0 +1,7 @@
+# Installer initrd manifest.
+include manifest.txt
+file /install/root.img ../build/disk.img
+file /install/grub-boot.img ../build/grub/boot.img
+file /install/grub-core.img ../build/grub/core.img
+file /install/ristux.elf ../iso/boot/ristux.elf
+file /install/initrd.bin ../iso/boot/initrd.bin

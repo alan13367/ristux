@@ -71,7 +71,10 @@ fn append_tcc_args(out: &mut Vec<Vec<u8>>, mode: &[u8], args: &[&[u8]]) -> bool 
 }
 
 fn run_frontend(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
-    let mode = args.first().map(|arg| basename(arg)).unwrap_or(b"toolchain");
+    let mode = args
+        .first()
+        .map(|arg| basename(arg))
+        .unwrap_or(b"toolchain");
     let mut owned_args = Vec::new();
     if !append_tcc_args(&mut owned_args, mode, args.get(1..).unwrap_or(&[])) {
         write_all(2, b"toolchain: unsupported frontend\n");
