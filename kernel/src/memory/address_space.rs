@@ -225,18 +225,32 @@ impl AddressSpace {
             clone.destroy();
             return Err(err);
         }
+        let mut parent_cow_pages = Vec::new();
+        if parent_cow_pages
+            .try_reserve_exact(self.user_mappings.len())
+            .is_err()
+        {
+            clone.destroy();
+            return Err(PagingError::OutOfFrames);
+        }
         for &(virt, frame) in &self.user_mappings {
             let protection = match self.protection_for_page(virt) {
                 Some(protection) => protection,
                 None => {
-                    clone.destroy();
-                    return Err(PagingError::NotMapped);
+                    return self.abort_clone_with_rollback(
+                        clone,
+                        &parent_cow_pages,
+                        PagingError::NotMapped,
+                    );
                 }
             };
             unsafe {
                 let Some(pte) = paging::get_pte_mut(self.p4, virt) else {
-                    clone.destroy();
-                    return Err(PagingError::NotMapped);
+                    return self.abort_clone_with_rollback(
+                        clone,
+                        &parent_cow_pages,
+                        PagingError::NotMapped,
+                    );
                 };
                 let flags = *pte & !paging::ADDR_MASK;
                 let mut clone_flags = flags;
@@ -245,20 +259,23 @@ impl AddressSpace {
                     clone_flags |= paging::COW_FLAG;
                 }
                 if let Err(err) = super::refcount::try_increment(frame.start) {
-                    clone.destroy();
-                    return Err(map_refcount_error(err));
+                    return self.abort_clone_with_rollback(
+                        clone,
+                        &parent_cow_pages,
+                        map_refcount_error(err),
+                    );
                 }
                 if let Err(err) =
                     clone.map_user_page(virt, frame.start, PageFlags::from_raw(clone_flags))
                 {
                     let _ = super::refcount::decrement(frame.start);
-                    clone.destroy();
-                    return Err(err);
+                    return self.abort_clone_with_rollback(clone, &parent_cow_pages, err);
                 }
                 clone.user_mappings.push((virt, frame));
                 clone.user_protections.push((virt, protection));
                 if clone_flags != flags {
                     *pte = (*pte & paging::ADDR_MASK) | clone_flags;
+                    parent_cow_pages.push((virt, flags));
                     paging::flush(virt);
                     crate::smp::send_tlb_shootdown();
                 }
@@ -269,6 +286,33 @@ impl AddressSpace {
         clone.stack_top = self.stack_top;
         clone.mmap_next = self.mmap_next;
         Ok(clone)
+    }
+
+    fn abort_clone_with_rollback(
+        &self,
+        clone: Self,
+        parent_cow_pages: &[(usize, u64)],
+        err: PagingError,
+    ) -> Result<Self, PagingError> {
+        clone.destroy();
+        self.restore_parent_page_flags(parent_cow_pages);
+        Err(err)
+    }
+
+    fn restore_parent_page_flags(&self, pages: &[(usize, u64)]) {
+        let mut restored = false;
+        for &(virt, flags) in pages {
+            if let Some(pte) = unsafe { paging::get_pte_mut(self.p4, virt) } {
+                *pte = (*pte & paging::ADDR_MASK) | flags;
+                unsafe {
+                    paging::flush(virt);
+                }
+                restored = true;
+            }
+        }
+        if restored {
+            crate::smp::send_tlb_shootdown();
+        }
     }
 
     pub fn map_anonymous(
@@ -757,6 +801,7 @@ pub fn self_test() {
         .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadWrite)
         .expect("address space writable protection restore failed");
     assert_user_page_nx(&space_a, VIRT, true, "restored writable page");
+    assert_parent_cow_restore(&space_a, VIRT);
     assert_mprotect_metadata_failure_is_atomic(&mut space_a);
 
     space_b.activate();
@@ -820,6 +865,20 @@ fn assert_mprotect_metadata_failure_is_atomic(space: &mut AddressSpace) {
     }
     assert_user_page_writable(space, BASE, true, "mprotect atomic first page");
     assert_user_page_writable(space, second, true, "mprotect atomic second page");
+}
+
+fn assert_parent_cow_restore(space: &AddressSpace, page: usize) {
+    let pte = unsafe { paging::get_pte_mut(space.p4, page) }
+        .unwrap_or_else(|| panic!("address space COW restore self-test missing page"));
+    let original_flags = *pte & !paging::ADDR_MASK;
+    *pte =
+        (*pte & paging::ADDR_MASK) | ((original_flags & !paging::WRITABLE_FLAG) | paging::COW_FLAG);
+    unsafe {
+        paging::flush(page);
+    }
+
+    space.restore_parent_page_flags(&[(page, original_flags)]);
+    assert_user_page_writable(space, page, true, "parent COW restore");
 }
 
 fn assert_user_page_writable(space: &AddressSpace, page: usize, expected: bool, label: &str) {
