@@ -60,6 +60,7 @@ pub enum VfsError {
     PermissionDenied,
     WouldBlock,
     TooManyOpenFiles,
+    OutOfMemory,
 }
 
 impl fmt::Display for VfsError {
@@ -73,6 +74,7 @@ impl fmt::Display for VfsError {
             Self::PermissionDenied => f.write_str("permission denied"),
             Self::WouldBlock => f.write_str("would block"),
             Self::TooManyOpenFiles => f.write_str("too many open files"),
+            Self::OutOfMemory => f.write_str("out of memory"),
         }
     }
 }

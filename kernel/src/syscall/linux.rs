@@ -3423,6 +3423,7 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::AlreadyExists => EEXIST,
         fs::vfs::VfsError::BadFd => EBADF,
         fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
+        fs::vfs::VfsError::OutOfMemory => ENOMEM,
         _ => EINVAL,
     }
 }

@@ -1,4 +1,4 @@
-use alloc::{format, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{cmp, ptr, slice};
 
 use crate::{
@@ -1921,14 +1921,32 @@ fn normalize_process_path(path: &str) -> Result<String, fs::vfs::VfsError> {
             ".." => {
                 let _ = parts.pop();
             }
-            _ => parts.push(part),
+            _ => {
+                parts
+                    .try_reserve_exact(1)
+                    .map_err(|_| fs::vfs::VfsError::OutOfMemory)?;
+                parts.push(part);
+            }
         }
     }
-    let mut normalized = String::from("/");
-    for (index, part) in parts.iter().enumerate() {
-        if index > 0 {
-            normalized.push('/');
-        }
+
+    if parts.is_empty() {
+        return try_string_from("/");
+    }
+
+    let mut len = 0usize;
+    for part in &parts {
+        len = len
+            .checked_add(1)
+            .and_then(|len| len.checked_add(part.len()))
+            .ok_or(fs::vfs::VfsError::OutOfMemory)?;
+    }
+    let mut normalized = String::new();
+    normalized
+        .try_reserve_exact(len)
+        .map_err(|_| fs::vfs::VfsError::OutOfMemory)?;
+    for part in parts {
+        normalized.push('/');
         normalized.push_str(part);
     }
     Ok(normalized)
@@ -1941,12 +1959,23 @@ fn resolve_process_path(process: &Process, path: &str) -> Result<String, fs::vfs
     if path.starts_with('/') {
         return normalize_process_path(path);
     }
-    let mut combined = if process.cwd.is_empty() {
-        String::from("/")
+    let cwd = if process.cwd.is_empty() {
+        "/"
     } else {
-        process.cwd.clone()
+        process.cwd.as_str()
     };
-    if !combined.ends_with('/') {
+    let needs_slash = !cwd.ends_with('/');
+    let len = cwd
+        .len()
+        .checked_add(if needs_slash { 1 } else { 0 })
+        .and_then(|len| len.checked_add(path.len()))
+        .ok_or(fs::vfs::VfsError::OutOfMemory)?;
+    let mut combined = String::new();
+    combined
+        .try_reserve_exact(len)
+        .map_err(|_| fs::vfs::VfsError::OutOfMemory)?;
+    combined.push_str(cwd);
+    if needs_slash {
         combined.push('/');
     }
     combined.push_str(path);
@@ -1959,10 +1988,58 @@ fn resolve_open_path(process: &Process, path: &str) -> Result<String, fs::vfs::V
         return Ok(path);
     }
     match process.controlling_tty {
-        Some(ControllingTty::Console) => Ok(String::from("/dev/tty")),
-        Some(ControllingTty::Pty(pty)) => Ok(format!("/dev/pts/{}", pty)),
+        Some(ControllingTty::Console) => Ok(path),
+        Some(ControllingTty::Pty(pty)) => try_pts_path(pty),
         None => Err(fs::vfs::VfsError::NotFound),
     }
+}
+
+fn try_string_from(value: &str) -> Result<String, fs::vfs::VfsError> {
+    let mut out = String::new();
+    out.try_reserve_exact(value.len())
+        .map_err(|_| fs::vfs::VfsError::OutOfMemory)?;
+    out.push_str(value);
+    Ok(out)
+}
+
+fn decimal_len(mut value: usize) -> usize {
+    let mut len = 1;
+    while value >= 10 {
+        value /= 10;
+        len += 1;
+    }
+    len
+}
+
+fn push_usize_decimal(out: &mut String, mut value: usize) {
+    let mut digits = [0u8; 39];
+    let mut index = digits.len();
+    loop {
+        index -= 1;
+        digits[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    for digit in &digits[index..] {
+        out.push(*digit as char);
+    }
+}
+
+fn try_pts_path(pty: usize) -> Result<String, fs::vfs::VfsError> {
+    const PREFIX: &str = "/dev/pts/";
+
+    let len = PREFIX
+        .len()
+        .checked_add(decimal_len(pty))
+        .ok_or(fs::vfs::VfsError::OutOfMemory)?;
+    let mut out = String::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| fs::vfs::VfsError::OutOfMemory)?;
+    out.push_str(PREFIX);
+    push_usize_decimal(&mut out, pty);
+    Ok(out)
 }
 
 pub fn resolve_current_path(path: &str) -> Result<String, fs::vfs::VfsError> {
