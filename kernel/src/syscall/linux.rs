@@ -893,7 +893,7 @@ fn linux_pread64(
 }
 
 fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     linux_open_path(&path, flags, mode)
 }
 
@@ -977,7 +977,7 @@ fn linux_truncate(path_ptr: usize, len: i64) -> Result<u64, i64> {
     if len < 0 {
         return Err(EINVAL);
     }
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let fd = process::user_open_options(&path, false, true, false, false, false, false, 0, 0)
         .map_err(map_vfs_error)?;
     let result = linux_ftruncate(fd, len);
@@ -1434,7 +1434,7 @@ fn linux_close(fd: usize) -> Result<u64, i64> {
 }
 
 fn linux_access(path_ptr: usize, mode: i32) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     linux_access_path(&path, mode)
 }
 
@@ -2037,7 +2037,7 @@ fn linux_execve(
     argv_ptr: usize,
     envp_ptr: usize,
 ) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let args = read_user_argv(argv_ptr).map_err(map_user_vector_error)?;
     let env = read_user_envp(envp_ptr).map_err(map_user_vector_error)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
@@ -2339,7 +2339,7 @@ fn write_rlimit(rlim_ptr: usize, cur: u64, max: u64) -> Result<(), i64> {
 }
 
 fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_chdir(&path).map(|_| 0).map_err(|_| ENOENT)
 }
 
@@ -2356,7 +2356,7 @@ fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
 }
 
 fn linux_mkdir(path_ptr: usize, mode: u16) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_mkdir_mode(&path, mode)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2370,13 +2370,13 @@ fn linux_mkdirat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
 }
 
 fn linux_rmdir(path_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_rmdir(&path).map(|_| 0).map_err(map_vfs_error)
 }
 
 fn linux_rename(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
-    let old_path = read_user_cstr(old_ptr).ok_or(EFAULT)?;
-    let new_path = read_user_cstr(new_ptr).ok_or(EFAULT)?;
+    let old_path = read_user_cstr_errno(old_ptr)?;
+    let new_path = read_user_cstr_errno(new_ptr)?;
     process::user_rename(&old_path, &new_path)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2396,7 +2396,7 @@ fn linux_renameat(
 }
 
 fn linux_chmod(path_ptr: usize, mode: u16) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_chmod(&path, mode)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2417,7 +2417,7 @@ fn linux_fchmodat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
 }
 
 fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2441,7 +2441,7 @@ fn linux_fchownat(dirfd: i32, path_ptr: usize, uid: u32, gid: u32, flags: i32) -
 }
 
 fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     process::user_unlink(&path)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2462,8 +2462,8 @@ fn linux_unlinkat(dirfd: i32, path_ptr: usize, flags: i32) -> Result<u64, i64> {
 }
 
 fn linux_link(old_ptr: usize, new_ptr: usize) -> Result<u64, i64> {
-    let old_path = read_user_cstr(old_ptr).ok_or(EFAULT)?;
-    let new_path = read_user_cstr(new_ptr).ok_or(EFAULT)?;
+    let old_path = read_user_cstr_errno(old_ptr)?;
+    let new_path = read_user_cstr_errno(new_ptr)?;
     process::user_link(&old_path, &new_path)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -2487,15 +2487,15 @@ fn linux_linkat(
 }
 
 fn linux_symlink(target_ptr: usize, link_ptr: usize) -> Result<u64, i64> {
-    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
-    let link_path = read_user_cstr(link_ptr).ok_or(EFAULT)?;
+    let target = read_user_cstr_errno(target_ptr)?;
+    let link_path = read_user_cstr_errno(link_ptr)?;
     process::user_symlink(&target, &link_path)
         .map(|_| 0)
         .map_err(map_vfs_error)
 }
 
 fn linux_symlinkat(target_ptr: usize, dirfd: i32, link_ptr: usize) -> Result<u64, i64> {
-    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
+    let target = read_user_cstr_errno(target_ptr)?;
     let link_path = resolve_at_path(dirfd, link_ptr, 0)?;
     process::user_symlink(&target, &link_path)
         .map(|_| 0)
@@ -2503,7 +2503,7 @@ fn linux_symlinkat(target_ptr: usize, dirfd: i32, link_ptr: usize) -> Result<u64
 }
 
 fn linux_readlink(path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     linux_readlink_path(&path, buf, len)
 }
@@ -2739,7 +2739,7 @@ fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
 }
 
 fn linux_utime(path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let mtime = if times_ptr == 0 {
         crate::time::filesystem_timestamp()
     } else {
@@ -2756,7 +2756,7 @@ fn linux_utime(path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_utimes(path_ptr: usize, times_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let mtime = read_timeval_mtime(times_ptr)?;
     process::user_set_mtime(&path, mtime)
         .map(|_| 0)
@@ -3060,7 +3060,7 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
 }
 
 fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
     let meta = fs::stat(&path).map_err(|_| ENOENT)?;
     write_linux_stat(
@@ -3075,7 +3075,7 @@ fn linux_stat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_lstat(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
     let meta = fs::lstat(&path).map_err(|_| ENOENT)?;
     write_linux_stat(
@@ -3168,7 +3168,7 @@ fn write_linux_stat(
 }
 
 fn linux_statfs(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     let path = process::resolve_current_path(&path).map_err(|_| ENOENT)?;
     let stats = fs::statfs(&path).map_err(map_vfs_error)?;
     write_linux_statfs(buf_ptr, stats)
@@ -3203,9 +3203,9 @@ fn linux_mount(source_ptr: usize, target_ptr: usize, fstype_ptr: usize) -> Resul
     if process::current_euid() != 0 {
         return Err(EPERM);
     }
-    let source = read_user_cstr(source_ptr).ok_or(EFAULT)?;
-    let target = read_user_cstr(target_ptr).ok_or(EFAULT)?;
-    let fstype = read_user_cstr(fstype_ptr).ok_or(EFAULT)?;
+    let source = read_user_cstr_errno(source_ptr)?;
+    let target = read_user_cstr_errno(target_ptr)?;
+    let fstype = read_user_cstr_errno(fstype_ptr)?;
     if target != "/" || fstype != "ext2" {
         return Err(EINVAL);
     }
@@ -3377,25 +3377,45 @@ fn linux_rt_sigpending(set_ptr: usize, sigset_size: usize) -> Result<u64, i64> {
     Ok(0)
 }
 
-fn read_user_cstr(addr: usize) -> Option<alloc::string::String> {
+#[derive(Clone, Copy)]
+enum UserStringError {
+    BadAddress,
+    OutOfMemory,
+}
+
+fn map_user_string_error(err: UserStringError) -> i64 {
+    match err {
+        UserStringError::BadAddress => EFAULT,
+        UserStringError::OutOfMemory => ENOMEM,
+    }
+}
+
+fn read_user_cstr_errno(addr: usize) -> Result<alloc::string::String, i64> {
+    read_user_cstr(addr).map_err(map_user_string_error)
+}
+
+fn read_user_cstr(addr: usize) -> Result<alloc::string::String, UserStringError> {
     use alloc::string::String;
     let mut buf: Vec<u8> = Vec::new();
     let mut offset = 0usize;
     while offset < 4096 {
-        let ptr = addr.checked_add(offset)?;
-        let slice = process::read_user(ptr, 1)?;
+        let ptr = addr
+            .checked_add(offset)
+            .ok_or(UserStringError::BadAddress)?;
+        let slice = process::read_user(ptr, 1).ok_or(UserStringError::BadAddress)?;
         if slice[0] == 0 {
-            return String::from_utf8(buf).ok();
+            return String::from_utf8(buf).map_err(|_| UserStringError::BadAddress);
         }
-        buf.try_reserve(1).ok()?;
+        buf.try_reserve(1)
+            .map_err(|_| UserStringError::OutOfMemory)?;
         buf.push(slice[0]);
         offset += 1;
     }
-    None
+    Err(UserStringError::BadAddress)
 }
 
 fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::string::String, i64> {
-    let path = read_user_cstr(path_ptr).ok_or(EFAULT)?;
+    let path = read_user_cstr_errno(path_ptr)?;
     if path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
             return Err(ENOENT);
@@ -3502,6 +3522,13 @@ fn map_user_vector_error(err: UserVectorError) -> i64 {
     }
 }
 
+fn map_user_string_to_vector_error(err: UserStringError) -> UserVectorError {
+    match err {
+        UserStringError::BadAddress => UserVectorError::BadAddress,
+        UserStringError::OutOfMemory => UserVectorError::OutOfMemory,
+    }
+}
+
 fn read_user_argv(argv_ptr: usize) -> Result<Vec<alloc::string::String>, UserVectorError> {
     let mut args = Vec::new();
     let mut index = 0usize;
@@ -3524,7 +3551,7 @@ fn read_user_argv(argv_ptr: usize) -> Result<Vec<alloc::string::String>, UserVec
         }
         args.try_reserve(1)
             .map_err(|_| UserVectorError::OutOfMemory)?;
-        args.push(read_user_cstr(arg_ptr).ok_or(UserVectorError::BadAddress)?);
+        args.push(read_user_cstr(arg_ptr).map_err(map_user_string_to_vector_error)?);
         index += 1;
     }
     Ok(args)
@@ -3555,7 +3582,7 @@ fn read_user_envp(envp_ptr: usize) -> Result<Vec<alloc::string::String>, UserVec
         }
         env.try_reserve(1)
             .map_err(|_| UserVectorError::OutOfMemory)?;
-        env.push(read_user_cstr(entry_ptr).ok_or(UserVectorError::BadAddress)?);
+        env.push(read_user_cstr(entry_ptr).map_err(map_user_string_to_vector_error)?);
         index += 1;
     }
     Ok(env)
