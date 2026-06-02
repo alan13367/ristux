@@ -25,6 +25,7 @@ mod memory;
 mod multiboot;
 mod net;
 mod panic;
+mod power;
 mod process;
 mod sched;
 mod security;

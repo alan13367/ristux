@@ -351,6 +351,32 @@ case "$SCENARIO" in
       "^  /bin/vi$"
     )
     ;;
+  editor-arrows)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
+    COMMANDS=(
+      "rm -f /tmp/edit-arrows.txt"
+      "vi /tmp/edit-arrows.txt"
+      "__text ifirst"
+      "__sendkey ret"
+      "__text third"
+      "__sendkey up"
+      "__sendkey ret"
+      "__text second"
+      "__sendkey esc"
+      "__sendkey down"
+      "__text A!"
+      "__sendkey esc"
+      "__text :wq"
+      "__sendkey ret"
+      "cat /tmp/edit-arrows.txt"
+    )
+    EXPECTS=(
+      "TTY canonical line ready: vi /tmp/edit-arrows.txt"
+      "^first$"
+      "^second$"
+      "^third!$"
+    )
+    ;;
   editor-c)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
@@ -368,6 +394,36 @@ case "$SCENARIO" in
       "TTY canonical line ready: vi /tmp/hello.c"
       "^#include <stdio.h>$"
       "^int main() { return 0; }$"
+    )
+    ;;
+  poweroff)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-0.2}"
+    COMMANDS=("poweroff")
+    EXPECTS=(
+      "TTY canonical line ready: poweroff"
+      "^powering off$"
+      "Powering off\\."
+    )
+    ;;
+  shutdown-timer)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=("shutdown -k -t 1")
+    EXPECTS=(
+      "TTY canonical line ready: shutdown -k -t 1"
+      "^shutdown: scheduled poweroff in 1 second$"
+      "^shutdown: 1 second remaining$"
+      "^shutdown: dry run complete; kernel reboot syscall skipped$"
+    )
+    ;;
+  poweroff-delay)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-0.2}"
+    COMMANDS=("poweroff -t 1")
+    EXPECTS=(
+      "TTY canonical line ready: poweroff -t 1"
+      "^shutdown: scheduled poweroff in 1 second$"
+      "^shutdown: 1 second remaining$"
+      "^powering off$"
+      "Powering off\\."
     )
     ;;
   libc)
@@ -2715,7 +2771,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-c, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-arrows, editor-c, poweroff, shutdown-timer, poweroff-delay, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
     exit 2
     ;;
 esac
@@ -2831,6 +2887,42 @@ QEMU_ARGS+=(
   -drive "file=$DISK_IMAGE,if=none,id=hd0,format=raw"
   -device "virtio-blk-pci,drive=hd0"
 )
+
+if [[ "$SCENARIO" == "poweroff" || "$SCENARIO" == "poweroff-delay" ]]; then
+  (
+    sleep "$BOOT_WAIT"
+    send_text "root"
+    sleep 0.5
+    printf 'sendkey ret\n'
+    sleep 2
+    for command in "${COMMANDS[@]}"; do
+      send_command "$command"
+    done
+  ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
+    -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-quick-monitor.log &
+  QEMU_PID=$!
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+      echo "quick_fixture: timed out after ${TIMEOUT_SECONDS}s" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+    fi
+  ) &
+  WATCHDOG_PID=$!
+  set +e
+  wait "$QEMU_PID"
+  QEMU_STATUS=$?
+  set -e
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  if [[ "$QEMU_STATUS" -ne 0 && "$QEMU_STATUS" -ne 141 ]]; then
+    echo "quick_fixture: qemu exited with $QEMU_STATUS; see $SERIAL_LOG" >&2
+    exit "$QEMU_STATUS"
+  fi
+  check_log "$SERIAL_LOG" "${EXPECTS[@]}"
+  echo "ristux quick fixture '$SCENARIO' passed: $SERIAL_LOG"
+  exit 0
+fi
 
 if [[ "$SCENARIO" == "ext2-reboot" ]]; then
   REBOOT_SERIAL_LOG="${RISTUX_QUICK_REBOOT_SERIAL_LOG:-/tmp/ristux-quick-ext2-reboot-second.log}"

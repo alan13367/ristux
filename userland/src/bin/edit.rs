@@ -29,6 +29,7 @@ const ISIG: u32 = 0x0001;
 const ICANON: u32 = 0x0002;
 const ECHO: u32 = 0x0008;
 const IEXTEN: u32 = 0x8000;
+const ESCAPE_TIMEOUT_MS: i32 = 50;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Mode {
@@ -43,6 +44,13 @@ enum Key {
     Esc,
     Backspace,
     Enter,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
 }
 
 struct Terminal {
@@ -84,6 +92,7 @@ struct Editor {
     lines: Vec<Vec<u8>>,
     cx: usize,
     cy: usize,
+    desired_col: usize,
     row_offset: usize,
     rows: usize,
     cols: usize,
@@ -102,6 +111,7 @@ impl Editor {
             lines,
             cx: 0,
             cy: 0,
+            desired_col: 0,
             row_offset: 0,
             rows: 24,
             cols: 80,
@@ -120,9 +130,10 @@ impl Editor {
     }
 
     fn run(&mut self) -> i32 {
+        let mut input = Input::new();
         while self.running {
             self.refresh_screen();
-            let key = read_key();
+            let key = input.read_key();
             self.handle_key(key);
         }
         0
@@ -156,11 +167,13 @@ impl Editor {
                 if self.cx < self.current_line_len() {
                     self.cx += 1;
                 }
+                self.desired_col = self.cx;
                 self.mode = Mode::Insert;
             }
             Key::Byte(b'A') => {
                 self.ensure_current_line();
                 self.cx = self.current_line_len();
+                self.desired_col = self.cx;
                 self.mode = Mode::Insert;
             }
             Key::Byte(b'o') => {
@@ -168,6 +181,7 @@ impl Editor {
                 self.lines.insert(index, Vec::new());
                 self.cy = index;
                 self.cx = 0;
+                self.desired_col = self.cx;
                 self.mode = Mode::Insert;
                 self.dirty = true;
             }
@@ -176,22 +190,30 @@ impl Editor {
                 self.lines.insert(index, Vec::new());
                 self.cy = index;
                 self.cx = 0;
+                self.desired_col = self.cx;
                 self.mode = Mode::Insert;
                 self.dirty = true;
             }
-            Key::Byte(b'h') => self.move_left(),
-            Key::Byte(b'l') => self.move_right(),
-            Key::Byte(b'k') => self.move_up(),
-            Key::Byte(b'j') => self.move_down(),
-            Key::Byte(b'0') => self.cx = 0,
-            Key::Byte(b'$') => self.cx = self.current_line_len(),
+            Key::Byte(b'h') | Key::Left => self.move_left(),
+            Key::Byte(b'l') | Key::Right => self.move_right(),
+            Key::Byte(b'k') | Key::Up => self.move_up(),
+            Key::Byte(b'j') | Key::Down => self.move_down(),
+            Key::Byte(b'0') | Key::Home => {
+                self.cx = 0;
+                self.desired_col = self.cx;
+            }
+            Key::Byte(b'$') | Key::End => {
+                self.cx = self.current_line_len();
+                self.desired_col = self.cx;
+            }
             Key::Byte(b'G') => {
                 if !self.lines.is_empty() {
                     self.cy = self.lines.len() - 1;
                     self.cx = self.cx.min(self.current_line_len());
+                    self.desired_col = self.cx;
                 }
             }
-            Key::Byte(b'x') => self.delete_char(),
+            Key::Byte(b'x') | Key::Delete => self.delete_char(),
             Key::Byte(b'd') if self.pending_delete => {
                 self.delete_line();
                 self.pending_delete = false;
@@ -208,9 +230,23 @@ impl Editor {
                 if self.cx > 0 {
                     self.cx -= 1;
                 }
+                self.desired_col = self.cx;
             }
             Key::Backspace => self.backspace(),
+            Key::Delete => self.delete_char(),
             Key::Enter => self.insert_newline(),
+            Key::Left => self.move_left(),
+            Key::Right => self.move_right(),
+            Key::Up => self.move_up(),
+            Key::Down => self.move_down(),
+            Key::Home => {
+                self.cx = 0;
+                self.desired_col = self.cx;
+            }
+            Key::End => {
+                self.cx = self.current_line_len();
+                self.desired_col = self.cx;
+            }
             Key::Byte(byte) if byte == b'\t' => {
                 for _ in 0..4 {
                     self.insert_byte(b' ');
@@ -294,6 +330,7 @@ impl Editor {
         let line = &mut self.lines[self.cy];
         line.insert(self.cx.min(line.len()), byte);
         self.cx += 1;
+        self.desired_col = self.cx;
         self.dirty = true;
     }
 
@@ -305,6 +342,7 @@ impl Editor {
         };
         self.cy += 1;
         self.cx = 0;
+        self.desired_col = self.cx;
         self.lines.insert(self.cy, rest);
         self.dirty = true;
     }
@@ -318,12 +356,14 @@ impl Editor {
             if self.cx <= line.len() {
                 line.remove(self.cx - 1);
                 self.cx -= 1;
+                self.desired_col = self.cx;
                 self.dirty = true;
             }
         } else if self.cy > 0 {
             let current = self.lines.remove(self.cy);
             self.cy -= 1;
             self.cx = self.lines[self.cy].len();
+            self.desired_col = self.cx;
             self.lines[self.cy].extend_from_slice(&current);
             self.dirty = true;
         }
@@ -336,10 +376,12 @@ impl Editor {
         let line = &mut self.lines[self.cy];
         if self.cx < line.len() {
             line.remove(self.cx);
+            self.desired_col = self.cx;
             self.dirty = true;
         } else if self.cy + 1 < self.lines.len() {
             let next = self.lines.remove(self.cy + 1);
             self.lines[self.cy].extend_from_slice(&next);
+            self.desired_col = self.cx;
             self.dirty = true;
         }
     }
@@ -354,6 +396,7 @@ impl Editor {
             self.cy -= 1;
         }
         self.cx = 0;
+        self.desired_col = self.cx;
         self.dirty = true;
         self.status = b"deleted".to_vec();
     }
@@ -365,6 +408,7 @@ impl Editor {
             self.cy -= 1;
             self.cx = self.current_line_len();
         }
+        self.desired_col = self.cx;
     }
 
     fn move_right(&mut self) {
@@ -374,19 +418,20 @@ impl Editor {
             self.cy += 1;
             self.cx = 0;
         }
+        self.desired_col = self.cx;
     }
 
     fn move_up(&mut self) {
         if self.cy > 0 {
             self.cy -= 1;
-            self.cx = self.cx.min(self.current_line_len());
+            self.cx = self.desired_col.min(self.current_line_len());
         }
     }
 
     fn move_down(&mut self) {
         if self.cy + 1 < self.lines.len() {
             self.cy += 1;
-            self.cx = self.cx.min(self.current_line_len());
+            self.cx = self.desired_col.min(self.current_line_len());
         }
     }
 
@@ -514,23 +559,132 @@ fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
     true
 }
 
-fn read_key() -> Key {
-    let mut buf = [0u8; 1];
-    loop {
-        let n = sys::read(0, &mut buf);
-        if n == 1 {
-            return decode_key(buf[0]);
+struct Input {
+    pending: Vec<u8>,
+}
+
+impl Input {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
         }
-        let _ = sys::sched_yield();
+    }
+
+    fn read_key(&mut self) -> Key {
+        let byte = self.read_byte_blocking();
+        self.decode_key(byte)
+    }
+
+    fn read_byte_blocking(&mut self) -> u8 {
+        loop {
+            if let Some(byte) = self.pop_pending() {
+                return byte;
+            }
+            self.read_more();
+            if let Some(byte) = self.pop_pending() {
+                return byte;
+            }
+            let _ = sys::sched_yield();
+        }
+    }
+
+    fn read_byte_if_ready(&mut self, timeout_ms: i32) -> Option<u8> {
+        if let Some(byte) = self.pop_pending() {
+            return Some(byte);
+        }
+        let mut pollfd = sys::PollFd {
+            fd: 0,
+            events: sys::POLLIN,
+            revents: 0,
+        };
+        if sys::poll(&mut pollfd as *mut sys::PollFd, 1, timeout_ms) <= 0 {
+            return None;
+        }
+        if pollfd.revents & sys::POLLIN == 0 {
+            return None;
+        }
+        self.read_more();
+        self.pop_pending()
+    }
+
+    fn read_more(&mut self) {
+        let mut buf = [0u8; 8];
+        let n = sys::read(0, &mut buf);
+        if n > 0 {
+            self.pending.extend_from_slice(&buf[..n as usize]);
+        }
+    }
+
+    fn pop_pending(&mut self) -> Option<u8> {
+        if self.pending.is_empty() {
+            None
+        } else {
+            Some(self.pending.remove(0))
+        }
+    }
+
+    fn decode_key(&mut self, byte: u8) -> Key {
+        match byte {
+            0x1b => self.decode_escape_key(),
+            0x08 | 0x7f => Key::Backspace,
+            b'\n' | b'\r' => Key::Enter,
+            byte => Key::Byte(byte),
+        }
+    }
+
+    fn decode_escape_key(&mut self) -> Key {
+        match self.read_byte_if_ready(ESCAPE_TIMEOUT_MS) {
+            Some(b'[') => self.decode_csi_key(),
+            Some(b'O') => self.decode_ss3_key(),
+            _ => Key::Esc,
+        }
+    }
+
+    fn decode_csi_key(&mut self) -> Key {
+        let mut seq = [0u8; 8];
+        let mut len = 0usize;
+        loop {
+            let Some(byte) = self.read_byte_if_ready(ESCAPE_TIMEOUT_MS) else {
+                return Key::Esc;
+            };
+            if len < seq.len() {
+                seq[len] = byte;
+                len += 1;
+            }
+            if (0x40..=0x7e).contains(&byte) {
+                return match byte {
+                    b'A' => Key::Up,
+                    b'B' => Key::Down,
+                    b'C' => Key::Right,
+                    b'D' => Key::Left,
+                    b'H' => Key::Home,
+                    b'F' => Key::End,
+                    b'~' => decode_csi_tilde_key(&seq[..len]),
+                    _ => Key::Esc,
+                };
+            }
+        }
+    }
+
+    fn decode_ss3_key(&mut self) -> Key {
+        match self.read_byte_if_ready(ESCAPE_TIMEOUT_MS) {
+            Some(b'A') => Key::Up,
+            Some(b'B') => Key::Down,
+            Some(b'C') => Key::Right,
+            Some(b'D') => Key::Left,
+            Some(b'H') => Key::Home,
+            Some(b'F') => Key::End,
+            _ => Key::Esc,
+        }
     }
 }
 
-fn decode_key(byte: u8) -> Key {
-    match byte {
-        0x1b => Key::Esc,
-        0x08 | 0x7f => Key::Backspace,
-        b'\n' | b'\r' => Key::Enter,
-        byte => Key::Byte(byte),
+fn decode_csi_tilde_key(seq: &[u8]) -> Key {
+    match seq.first().copied() {
+        Some(b'1') | Some(b'7') => Key::Home,
+        Some(b'3') => Key::Delete,
+        Some(b'4') | Some(b'8') => Key::End,
+        _ => Key::Esc,
     }
 }
 

@@ -17,6 +17,7 @@ pub const NR_BRK: usize = 12;
 pub const NR_IOCTL: usize = 16;
 pub const NR_PIPE: usize = 22;
 pub const NR_SCHED_YIELD: usize = 24;
+pub const NR_NANOSLEEP: usize = 35;
 pub const NR_DUP: usize = 32;
 pub const NR_DUP2: usize = 33;
 pub const NR_GETPID: usize = 39;
@@ -47,6 +48,8 @@ pub const NR_CHOWN: usize = 92;
 pub const NR_STATFS: usize = 137;
 pub const NR_FSTATFS: usize = 138;
 pub const NR_MOUNT: usize = 165;
+pub const NR_REBOOT: usize = 169;
+pub const NR_TIME: usize = 201;
 pub const NR_GETDENTS64: usize = 217;
 pub const NR_GETUID: usize = 102;
 pub const NR_GETGID: usize = 104;
@@ -61,6 +64,12 @@ pub const NR_SETRESUID: usize = 117;
 pub const NR_RT_SIGACTION: usize = 13;
 pub const NR_RT_SIGRETURN: usize = 15;
 pub const NR_SETHOSTNAME: usize = 170;
+
+pub const LINUX_REBOOT_MAGIC1: usize = 0xfee1_dead;
+pub const LINUX_REBOOT_MAGIC2: usize = 672_274_793;
+pub const LINUX_REBOOT_CMD_RESTART: usize = 0x0123_4567;
+pub const LINUX_REBOOT_CMD_HALT: usize = 0xcdef_0123;
+pub const LINUX_REBOOT_CMD_POWER_OFF: usize = 0x4321_fedc;
 
 pub const AF_INET: i32 = 2;
 pub const SOCK_STREAM: i32 = 1;
@@ -84,6 +93,13 @@ pub struct PollFd {
     pub fd: i32,
     pub events: i16,
     pub revents: i16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Timespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
 }
 
 #[repr(C)]
@@ -429,6 +445,16 @@ pub fn sched_yield() -> isize {
 }
 
 #[inline]
+pub fn time() -> isize {
+    unsafe { syscall1(NR_TIME, 0) }
+}
+
+#[inline]
+pub fn nanosleep(req: &Timespec) -> isize {
+    unsafe { syscall2(NR_NANOSLEEP, req as *const Timespec as usize, 0) }
+}
+
+#[inline]
 pub fn dup2(oldfd: i32, newfd: i32) -> isize {
     unsafe { syscall2(NR_DUP2, oldfd as usize, newfd as usize) }
 }
@@ -521,6 +547,11 @@ pub fn uname(buf: *mut UtsName) -> isize {
 #[inline]
 pub fn sethostname(name: *const u8, len: usize) -> isize {
     unsafe { syscall2(NR_SETHOSTNAME, name as usize, len) }
+}
+
+#[inline]
+pub fn reboot(cmd: usize) -> isize {
+    unsafe { syscall4(NR_REBOOT, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, cmd, 0) }
 }
 
 #[inline]

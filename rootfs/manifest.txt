@@ -102,6 +102,10 @@ file /bin/rm ../build/userland/rm.elf
 file /bin/sed ../build/userland/sed.elf
 file /bin/seq ../build/userland/seq.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
+file /bin/shutdown ../build/userland/shutdown.elf
+file /bin/poweroff ../build/userland/shutdown.elf
+file /bin/halt ../build/userland/shutdown.elf
+file /bin/reboot ../build/userland/shutdown.elf
 file /bin/sort ../build/userland/sort.elf
 file /bin/stat ../build/userland/stat.elf
 file /bin/stty ../build/userland/stty.elf
@@ -256,6 +260,10 @@ package rm 0.1.0 /bin/rm
 package sed 0.1.0 /bin/sed
 package seq 0.1.0 /bin/seq
 package sh 0.1.0 /bin/sh
+package shutdown 0.1.0 /bin/shutdown
+package shutdown 0.1.0 /bin/poweroff
+package shutdown 0.1.0 /bin/halt
+package shutdown 0.1.0 /bin/reboot
 package sig_demo 0.1.0 /bin/sig_demo
 package stty 0.1.0 /bin/stty
 package test 0.1.0 /bin/test

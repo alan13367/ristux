@@ -116,6 +116,7 @@ pub const NR_statfs: u64 = 137;
 pub const NR_fstatfs: u64 = 138;
 pub const NR_setrlimit: u64 = 160;
 pub const NR_mount: u64 = 165;
+pub const NR_reboot: u64 = 169;
 pub const NR_sethostname: u64 = 170;
 pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
@@ -396,6 +397,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_utime => linux_utime(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
+        NR_reboot => linux_reboot(a0 as u32, a1 as u32, a2 as u32),
         NR_sethostname => linux_sethostname(a0 as usize, a1 as usize),
         NR_gettid => Ok(process::current_pid().unwrap_or(0)),
         NR_futex => linux_futex(frame, a0 as usize, a1 as i32, a2 as i32, a3 as usize),
@@ -1924,6 +1926,12 @@ fn linux_sethostname(name_ptr: usize, len: usize) -> Result<u64, i64> {
     hostname.bytes[..len].copy_from_slice(name);
     hostname.len = len;
     Ok(0)
+}
+
+fn linux_reboot(magic1: u32, magic2: u32, cmd: u32) -> Result<u64, i64> {
+    crate::power::reboot_syscall(magic1, magic2, cmd)
+        .map(|_| 0)
+        .map_err(|_| EINVAL)
 }
 
 fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {

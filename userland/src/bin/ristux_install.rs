@@ -149,19 +149,30 @@ fn collect_config(options: &Options<'_>) -> Config {
 }
 
 fn run_auto(disk_fd: i32, disk_bytes: u64, yes: bool, config: &Config) -> bool {
-    if !yes {
-        inst::print(b"\nAuto mode will erase /dev/vda. Type 'yes' to continue: ");
-        let line = inst::read_line().unwrap_or_default();
-        if line != b"yes" {
-            inst::print(b"Cancelled.\n");
-            return false;
-        }
+    if !yes && !confirm_auto_erase() {
+        return false;
     }
     inst::print(b"Writing MBR partition table and GRUB BIOS image...\n");
     if !inst::auto_partition(disk_fd, disk_bytes) {
         return false;
     }
     install_root(config)
+}
+
+fn confirm_auto_erase() -> bool {
+    loop {
+        inst::print(b"\nAuto mode will erase /dev/vda. Type 'yes' to continue or 'no' to cancel: ");
+        let line = inst::read_line().unwrap_or_default();
+        match line.as_slice() {
+            b"yes" => return true,
+            b"no" | b"n" | b"q" | b"quit" | b"cancel" => {
+                inst::print(b"Cancelled.\n");
+                return false;
+            }
+            b"" => inst::print(b"Nothing erased. Please type 'yes' to continue or 'no' to cancel.\n"),
+            _ => inst::print(b"Please type exactly 'yes' to continue or 'no' to cancel.\n"),
+        }
+    }
 }
 
 fn run_manual(disk_fd: i32, disk_bytes: u64, config: &Config) -> bool {
