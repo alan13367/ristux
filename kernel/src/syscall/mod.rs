@@ -497,6 +497,9 @@ fn sys_waitpid_active(
         if let Some(status) = process::wait(parent, child) {
             return Some(status);
         }
+        if !process::has_child(parent, child) {
+            return None;
+        }
         process::block_current(process::BlockReason::WaitChild(child));
         yield_while_blocked(frame);
     }

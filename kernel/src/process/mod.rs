@@ -20,6 +20,7 @@ static CURRENT_PID: SpinLock<Option<Pid>> = SpinLock::new(None);
 
 pub type Pid = u64;
 
+const INIT_PID: Pid = 1;
 pub const MAX_FDS: usize = 256;
 pub const MAX_USER_ARGS: usize = 64;
 pub const MAX_USER_ENVS: usize = 64;
@@ -779,6 +780,7 @@ impl ProcessTable {
     fn exit(&mut self, pid: Pid, status: i32) -> Vec<Pid> {
         let was_current = current_pid() == Some(pid);
         let mut wake = Vec::new();
+        let parent_pid = self.get(pid).and_then(|p| p.parent);
         let waiters = {
             let process = match self.get_mut(pid) {
                 Some(p) => p,
@@ -803,23 +805,12 @@ impl ProcessTable {
             }
             core::mem::take(&mut process.waiters)
         };
+        self.reparent_children_to_init(pid, &mut wake);
         for waiter in waiters {
-            if let Some(parent) = self.get_mut(waiter) {
-                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
-                {
-                    parent.state = ProcessState::Ready;
-                    wake.push(waiter);
-                }
-            }
+            self.wake_waiter_for_child(waiter, pid, &mut wake);
         }
-        if let Some(parent) = self.get(pid).and_then(|p| p.parent) {
-            if let Some(parent_proc) = self.get_mut(parent) {
-                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
-                {
-                    parent_proc.state = ProcessState::Ready;
-                    wake.push(parent);
-                }
-            }
+        if let Some(parent) = parent_pid {
+            self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         wake
     }
@@ -831,24 +822,56 @@ impl ProcessTable {
             .map(|process| core::mem::take(&mut process.waiters))
             .unwrap_or_default();
         for waiter in waiters {
-            if let Some(parent) = self.get_mut(waiter) {
-                if matches!(parent.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
-                {
-                    parent.state = ProcessState::Ready;
-                    wake.push(waiter);
-                }
-            }
+            self.wake_waiter_for_child(waiter, pid, &mut wake);
         }
         if let Some(parent) = self.get(pid).and_then(|p| p.parent) {
-            if let Some(parent_proc) = self.get_mut(parent) {
-                if matches!(parent_proc.state, ProcessState::Blocked(BlockReason::WaitChild(child)) if child == pid || child == 0)
-                {
-                    parent_proc.state = ProcessState::Ready;
-                    wake.push(parent);
-                }
-            }
+            self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         wake
+    }
+
+    fn reparent_children_to_init(&mut self, old_parent: Pid, wake: &mut Vec<Pid>) {
+        if old_parent == INIT_PID {
+            return;
+        }
+        let init_exists = self.get(INIT_PID).is_some();
+        let new_parent = if init_exists { Some(INIT_PID) } else { None };
+        let mut adopted_waitable = Vec::new();
+        for process in &mut self.processes {
+            if process.parent != Some(old_parent) {
+                continue;
+            }
+            process.parent = new_parent;
+            if init_exists
+                && matches!(
+                    process.state,
+                    ProcessState::Zombie(_) | ProcessState::Stopped(_)
+                )
+            {
+                adopted_waitable.push(process.pid);
+            }
+        }
+        for child in adopted_waitable {
+            self.wake_waiter_for_child(INIT_PID, child, wake);
+        }
+    }
+
+    fn wake_waiter_for_child(&mut self, waiter: Pid, child: Pid, wake: &mut Vec<Pid>) {
+        let Some(process) = self.get_mut(waiter) else {
+            return;
+        };
+        let should_wake = matches!(
+            process.state,
+            ProcessState::Blocked(BlockReason::WaitChild(wait_child))
+                if wait_child == child || wait_child == 0
+        );
+        if !should_wake {
+            return;
+        }
+        process.state = ProcessState::Ready;
+        if !wake.contains(&waiter) {
+            wake.push(waiter);
+        }
     }
 
     fn stop(&mut self, pid: Pid, signal: u8) -> Option<Vec<Pid>> {
@@ -876,21 +899,20 @@ impl ProcessTable {
     }
 
     fn wait(&mut self, parent: Pid, child: Pid) -> Option<i32> {
-        let state = self.get(child).map(|p| p.state);
+        let process = self.get(child)?;
+        if process.parent != Some(parent) {
+            return None;
+        }
+        let state = process.state;
         match state {
-            Some(ProcessState::Zombie(status)) => {
-                if self.get(child).map(|p| p.parent) == Some(Some(parent)) {
-                    self.reap(child);
-                    Some(status)
-                } else {
-                    None
-                }
+            ProcessState::Zombie(status) => {
+                self.reap(child);
+                Some(status)
             }
-            Some(_) => {
+            _ => {
                 self.get_mut(parent)?.state = ProcessState::Blocked(BlockReason::WaitChild(child));
                 None
             }
-            None => None,
         }
     }
 
@@ -2141,8 +2163,23 @@ fn self_test() {
     if wait(parent, child) != Some(0) {
         panic!("wait self-test failed");
     }
+
+    let child = fork(parent).expect("reparent self-test child fork failed");
+    let grandchild = fork(child).expect("reparent self-test grandchild fork failed");
+    exit(child, 7);
+    if wait(parent, child) != Some(7) {
+        panic!("reparent self-test parent wait failed");
+    }
+    if get_parent(grandchild) != Some(parent) {
+        panic!("reparent self-test did not adopt orphan to init");
+    }
+    exit(grandchild, 9);
+    if wait(parent, grandchild) != Some(9) {
+        panic!("init reaping self-test failed");
+    }
+
     clear_current();
-    crate::println!("Process model self-test passed: fork exec wait.");
+    crate::println!("Process model self-test passed: fork exec wait reparent.");
 }
 
 pub fn with_table<T>(f: impl FnOnce(&mut ProcessTable) -> T) -> T {
