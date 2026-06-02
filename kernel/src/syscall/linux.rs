@@ -2568,9 +2568,9 @@ fn linux_mmap(
         if addr == 0 || addr % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
-        process::mmap_fixed(addr, length, UserProtection::ReadWrite).map_err(|_| EINVAL)?
+        process::mmap_fixed(addr, length, UserProtection::ReadWrite).map_err(map_mmap_error)?
     } else {
-        process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(|_| ENOMEM)?
+        process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(map_mmap_error)?
     };
     if let Some((vfs_fd, file_offset)) = file_mapping {
         if let Err(err) = copy_mmap_file_from_vfs_dup(vfs_fd, mapped, length, file_offset) {
@@ -3459,6 +3459,14 @@ fn map_shared_mapping_error(err: process::SharedMappingError) -> i64 {
     match err {
         process::SharedMappingError::OutOfMemory => ENOMEM,
         process::SharedMappingError::Vfs(err) => map_vfs_error(err),
+    }
+}
+
+fn map_mmap_error(err: process::MmapError) -> i64 {
+    match err {
+        process::MmapError::Invalid => EINVAL,
+        process::MmapError::OutOfMemory => ENOMEM,
+        process::MmapError::Vfs(err) => map_vfs_error(err),
     }
 }
 

@@ -1335,6 +1335,13 @@ pub enum SharedMappingError {
     Vfs(fs::vfs::VfsError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MmapError {
+    Invalid,
+    OutOfMemory,
+    Vfs(fs::vfs::VfsError),
+}
+
 const MAX_SHEBANG_DEPTH: usize = 4;
 
 fn trim_ascii_bytes(mut bytes: &[u8]) -> &[u8] {
@@ -3016,25 +3023,39 @@ pub fn brk(new_break: usize) -> Result<usize, ()> {
     .ok_or(())?
 }
 
-pub fn mmap_anonymous(hint: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
+fn map_paging_mmap_error(err: paging::PagingError) -> MmapError {
+    match err {
+        paging::PagingError::OutOfFrames | paging::PagingError::RefcountOverflow => {
+            MmapError::OutOfMemory
+        }
+        _ => MmapError::Invalid,
+    }
+}
+
+pub fn mmap_anonymous(
+    hint: usize,
+    len: usize,
+    protection: UserProtection,
+) -> Result<usize, MmapError> {
     with_current(|p| {
         p.address_space
             .map_anonymous(hint, len, protection)
-            .map_err(|_| ())
+            .map_err(map_paging_mmap_error)
     })
-    .ok_or(())?
+    .ok_or(MmapError::Invalid)?
 }
 
-pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result<usize, ()> {
+pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result<usize, MmapError> {
     with_current(|p| {
-        p.flush_shared_mappings_range(addr, len).map_err(|_| ())?;
+        p.flush_shared_mappings_range(addr, len)
+            .map_err(MmapError::Vfs)?;
         p.address_space
             .map_fixed(addr, len, protection)
-            .map_err(|_| ())?;
+            .map_err(map_paging_mmap_error)?;
         p.discard_shared_mappings_range(addr, len);
         Ok(addr)
     })
-    .ok_or(())?
+    .ok_or(MmapError::Invalid)?
 }
 
 pub fn munmap(addr: usize, len: usize) -> Result<(), ()> {
