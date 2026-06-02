@@ -70,6 +70,79 @@ static int check_wait_nohang(void) {
     return 0;
 }
 
+static void cleanup_wait_child(pid_t child) {
+    if (child <= 0) {
+        return;
+    }
+    kill(child, SIGCONT);
+    kill(child, SIGTERM);
+    waitpid(child, NULL, 0);
+}
+
+static int check_wait_process_groups(void) {
+    pid_t other_group = fork();
+    if (other_group < 0) {
+        puts("cc_session: wait pgrp fork failed");
+        return 1;
+    }
+    if (other_group == 0) {
+        for (;;) {
+            getpid();
+        }
+    }
+    if (setpgid(other_group, other_group) < 0) {
+        puts("cc_session: wait pgrp setpgid failed");
+        cleanup_wait_child(other_group);
+        return 1;
+    }
+    if (kill(other_group, SIGTSTP) < 0) {
+        puts("cc_session: wait pgrp stop failed");
+        cleanup_wait_child(other_group);
+        return 1;
+    }
+
+    int status = 0;
+    errno = 0;
+    if (waitpid(0, &status, WNOHANG | WUNTRACED) != -1 || errno != ECHILD) {
+        puts("cc_session: wait current pgrp failed");
+        cleanup_wait_child(other_group);
+        return 1;
+    }
+
+    if (waitpid(-other_group, &status, WUNTRACED) != other_group ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP) {
+        puts("cc_session: wait negative pgrp failed");
+        cleanup_wait_child(other_group);
+        return 1;
+    }
+    if (kill(-other_group, SIGCONT) < 0 ||
+        kill(-other_group, SIGTERM) < 0 ||
+        waitpid(-other_group, &status, 0) != other_group ||
+        !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        puts("cc_session: wait pgrp cleanup failed");
+        cleanup_wait_child(other_group);
+        return 1;
+    }
+
+    pid_t same_group = fork();
+    if (same_group < 0) {
+        puts("cc_session: wait same pgrp fork failed");
+        return 1;
+    }
+    if (same_group == 0) {
+        _exit(12);
+    }
+    if (waitpid(0, &status, 0) != same_group || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 12) {
+        puts("cc_session: wait same pgrp failed");
+        cleanup_wait_child(same_group);
+        return 1;
+    }
+
+    puts("cc_session: wait pgrp ok");
+    return 0;
+}
+
 static int check_wait_errors(void) {
     int status = 0;
     errno = 0;
@@ -120,6 +193,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_nohang() != 0) {
+        return 1;
+    }
+    if (check_wait_process_groups() != 0) {
         return 1;
     }
     if (check_wait_errors() != 0) {

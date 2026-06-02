@@ -317,7 +317,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             }
             Ok(0)
         }
-        NR_wait4 => linux_wait4(frame, a0 as u64, a1 as usize, a2 as i32),
+        NR_wait4 => linux_wait4(frame, a0 as i64, a1 as usize, a2 as i32),
         NR_uname => linux_uname(a0 as usize),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
         NR_fsync => linux_fsync(a0 as usize),
@@ -2062,7 +2062,7 @@ fn map_exec_error(err: process::ExecError) -> i64 {
 
 fn linux_wait4(
     frame: &mut SyscallInterruptFrame,
-    pid: u64,
+    pid: i64,
     status_ptr: usize,
     options: i32,
 ) -> Result<u64, i64> {
@@ -2072,15 +2072,11 @@ fn linux_wait4(
         return Err(EINVAL);
     }
     let parent = process::current_pid().ok_or(ESRCH)?;
-    let child = if pid == u64::MAX || pid as i64 == -1 {
-        0 // wait for any child
-    } else {
-        pid
-    };
+    let selector = wait_selector(pid)?;
     let include_stopped = options & WUNTRACED != 0;
 
     loop {
-        match process::peek_wait_any(parent, child, include_stopped) {
+        match process::peek_wait_any(parent, selector, include_stopped) {
             Some((waited_pid, status)) => {
                 let encoded = match status {
                     process::WaitStatus::Exited(status) => (status & 0xff) << 8,
@@ -2106,18 +2102,32 @@ fn linux_wait4(
                 return Ok(waited_pid as u64);
             }
             None => {
-                if !process::has_child(parent, child) {
+                if !process::has_wait_child(parent, selector) {
                     return Err(ECHILD);
                 }
                 if options & WNOHANG != 0 {
                     return Ok(0);
                 }
-                process::block_current(process::BlockReason::WaitChild(child));
+                process::block_current(process::BlockReason::WaitChild(0));
                 if !crate::syscall::yield_blocked(frame) {
                     return Err(CONTEXT_SWITCHED);
                 }
             }
         }
+    }
+}
+
+fn wait_selector(pid: i64) -> Result<process::WaitSelector, i64> {
+    if pid == -1 {
+        Ok(process::WaitSelector::Any)
+    } else if pid == 0 {
+        let pgrp = process::current_pgrp().ok_or(ESRCH)?;
+        Ok(process::WaitSelector::ProcessGroup(pgrp))
+    } else if pid < -1 {
+        let pgrp = pid.checked_neg().ok_or(EINVAL)? as process::Pid;
+        Ok(process::WaitSelector::ProcessGroup(pgrp))
+    } else {
+        Ok(process::WaitSelector::Pid(pid as process::Pid))
     }
 }
 

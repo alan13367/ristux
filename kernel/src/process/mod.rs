@@ -146,6 +146,26 @@ pub enum WaitStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WaitSelector {
+    Any,
+    Pid(Pid),
+    ProcessGroup(Pid),
+}
+
+impl WaitSelector {
+    fn matches(self, parent: Pid, process: &Process) -> bool {
+        if process.parent != Some(parent) {
+            return false;
+        }
+        match self {
+            Self::Any => true,
+            Self::Pid(pid) => process.pid == pid,
+            Self::ProcessGroup(pgrp) => process.pgrp == pgrp,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitReason {
     Exited(i32),
     Signaled(u8),
@@ -2666,18 +2686,21 @@ pub fn current_heap_break() -> usize {
     with_current_read(|p| p.address_space.heap_break).unwrap_or(0)
 }
 
-/// Find any waitable child matching `child` (0 = any). Zombies are only
-/// reported here; callers must reap them after userspace status copy succeeds.
-/// Stopped children remain waitable for a later `fg`.
-pub fn peek_wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(Pid, WaitStatus)> {
+/// Find any waitable child matching `selector`. Zombies are only reported here;
+/// callers must reap them after userspace status copy succeeds. Stopped
+/// children remain waitable for a later `fg`.
+pub fn peek_wait_any(
+    parent: Pid,
+    selector: WaitSelector,
+    include_stopped: bool,
+) -> Option<(Pid, WaitStatus)> {
     with_table(|table| {
         if include_stopped {
             let stopped = table
                 .processes
                 .iter()
                 .find(|p| {
-                    p.parent == Some(parent)
-                        && (child == 0 || p.pid == child)
+                    selector.matches(parent, p)
                         && !p.stop_reported
                         && matches!(p.state, ProcessState::Stopped(_))
                 })
@@ -2692,11 +2715,10 @@ pub fn peek_wait_any(parent: Pid, child: Pid, include_stopped: bool) -> Option<(
             }
         }
 
-        let zombie = table.processes.iter().find(|p| {
-            p.parent == Some(parent)
-                && (child == 0 || p.pid == child)
-                && matches!(p.state, ProcessState::Zombie(_))
-        });
+        let zombie = table
+            .processes
+            .iter()
+            .find(|p| selector.matches(parent, p) && matches!(p.state, ProcessState::Zombie(_)));
         if let Some(process) = zombie {
             let status = match process.state {
                 ProcessState::Zombie(reason) => match reason {
@@ -2737,13 +2759,22 @@ pub fn reap_waited_zombie(parent: Pid, child: Pid) -> bool {
     })
 }
 
-pub fn has_child(parent: Pid, child: Pid) -> bool {
+pub fn has_wait_child(parent: Pid, selector: WaitSelector) -> bool {
     with_table(|table| {
         table
             .processes
             .iter()
-            .any(|p| p.parent == Some(parent) && (child == 0 || p.pid == child))
+            .any(|process| selector.matches(parent, process))
     })
+}
+
+pub fn has_child(parent: Pid, child: Pid) -> bool {
+    let selector = if child == 0 {
+        WaitSelector::Any
+    } else {
+        WaitSelector::Pid(child)
+    };
+    has_wait_child(parent, selector)
 }
 
 pub fn brk(new_break: usize) -> Result<usize, ()> {
