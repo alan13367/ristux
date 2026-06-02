@@ -144,6 +144,7 @@ pub const NR_getrandom: u64 = 318;
 const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
 const EBADF: i64 = -9;
+const ECHILD: i64 = -10;
 const E2BIG: i64 = -7;
 const ENOEXEC: i64 = -8;
 const ENOMEM: i64 = -12;
@@ -2067,6 +2068,9 @@ fn linux_wait4(
 ) -> Result<u64, i64> {
     const WNOHANG: i32 = 1;
     const WUNTRACED: i32 = 2;
+    if options & !(WNOHANG | WUNTRACED) != 0 {
+        return Err(EINVAL);
+    }
     let parent = process::current_pid().ok_or(ESRCH)?;
     let child = if pid == u64::MAX || pid as i64 == -1 {
         0 // wait for any child
@@ -2092,7 +2096,7 @@ fn linux_wait4(
             }
             None => {
                 if !process::has_child(parent, child) {
-                    return Err(ESRCH);
+                    return Err(ECHILD);
                 }
                 if options & WNOHANG != 0 {
                     return Ok(0);

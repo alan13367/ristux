@@ -70,6 +70,22 @@ static int check_wait_nohang(void) {
     return 0;
 }
 
+static int check_wait_errors(void) {
+    int status = 0;
+    errno = 0;
+    if (waitpid(-1, &status, WNOHANG) != -1 || errno != ECHILD) {
+        puts("cc_session: wait nochild failed");
+        return 1;
+    }
+    errno = 0;
+    if (waitpid(-1, &status, 0x4000) != -1 || errno != EINVAL) {
+        puts("cc_session: wait invalid options failed");
+        return 1;
+    }
+    puts("cc_session: wait errors ok");
+    return 0;
+}
+
 int main(void) {
     if (check_group_leader_rejected() != 0) {
         return 1;
@@ -78,6 +94,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_nohang() != 0) {
+        return 1;
+    }
+    if (check_wait_errors() != 0) {
         return 1;
     }
     puts("cc_session: done");

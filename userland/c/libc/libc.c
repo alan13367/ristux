@@ -3145,6 +3145,7 @@ char *strerror(int errnum) {
     case EINTR: return "Interrupted system call";
     case EIO: return "Input/output error";
     case EBADF: return "Bad file descriptor";
+    case ECHILD: return "No child processes";
     case EAGAIN: return "Resource temporarily unavailable";
     case ENOMEM: return "Out of memory";
     case EACCES: return "Permission denied";

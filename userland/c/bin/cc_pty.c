@@ -25,12 +25,12 @@ static int expect_no_read_ready(int fd) {
     return poll(&pfd, 1, 0) == 0;
 }
 
-static int wait_for_exit(pid_t child, int expected_status) {
+static int wait_for_signal(pid_t child, int expected_signal) {
     int status = 0;
     for (int i = 0; i < 100; i++) {
         pid_t waited = waitpid(child, &status, WNOHANG);
         if (waited == child) {
-            return WIFEXITED(status) && WEXITSTATUS(status) == expected_status;
+            return WIFSIGNALED(status) && WTERMSIG(status) == expected_signal;
         }
         if (waited < 0) {
             return 0;
@@ -76,7 +76,7 @@ static int check_signal_chars(int master, int slave) {
         return 1;
     }
     char intr = 0x03;
-    if (write(master, &intr, 1) != 1 || !wait_for_exit(child, 128 + SIGINT)) {
+    if (write(master, &intr, 1) != 1 || !wait_for_signal(child, SIGINT)) {
         puts("cc_pty: signal char failed");
         kill(child, SIGKILL);
         waitpid(child, NULL, 0);
