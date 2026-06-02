@@ -33,6 +33,12 @@ static int wait_for_zero(pid_t child, const char *label) {
     return 0;
 }
 
+static void write_le64(unsigned char *out, unsigned long value) {
+    for (int i = 0; i < 8; i++) {
+        out[i] = (unsigned char)((value >> (i * 8)) & 0xff);
+    }
+}
+
 static int check_exec_vector_limits(void) {
     char *too_many_args[66];
     for (int i = 0; i < 65; i++) {
@@ -182,6 +188,76 @@ static int check_exec_invalid_image(void) {
     return 0;
 }
 
+static int check_exec_nonexec_entry(void) {
+    const char *source = "/bin/true";
+    const char *path = "/tmp/cc_proc_bad_entry";
+    static unsigned char image[65536];
+    ssize_t total = 0;
+
+    int in = open(source, O_RDONLY, 0);
+    if (in < 0) {
+        puts("cc_proc: exec bad entry source failed");
+        return 1;
+    }
+    for (;;) {
+        if ((size_t)total == sizeof(image)) {
+            close(in);
+            puts("cc_proc: exec bad entry too large");
+            return 1;
+        }
+        ssize_t n = read(in, image + total, sizeof(image) - (size_t)total);
+        if (n < 0) {
+            close(in);
+            puts("cc_proc: exec bad entry read failed");
+            return 1;
+        }
+        if (n == 0) {
+            break;
+        }
+        total += n;
+    }
+    close(in);
+    if (total < 64 || memcmp(image, "\177ELF", 4) != 0) {
+        puts("cc_proc: exec bad entry source invalid");
+        return 1;
+    }
+    write_le64(&image[24], 0);
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec bad entry create failed");
+        return 1;
+    }
+    if (write(fd, image, (size_t)total) != total) {
+        close(fd);
+        puts("cc_proc: exec bad entry write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(path, 0755) < 0) {
+        puts("cc_proc: exec bad entry chmod failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec bad entry fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == ENOEXEC ? 0 : 105);
+    }
+    if (wait_for_zero(child, "cc_proc: exec bad entry failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec bad entry ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -240,6 +316,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_invalid_image() != 0) {
+        return 1;
+    }
+    if (check_exec_nonexec_entry() != 0) {
         return 1;
     }
     puts("cc_proc: done");

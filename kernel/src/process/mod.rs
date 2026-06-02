@@ -571,6 +571,16 @@ impl Process {
             new_space.destroy();
             return Err(ExecError::OutOfMemory);
         }
+        let Ok(entry) = usize::try_from(checked_entry) else {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(ExecError::InvalidImage);
+        };
+        if !new_space.allows_user(entry, 1, UserAccess::Execute) {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(ExecError::InvalidImage);
+        }
 
         let stack = match Self::setup_stack_in_space(&mut new_space, args, env) {
             Ok(stack) => stack,
