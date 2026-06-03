@@ -161,6 +161,7 @@ const EISDIR: i64 = -21;
 const ENOSPC: i64 = -28;
 const EMLINK: i64 = -31;
 const EPIPE: i64 = -32;
+const ERANGE: i64 = -34;
 const ENAMETOOLONG: i64 = -36;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
@@ -2680,9 +2681,9 @@ fn linux_chdir(path_ptr: usize) -> Result<u64, i64> {
 
 fn linux_getcwd(buf: usize, size: usize) -> Result<u64, i64> {
     let cwd = process::user_cwd().map_err(map_cwd_error)?;
-    let needed = cwd.len() + 1;
+    let needed = cwd.len().checked_add(1).ok_or(ENOMEM)?;
     if needed > size {
-        return Err(EINVAL);
+        return Err(ERANGE);
     }
     let out = process::write_user_buffer(buf, needed).ok_or(EFAULT)?;
     out[..cwd.len()].copy_from_slice(cwd.as_bytes());

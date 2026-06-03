@@ -78,6 +78,17 @@ static int check_readlink_zero_length(const char *link_path) {
     return 0;
 }
 
+static int check_getcwd_too_small(void) {
+    char cwd[1];
+    errno = 0;
+    if (getcwd(cwd, sizeof(cwd)) != NULL || errno != ERANGE) {
+        printf("cc_path: getcwd range errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_path: getcwd range ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp//cc_path/./";
     const char *write_path = "/tmp//cc_path/./file";
@@ -138,6 +149,9 @@ int main(void) {
     puts("cc_path: symlink ok");
 
     if (check_readlink_zero_length(link_path) != 0) {
+        return 1;
+    }
+    if (check_getcwd_too_small() != 0) {
         return 1;
     }
 

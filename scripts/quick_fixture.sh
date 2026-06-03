@@ -340,6 +340,7 @@ case "$SCENARIO" in
       "^cc_path: normalized io ok$"
       "^cc_path: symlink ok$"
       "^cc_path: readlink zero ok$"
+      "^cc_path: getcwd range ok$"
       "^cc_path: fault ok$"
       "^cc_path: protected path fault ok$"
       "^cc_path: long path ok$"
