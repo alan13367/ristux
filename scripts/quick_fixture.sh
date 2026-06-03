@@ -306,6 +306,7 @@ case "$SCENARIO" in
       "^cc_mmap: prot none source ok$"
       "^cc_mmap: prot none ok$"
       "^cc_mmap: munmap ok$"
+      "^cc_mmap: nx enforcement ok$"
       "^cc_mmap: fixed ok$"
       "^cc_mmap: mprotect failure atomic ok$"
       "^cc_mmap: fixed failure preserves ok$"

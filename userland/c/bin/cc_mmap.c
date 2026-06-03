@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -380,6 +381,12 @@ int main(void) {
         return 1;
     }
     nx[0] = 0xc3; /* ret */
+    int nx_status = execute_probe_status(nx);
+    if (nx_status != 128 + SIGSEGV) {
+        printf("cc_mmap: nx execute status=%d\n", nx_status);
+        return 1;
+    }
+    puts("cc_mmap: nx enforcement ok");
     errno = 0;
     if (mprotect(nx, 4096, PROT_READ | PROT_WRITE | PROT_EXEC) != -1 ||
         errno != EINVAL) {
