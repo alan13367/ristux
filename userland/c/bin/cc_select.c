@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/select.h>
 #include <sys/wait.h>
@@ -12,6 +13,47 @@ static void on_select_signal(int signum) {
     if (signum == SIGUSR1) {
         saw_select_signal = 1;
     }
+}
+
+static int check_select_timeout_writeback(void) {
+    struct timeval timeout = {0, 1000};
+    errno = 0;
+    int ready = select(0, NULL, NULL, NULL, &timeout);
+    if (ready != 0 || timeout.tv_sec != 0 || timeout.tv_usec != 0) {
+        printf("cc_select: timeout writeback failed ready=%d errno=%d rem=%ld.%06ld\n",
+               ready, errno, (long)timeout.tv_sec, (long)timeout.tv_usec);
+        return 1;
+    }
+
+    char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("cc_select: timeout mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    struct timeval *protected_timeout = (struct timeval *)page;
+    protected_timeout->tv_sec = 0;
+    protected_timeout->tv_usec = 0;
+    if (mprotect(page, 4096, PROT_READ) < 0) {
+        printf("cc_select: timeout protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    ready = select(0, NULL, NULL, NULL, protected_timeout);
+    if (ready != -1 || errno != EFAULT) {
+        printf("cc_select: timeout readonly failed ready=%d errno=%d\n", ready, errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    if (mprotect(page, 4096, PROT_READ | PROT_WRITE) < 0 ||
+        munmap(page, 4096) < 0) {
+        puts("cc_select: timeout cleanup failed");
+        return 1;
+    }
+
+    puts("cc_select: timeout writeback ok");
+    return 0;
 }
 
 static int check_select_interrupted_by_signal(int read_fd) {
@@ -169,6 +211,10 @@ int main(void) {
         return 1;
     }
     puts("cc_select: invalid ok");
+
+    if (check_select_timeout_writeback() != 0) {
+        return 1;
+    }
 
     if (check_select_interrupted_by_signal(pipefd[0]) != 0) {
         return 1;

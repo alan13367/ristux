@@ -1434,6 +1434,12 @@ fn read_timespec_millis(addr: usize) -> Result<u64, i64> {
 const SELECT_FD_SETSIZE: usize = 4096;
 const SELECT_FDSET_BYTES: usize = SELECT_FD_SETSIZE / 8;
 
+#[derive(Clone, Copy)]
+struct SelectTimeout {
+    ptr: usize,
+    millis: u64,
+}
+
 struct SelectInterest {
     read_ptr: usize,
     write_ptr: usize,
@@ -1464,7 +1470,8 @@ fn linux_select(
     }
     let nfds = nfds as usize;
     let interest = read_select_interest(nfds, readfds, writefds, exceptfds)?;
-    let timeout_ms = read_select_timeout(timeout)?;
+    let select_timeout = read_select_timeout(timeout)?;
+    let timeout_ms = select_timeout.map(|timeout| timeout.millis);
     let wait_key = match timeout_ms {
         Some(timeout_ms) if timeout_ms > 0 => {
             Some(timed_wait_key(NR_select, nfds, readfds, writefds))
@@ -1483,6 +1490,7 @@ fn linux_select(
             if let Some(key) = wait_key {
                 process::clear_timed_wait(key);
             }
+            write_select_timeout_remaining(select_timeout, deadline_ms)?;
             write_select_result(&interest, &result)?;
             return Ok(result.count as u64);
         }
@@ -1490,10 +1498,19 @@ fn linux_select(
             if let Some(key) = wait_key {
                 process::clear_timed_wait(key);
             }
+            write_select_timeout_remaining(select_timeout, deadline_ms)?;
             write_select_result(&interest, &result)?;
             return Ok(0);
         }
-        block_for_io(frame, deadline_ms)?;
+        if let Err(err) = block_for_io(frame, deadline_ms) {
+            if err == EINTR {
+                if let Some(key) = wait_key {
+                    process::clear_timed_wait(key);
+                }
+                write_select_timeout_remaining(select_timeout, deadline_ms)?;
+            }
+            return Err(err);
+        }
     }
 }
 
@@ -1526,7 +1543,7 @@ fn read_fdset(ptr: usize, bytes: usize) -> Result<[u8; SELECT_FDSET_BYTES], i64>
     Ok(bits)
 }
 
-fn read_select_timeout(timeout: usize) -> Result<Option<u64>, i64> {
+fn read_select_timeout(timeout: usize) -> Result<Option<SelectTimeout>, i64> {
     if timeout == 0 {
         return Ok(None);
     }
@@ -1544,7 +1561,33 @@ fn read_select_timeout(timeout: usize) -> Result<Option<u64>, i64> {
         .checked_mul(1000)
         .and_then(|ms| ms.checked_add(((usec as u64) + 999) / 1000))
         .ok_or(EINVAL)?;
-    Ok(Some(millis))
+    process::write_user_buffer(timeout, 16).ok_or(EFAULT)?;
+    Ok(Some(SelectTimeout {
+        ptr: timeout,
+        millis,
+    }))
+}
+
+fn write_select_timeout_remaining(
+    timeout: Option<SelectTimeout>,
+    deadline_ms: Option<u64>,
+) -> Result<(), i64> {
+    let Some(timeout) = timeout else {
+        return Ok(());
+    };
+    let remaining_ms = deadline_ms
+        .map(|deadline| deadline.saturating_sub(crate::time::uptime_millis()))
+        .unwrap_or(0);
+    write_timeval_millis(timeout.ptr, remaining_ms)
+}
+
+fn write_timeval_millis(addr: usize, millis: u64) -> Result<(), i64> {
+    let sec = i64::try_from(millis / 1000).map_err(|_| EINVAL)?;
+    let usec = i64::try_from((millis % 1000) * 1000).map_err(|_| EINVAL)?;
+    let out = process::write_user_buffer(addr, 16).ok_or(EFAULT)?;
+    out[0..8].copy_from_slice(&sec.to_le_bytes());
+    out[8..16].copy_from_slice(&usec.to_le_bytes());
+    Ok(())
 }
 
 fn linux_select_once(nfds: usize, interest: &SelectInterest) -> Result<SelectResult, i64> {
