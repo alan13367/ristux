@@ -175,6 +175,27 @@ static int check_invalid_raw_handler(void) {
     return 0;
 }
 
+static int check_sigaction_fault_preserves_handler(void) {
+    saw_usr2 = 0;
+    if (signal(SIGUSR2, on_usr2) == SIG_ERR) {
+        puts("cc_signal: sigaction fault setup failed");
+        return 1;
+    }
+    void *kernel_handler = (void *)SIG_IGN;
+    errno = 0;
+    if (syscall(SYS_rt_sigaction, SIGUSR2, (long)&kernel_handler, 1, 0, 0, 0) != -1 ||
+        errno != EFAULT) {
+        puts("cc_signal: sigaction fault failed");
+        return 1;
+    }
+    if (raise(SIGUSR2) != 0 || !saw_usr2) {
+        puts("cc_signal: sigaction fault changed handler");
+        return 1;
+    }
+    puts("cc_signal: sigaction fault ok");
+    return 0;
+}
+
 static int check_sigstop_uncatchable(void) {
     errno = 0;
     if (signal(SIGSTOP, SIG_IGN) != SIG_ERR || errno != EINVAL) {
@@ -442,6 +463,7 @@ int main(void) {
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
         check_invalid_raw_handler() != 0 ||
+        check_sigaction_fault_preserves_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||
         check_sigstop_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||

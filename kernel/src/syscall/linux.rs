@@ -3395,6 +3395,9 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         raw.copy_from_slice(bytes);
         Some(usize::from_le_bytes(raw))
     };
+    if oldact != 0 {
+        process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+    }
     let old = if let Some(handler) = new_handler {
         process::set_signal_handler(pid, signum, handler).ok_or(EINVAL)?
     } else {
