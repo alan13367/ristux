@@ -4,8 +4,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+static volatile int saw_wait_signal;
+
+static void on_wait_signal(int signum) {
+    if (signum == SIGUSR1) {
+        saw_wait_signal = 1;
+    }
+}
 
 static int check_group_leader_rejected(void) {
     if (setpgid(0, 0) < 0) {
@@ -585,6 +595,98 @@ static int check_wait_bad_status_pointer(void) {
     return 0;
 }
 
+static int check_wait_interrupted_by_signal(void) {
+    pid_t parent = getpid();
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_session: wait interrupt child fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        struct timespec delay = {5, 0};
+        nanosleep(&delay, NULL);
+        _exit(42);
+    }
+
+    saw_wait_signal = 0;
+    struct sigaction old_action;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = on_wait_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGUSR1, &action, &old_action) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_session: wait interrupt handler failed");
+        return 1;
+    }
+
+    pid_t signaler = fork();
+    if (signaler < 0) {
+        sigaction(SIGUSR1, &old_action, NULL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_session: wait interrupt signaler fork failed");
+        return 1;
+    }
+    if (signaler == 0) {
+        for (int i = 0; i < 200; i++) {
+            if (kill(parent, SIGUSR1) < 0) {
+                _exit(3);
+            }
+            syscall(SYS_sched_yield);
+        }
+        _exit(0);
+    }
+
+    int status = 0;
+    errno = 0;
+    if (waitpid(child, &status, 0) != -1 || errno != EINTR || !saw_wait_signal) {
+        sigaction(SIGUSR1, &old_action, NULL);
+        kill(signaler, SIGKILL);
+        kill(child, SIGKILL);
+        waitpid(signaler, NULL, 0);
+        waitpid(child, NULL, 0);
+        printf("cc_session: wait interrupt failed errno=%d saw=%d\n",
+               errno, saw_wait_signal);
+        return 1;
+    }
+
+    kill(signaler, SIGTERM);
+    int signaler_status = 0;
+    pid_t waited_signaler;
+    do {
+        errno = 0;
+        waited_signaler = waitpid(signaler, &signaler_status, 0);
+    } while (waited_signaler == -1 && errno == EINTR);
+    if (waited_signaler != signaler ||
+        !((WIFEXITED(signaler_status) && WEXITSTATUS(signaler_status) == 0) ||
+          (WIFSIGNALED(signaler_status) && WTERMSIG(signaler_status) == SIGTERM))) {
+        sigaction(SIGUSR1, &old_action, NULL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_session: wait interrupt signaler failed");
+        return 1;
+    }
+
+    if (kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child ||
+        !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        sigaction(SIGUSR1, &old_action, NULL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_session: wait interrupt cleanup failed");
+        return 1;
+    }
+
+    if (sigaction(SIGUSR1, &old_action, NULL) < 0) {
+        puts("cc_session: wait interrupt restore failed");
+        return 1;
+    }
+    puts("cc_session: wait interrupt ok");
+    return 0;
+}
+
 static int check_wait_rusage(void) {
     pid_t child = fork();
     if (child < 0) {
@@ -665,6 +767,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_bad_status_pointer() != 0) {
+        return 1;
+    }
+    if (check_wait_interrupted_by_signal() != 0) {
         return 1;
     }
     if (check_wait_rusage() != 0) {
