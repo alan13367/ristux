@@ -161,6 +161,10 @@ impl AddressSpace {
         if let Some(index) = self.user_protections.iter().position(|(v, _)| *v == virt) {
             self.user_protections.swap_remove(index);
         }
+        // The PTE is gone and the local TLB has been flushed. Wait for remote
+        // CPUs to drop stale user translations before releasing the final
+        // frame reference so the frame cannot be reused under an old TLB entry.
+        crate::smp::send_tlb_shootdown();
         if let Some(index) = self.user_mappings.iter().position(|(v, _)| *v == virt) {
             let (_, frame) = self.user_mappings.remove(index);
             if frame.start != phys {
@@ -174,7 +178,6 @@ impl AddressSpace {
                 frame_allocator::free_frame(Frame { start: phys });
             }
         }
-        crate::smp::send_tlb_shootdown();
         Ok(())
     }
 
