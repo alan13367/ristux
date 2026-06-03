@@ -150,6 +150,31 @@ static int check_sigkill_uncatchable(void) {
     return 0;
 }
 
+static int check_invalid_raw_handler(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: invalid handler fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        void *kernel_handler = (void *)0x1234;
+        if (syscall(SYS_rt_sigaction, SIGUSR1, (long)&kernel_handler, 0, 0, 0, 0) < 0) {
+            _exit(2);
+        }
+        raise(SIGUSR1);
+        _exit(42);
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGUSR1) {
+        puts("cc_signal: invalid handler delivery failed");
+        return 1;
+    }
+    puts("cc_signal: invalid handler ok");
+    return 0;
+}
+
 static int check_sigstop_uncatchable(void) {
     errno = 0;
     if (signal(SIGSTOP, SIG_IGN) != SIG_ERR || errno != EINVAL) {
@@ -416,6 +441,7 @@ int main(void) {
     if (check_additional_signals() != 0 ||
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
+        check_invalid_raw_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||
         check_sigstop_uncatchable() != 0 ||
         check_stop_wait_once() != 0 ||

@@ -468,9 +468,13 @@ fn deliver_signal_handler(
     signum: usize,
     handler: usize,
 ) -> Result<(), i64> {
+    if !process::is_user_executable(handler, 1) {
+        return Err(EFAULT);
+    }
     let saved = saved_from_linux_frame(frame);
     let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
-    let new_rsp = (frame.rsp as usize).saturating_sub(frame_size) & !0xfusize;
+    let rsp = usize::try_from(frame.rsp).map_err(|_| EFAULT)?;
+    let new_rsp = rsp.checked_sub(frame_size).ok_or(EFAULT)? & !0xfusize;
     let out = process::write_user_buffer(new_rsp, frame_size).ok_or(EFAULT)?;
     let bytes = unsafe {
         core::slice::from_raw_parts(
