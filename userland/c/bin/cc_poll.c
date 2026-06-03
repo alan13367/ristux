@@ -169,6 +169,13 @@ int main(void) {
     }
     puts("cc_poll: invalid ok");
 
+    errno = 0;
+    if (poll((struct pollfd *)~0UL, 1, 0) != -1 || errno != EFAULT) {
+        printf("cc_poll: fault errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_poll: fault ok");
+
     if (check_poll_interrupted_by_signal(pipefd[0]) != 0) {
         return 1;
     }

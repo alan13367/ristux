@@ -1133,9 +1133,10 @@ fn linux_poll(
     if nfds > MAX_POLL_FDS {
         return Err(EINVAL);
     }
+    let fds_len = nfds.checked_mul(POLLFD_SIZE).ok_or(EINVAL)?;
     if nfds > 0 {
-        process::read_user(fds_ptr, nfds * POLLFD_SIZE).ok_or(EFAULT)?;
-        process::write_user_buffer(fds_ptr, nfds * POLLFD_SIZE).ok_or(EFAULT)?;
+        process::read_user(fds_ptr, fds_len).ok_or(EFAULT)?;
+        process::write_user_buffer(fds_ptr, fds_len).ok_or(EFAULT)?;
     }
 
     let wait_key = if timeout_ms > 0 {
@@ -1173,7 +1174,8 @@ fn linux_poll_once(fds_ptr: usize, nfds: usize) -> Result<usize, i64> {
     const POLLFD_SIZE: usize = 8;
     let mut ready_count = 0usize;
     for index in 0..nfds {
-        let entry = fds_ptr + index * POLLFD_SIZE;
+        let offset = index.checked_mul(POLLFD_SIZE).ok_or(EFAULT)?;
+        let entry = fds_ptr.checked_add(offset).ok_or(EFAULT)?;
         let bytes = process::read_user(entry, POLLFD_SIZE).ok_or(EFAULT)?;
         let fd = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let events = i16::from_le_bytes([bytes[4], bytes[5]]);
@@ -1182,7 +1184,8 @@ fn linux_poll_once(fds_ptr: usize, nfds: usize) -> Result<usize, i64> {
         } else {
             poll_revents(fd as usize, events)
         };
-        let out = process::write_user_buffer(entry + 6, 2).ok_or(EFAULT)?;
+        let revents_ptr = entry.checked_add(6).ok_or(EFAULT)?;
+        let out = process::write_user_buffer(revents_ptr, 2).ok_or(EFAULT)?;
         out.copy_from_slice(&revents.to_le_bytes());
         if revents != 0 {
             ready_count += 1;

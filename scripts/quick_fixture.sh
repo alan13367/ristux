@@ -349,6 +349,7 @@ case "$SCENARIO" in
       "^cc_poll: stdin ok$"
       "^cc_poll: pipe ok$"
       "^cc_poll: invalid ok$"
+      "^cc_poll: fault ok$"
       "^cc_poll: signal interrupt ok$"
       "^cc_poll: done$"
       "TTY canonical line ready: cc_select"
