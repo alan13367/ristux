@@ -8,6 +8,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static const char elf_rodata_probe[] = "rodata-permission-probe";
+static int elf_data_probe_value = 7;
+static unsigned char elf_data_exec_probe[] = { 0xc3 };
+
+static void elf_text_probe(void) {
+}
+
 static int contains(const char *haystack, const char *needle) {
     size_t needle_len = strlen(needle);
     if (needle_len == 0) {
@@ -32,6 +39,53 @@ static int wait_for_zero(pid_t child, const char *label) {
         puts(label);
         return 1;
     }
+    return 0;
+}
+
+static int check_elf_runtime_permissions(void) {
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    int null_fd = open("/dev/null", O_WRONLY, 0);
+    if (zero_fd < 0 || null_fd < 0) {
+        close(zero_fd);
+        close(null_fd);
+        puts("cc_proc: elf permission device open failed");
+        return 1;
+    }
+
+    elf_data_probe_value = 42;
+    elf_data_exec_probe[0] = 0xc3;
+    if (elf_data_probe_value != 42 || elf_data_exec_probe[0] != 0xc3) {
+        close(zero_fd);
+        close(null_fd);
+        puts("cc_proc: elf data write failed");
+        return 1;
+    }
+    if (write(null_fd, elf_rodata_probe, 1) != 1 ||
+        write(null_fd, (const void *)elf_text_probe, 1) != 1 ||
+        write(null_fd, &elf_data_probe_value, 1) != 1) {
+        close(zero_fd);
+        close(null_fd);
+        puts("cc_proc: elf readable segments failed");
+        return 1;
+    }
+
+    errno = 0;
+    if (read(zero_fd, (void *)elf_rodata_probe, 1) != -1 || errno != EFAULT) {
+        close(zero_fd);
+        close(null_fd);
+        printf("cc_proc: elf rodata write errno=%d\n", errno);
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, (void *)elf_text_probe, 1) != -1 || errno != EFAULT) {
+        close(zero_fd);
+        close(null_fd);
+        printf("cc_proc: elf text write errno=%d\n", errno);
+        return 1;
+    }
+    close(zero_fd);
+    close(null_fd);
+    puts("cc_proc: elf permissions ok");
     return 0;
 }
 
@@ -629,6 +683,9 @@ int main(void) {
     puts("cc_proc: pipe exec ok");
     puts("cc_proc: wait ok");
     if (check_clone_sigchld() != 0) {
+        return 1;
+    }
+    if (check_elf_runtime_permissions() != 0) {
         return 1;
     }
     if (check_exec_vector_limits() != 0) {
