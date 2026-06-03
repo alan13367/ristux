@@ -176,6 +176,10 @@ pub fn poll(fd: usize) -> Result<vfs::PollReady, vfs::VfsError> {
     vfs::poll(fd)
 }
 
+pub fn fd_rights(fd: usize) -> Result<vfs::FdRights, vfs::VfsError> {
+    vfs::fd_rights(fd)
+}
+
 pub fn is_tty_fd(fd: usize) -> bool {
     vfs::is_tty_fd(fd)
 }

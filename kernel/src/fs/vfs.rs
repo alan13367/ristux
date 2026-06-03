@@ -184,6 +184,12 @@ pub struct PollReady {
     pub hangup: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FdRights {
+    pub read: bool,
+    pub write: bool,
+}
+
 impl PipeState {
     fn new(capacity: usize) -> Self {
         Self {
@@ -2286,6 +2292,31 @@ impl Vfs {
         }
     }
 
+    fn fd_rights(&self, fd: usize) -> Result<FdRights, VfsError> {
+        let handle = self
+            .open_files
+            .get(fd)
+            .and_then(|h| h.as_ref())
+            .ok_or(VfsError::BadFd)?;
+        match handle {
+            OpenHandle::Node { rights, .. }
+            | OpenHandle::PtyMaster { rights, .. }
+            | OpenHandle::PtySlave { rights, .. }
+            | OpenHandle::Ext2File { rights, .. } => Ok(FdRights {
+                read: rights.read,
+                write: rights.write,
+            }),
+            OpenHandle::Ext2Dir { .. } | OpenHandle::PipeRead { .. } => Ok(FdRights {
+                read: true,
+                write: false,
+            }),
+            OpenHandle::PipeWrite { .. } => Ok(FdRights {
+                read: false,
+                write: true,
+            }),
+        }
+    }
+
     fn is_tty_fd(&self, fd: usize) -> bool {
         let Some(Some(handle)) = self.open_files.get(fd) else {
             return false;
@@ -2847,6 +2878,12 @@ pub fn poll(fd: usize) -> Result<PollReady, VfsError> {
     let guard = VFS.lock();
     let vfs = guard.as_ref().expect("VFS used before initialization");
     vfs.poll(fd)
+}
+
+pub fn fd_rights(fd: usize) -> Result<FdRights, VfsError> {
+    let guard = VFS.lock();
+    let vfs = guard.as_ref().expect("VFS used before initialization");
+    vfs.fd_rights(fd)
 }
 
 pub fn is_tty_fd(fd: usize) -> bool {

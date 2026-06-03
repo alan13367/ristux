@@ -2667,6 +2667,13 @@ fn linux_mmap(
         let file_offset = offset as usize;
         validate_mmap_file_range(file_offset, length)?;
         let vfs_fd = process::user_vfs_fd(fd as usize).ok_or(EBADF)?;
+        let rights = fs::fd_rights(vfs_fd).map_err(map_vfs_error)?;
+        if !rights.read {
+            return Err(EACCES);
+        }
+        if shared && prot & PROT_WRITE != 0 && !rights.write {
+            return Err(EACCES);
+        }
         Some((vfs_fd, file_offset))
     };
 

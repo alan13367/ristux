@@ -394,6 +394,23 @@ int main(void) {
     }
     puts("cc_mmap: shared ok");
 
+    fd = open("/tmp/cc_mmap_shared.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared readonly reopen failed");
+        return 1;
+    }
+    errno = 0;
+    char *readonly_shared = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (readonly_shared != MAP_FAILED || errno != EACCES) {
+        if (readonly_shared != MAP_FAILED) {
+            munmap(readonly_shared, 4096);
+        }
+        printf("cc_mmap: shared write rights failed errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_mmap: shared write rights ok");
+
     fd = open("/tmp/cc_mmap_shared.txt", O_RDWR, 0);
     if (fd < 0) {
         puts("cc_mmap: shared range open failed");
