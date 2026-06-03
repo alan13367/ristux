@@ -2623,13 +2623,18 @@ fn linux_mmap(
         Some((vfs_fd, file_offset))
     };
 
+    let initial_protection = if file_mapping.is_some() {
+        UserProtection::ReadWrite
+    } else {
+        protection
+    };
     let mapped = if flags & MAP_FIXED != 0 {
         if addr == 0 || addr % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
-        process::mmap_fixed(addr, length, UserProtection::ReadWrite).map_err(map_mmap_error)?
+        process::mmap_fixed(addr, length, initial_protection).map_err(map_mmap_error)?
     } else {
-        process::mmap_anonymous(addr, length, UserProtection::ReadWrite).map_err(map_mmap_error)?
+        process::mmap_anonymous(addr, length, initial_protection).map_err(map_mmap_error)?
     };
     if let Some((vfs_fd, file_offset)) = file_mapping {
         if let Err(err) = copy_mmap_file_from_vfs_dup(vfs_fd, mapped, length, file_offset) {
@@ -2646,7 +2651,7 @@ fn linux_mmap(
             }
         }
     }
-    if protection != UserProtection::ReadWrite {
+    if initial_protection != protection {
         if let Err(err) = process::mprotect(mapped, length, protection) {
             let _ = process::munmap(mapped, length);
             return Err(map_mmap_error(err));

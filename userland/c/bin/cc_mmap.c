@@ -146,6 +146,21 @@ int main(void) {
         puts("cc_mmap: zero open failed");
         return 1;
     }
+    int null_fd = open("/dev/null", O_WRONLY, 0);
+    if (null_fd < 0) {
+        puts("cc_mmap: null open failed");
+        close(zero_fd);
+        return 1;
+    }
+    errno = 0;
+    if (write(null_fd, anon + 4096, 1) != 1) {
+        printf("cc_mmap: readonly source errno=%d\n", errno);
+        close(null_fd);
+        close(zero_fd);
+        return 1;
+    }
+    close(null_fd);
+    puts("cc_mmap: readonly source ok");
     errno = 0;
     if (read(zero_fd, anon + 4096, 1) != -1 || errno != EFAULT) {
         printf("cc_mmap: readonly read target errno=%d\n", errno);
@@ -164,6 +179,21 @@ int main(void) {
         puts("cc_mmap: zero reopen failed");
         return 1;
     }
+    null_fd = open("/dev/null", O_WRONLY, 0);
+    if (null_fd < 0) {
+        puts("cc_mmap: null reopen failed");
+        close(zero_fd);
+        return 1;
+    }
+    errno = 0;
+    if (write(null_fd, anon + 4096, 1) != -1 || errno != EFAULT) {
+        printf("cc_mmap: prot none source errno=%d\n", errno);
+        close(null_fd);
+        close(zero_fd);
+        return 1;
+    }
+    close(null_fd);
+    puts("cc_mmap: prot none source ok");
     errno = 0;
     if (read(zero_fd, anon + 4096, 1) != -1 || errno != EFAULT) {
         printf("cc_mmap: prot none read target errno=%d\n", errno);
