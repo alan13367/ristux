@@ -24,7 +24,11 @@ EXPECTS=()
 case "$SCENARIO" in
   boot)
     COMMANDS=("true")
-    EXPECTS=("Kernel self-test harness passed" "TTY canonical line ready: true")
+    EXPECTS=(
+      "Kernel self-test harness passed"
+      "1 userspace CPU(s)"
+      "TTY canonical line ready: true"
+    )
     ;;
   autocomplete)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"

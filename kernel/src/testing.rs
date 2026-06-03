@@ -71,6 +71,14 @@ fn run() -> KernelResult<()> {
     ensure(smp.shared_lock_audit_passed, "SMP lock audit did not pass")?;
     let sched = crate::sched::stats();
     ensure(sched.cpu_count >= 1, "per-CPU scheduler did not initialize")?;
+    ensure(
+        sched.user_cpu_count == 1,
+        "userspace scheduler is not constrained to one CPU",
+    )?;
+    ensure(
+        sched.non_bootstrap_dispatches == 0,
+        "userspace scheduler dispatched on an application processor",
+    )?;
     let root_device = crate::boot_config::value("root").unwrap_or("/dev/vda");
     if crate::boot_config::contains("ristux.mode=install") || root_device != "/dev/vda" {
         crate::println!("Partitioned disk mode: skipping whole-disk ext2 self-tests.");
@@ -182,10 +190,12 @@ fn run() -> KernelResult<()> {
         smp.scheduled_tasks
     );
     crate::println!(
-        "Scheduler stats: {} CPU(s), {} queued, {} dispatch(es), {} idle loop(s)",
+        "Scheduler stats: {} CPU(s), {} userspace CPU(s), {} queued, {} dispatch(es), {} AP dispatch(es), {} idle loop(s)",
         sched.cpu_count,
+        sched.user_cpu_count,
         sched.queued,
         sched.dispatches,
+        sched.non_bootstrap_dispatches,
         sched.idle_loops
     );
 

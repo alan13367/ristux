@@ -14,6 +14,8 @@ use crate::{
 const MAX_CPUS: usize = 8;
 const RESCHEDULE_IPI_VECTOR: u32 = 0xf1;
 const SYSCALL_STACK_SIZE: usize = 4096 * 16;
+const USER_DISPATCH_CPU_ID: usize = 0;
+const USER_SCHEDULER_CPU_COUNT: usize = 1;
 
 const IA32_GS_BASE: u32 = 0xc000_0101;
 const IA32_KERNEL_GS_BASE: u32 = 0xc000_0102;
@@ -142,7 +144,7 @@ pub fn enqueue(pid: Pid) {
     // User process context switching is driven by `yield_from_syscall`, which
     // currently only resumes frames on the bootstrap CPU. AP idle loops may
     // observe run queues for diagnostics, but they do not enter user mode.
-    let target = 0;
+    let target = USER_DISPATCH_CPU_ID;
     with_cpu_state_mut(target, |state| {
         if !state.run_queue.contains(&pid) {
             state.run_queue.push(pid);
@@ -167,6 +169,13 @@ pub fn on_fork(child: Pid) {
 
 pub fn dispatch_local() -> Option<Pid> {
     let cpu_id = current_cpu_id();
+    if cpu_id != USER_DISPATCH_CPU_ID {
+        with_cpu_state_mut(cpu_id, |state| {
+            state.reschedule_pending = false;
+            state.current_pid = None;
+        });
+        return None;
+    }
     with_cpu_state_mut(cpu_id, |state| {
         state.reschedule_pending = false;
         while !state.run_queue.is_empty() {
@@ -278,17 +287,23 @@ pub fn stats() -> SchedStats {
     let count = CPU_COUNT.load(Ordering::Acquire);
     let mut queued = 0usize;
     let mut dispatches = 0u64;
+    let mut non_bootstrap_dispatches = 0u64;
     let mut idle_loops = 0u64;
     for index in 0..count {
         let guard = CPU_SCHED[index].lock.lock();
         queued += guard.run_queue.len();
         dispatches += guard.dispatches;
+        if index != USER_DISPATCH_CPU_ID {
+            non_bootstrap_dispatches += guard.dispatches;
+        }
         idle_loops += guard.idle_loops;
     }
     SchedStats {
         cpu_count: count,
+        user_cpu_count: USER_SCHEDULER_CPU_COUNT,
         queued,
         dispatches,
+        non_bootstrap_dispatches,
         idle_loops,
     }
 }
@@ -296,8 +311,10 @@ pub fn stats() -> SchedStats {
 #[derive(Clone, Copy, Debug)]
 pub struct SchedStats {
     pub cpu_count: usize,
+    pub user_cpu_count: usize,
     pub queued: usize,
     pub dispatches: u64,
+    pub non_bootstrap_dispatches: u64,
     pub idle_loops: u64,
 }
 
