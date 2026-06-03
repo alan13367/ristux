@@ -3463,26 +3463,35 @@ fn linux_rt_sigprocmask(
     if sigset_size != core::mem::size_of::<u64>() {
         return Err(EINVAL);
     }
+    if set_ptr != 0 && !matches!(how, SIG_BLOCK | SIG_UNBLOCK | SIG_SETMASK) {
+        return Err(EINVAL);
+    }
     let old = process::current_signal_mask().ok_or(ESRCH)?;
+    let new_mask = if set_ptr == 0 {
+        None
+    } else {
+        let bytes = process::read_user(set_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
+        let mut raw = [0u8; core::mem::size_of::<u64>()];
+        raw.copy_from_slice(bytes);
+        let set = u64::from_le_bytes(raw);
+        Some(match how {
+            SIG_BLOCK => old | set,
+            SIG_UNBLOCK => old & !set,
+            SIG_SETMASK => set,
+            _ => return Err(EINVAL),
+        })
+    };
+    if oldset_ptr != 0 {
+        process::write_user_buffer(oldset_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
+    }
+    if let Some(new_mask) = new_mask {
+        process::set_current_signal_mask(new_mask).ok_or(ESRCH)?;
+    }
     if oldset_ptr != 0 {
         let out =
             process::write_user_buffer(oldset_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
         out.copy_from_slice(&old.to_le_bytes());
     }
-    if set_ptr == 0 {
-        return Ok(0);
-    }
-    let bytes = process::read_user(set_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
-    let mut raw = [0u8; core::mem::size_of::<u64>()];
-    raw.copy_from_slice(bytes);
-    let set = u64::from_le_bytes(raw);
-    match how {
-        SIG_BLOCK => process::set_current_signal_mask(old | set),
-        SIG_UNBLOCK => process::set_current_signal_mask(old & !set),
-        SIG_SETMASK => process::set_current_signal_mask(set),
-        _ => return Err(EINVAL),
-    }
-    .ok_or(ESRCH)?;
     Ok(0)
 }
 

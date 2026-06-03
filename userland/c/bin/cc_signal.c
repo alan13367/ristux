@@ -124,6 +124,32 @@ static int check_ignored_signals(void) {
     return 0;
 }
 
+static int check_sigprocmask_fault_preserves_oldset(void) {
+    sigset_t set;
+    sigemptyset(&set);
+
+    sigset_t oldset = 0x5a5a5a5aUL;
+    errno = 0;
+    if (syscall(SYS_rt_sigprocmask, 99, (long)&set, (long)&oldset,
+                sizeof(sigset_t), 0, 0) != -1 ||
+        errno != EINVAL || oldset != 0x5a5a5a5aUL) {
+        puts("cc_signal: sigprocmask invalid how failed");
+        return 1;
+    }
+
+    oldset = 0xa5a5a5a5UL;
+    errno = 0;
+    if (syscall(SYS_rt_sigprocmask, SIG_BLOCK, (long)~0UL, (long)&oldset,
+                sizeof(sigset_t), 0, 0) != -1 ||
+        errno != EFAULT || oldset != 0xa5a5a5a5UL) {
+        puts("cc_signal: sigprocmask fault failed");
+        return 1;
+    }
+
+    puts("cc_signal: sigprocmask fault ok");
+    return 0;
+}
+
 static int check_sigkill_uncatchable(void) {
     errno = 0;
     if (signal(SIGKILL, SIG_IGN) != SIG_ERR || errno != EINVAL) {
@@ -399,6 +425,9 @@ int main(void) {
         return 1;
     }
     puts("cc_signal: mask ok");
+    if (check_sigprocmask_fault_preserves_oldset() != 0) {
+        return 1;
+    }
     errno = 0;
     if (kill(getpid(), 256) != -1 || errno != EINVAL) {
         puts("cc_signal: invalid signal failed");

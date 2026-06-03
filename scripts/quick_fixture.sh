@@ -261,6 +261,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_signal"
       "^cc_signal: handler$"
       "^cc_signal: mask ok$"
+      "^cc_signal: sigprocmask fault ok$"
       "^cc_signal: extra signals ok$"
       "^cc_signal: sigchld ok$"
       "^cc_signal: external handler ok$"
