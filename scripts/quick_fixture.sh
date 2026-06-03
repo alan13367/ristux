@@ -583,6 +583,7 @@ case "$SCENARIO" in
   socket)
     COMMANDS=("cc_socket")
     EXPECTS=(
+      "cc_socket: addr fault ok"
       "cc_socket: udp loopback ok"
       "cc_socket: options ok"
       "cc_socket: done"

@@ -117,6 +117,14 @@ int main(void) {
 
     struct sockaddr_in peer;
     socklen_t peer_len = sizeof(peer);
+    errno = 0;
+    if (recvfrom(server, buf, sizeof(buf), 0, (struct sockaddr *)&peer, NULL) != -1 ||
+        errno != EFAULT) {
+        puts("cc_socket: recvfrom addrlen fault failed");
+        return 1;
+    }
+    puts("cc_socket: addr fault ok");
+
     ssize_t n = recvfrom(server, buf, sizeof(buf), 0,
                          (struct sockaddr *)&peer, &peer_len);
     if (n != 4 || memcmp(buf, "dns?", 4) != 0 ||

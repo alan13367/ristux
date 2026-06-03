@@ -1586,6 +1586,9 @@ fn linux_accept(
     .map_err(map_socket_error)?;
     let timeout_ms = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
         .map_err(map_socket_error)?;
+    if addr != 0 {
+        validate_sockaddr_out(addr, addrlen_ptr)?;
+    }
     let wait_key =
         timeout_ms.map(|timeout_ms| timed_wait_key(NR_accept, fd, handle, timeout_ms as usize));
     let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
@@ -1678,6 +1681,9 @@ fn linux_recvfrom(
     let nonblocking = nonblocking || flags & MSG_DONTWAIT != 0;
     let timeout_ms = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
         .map_err(map_socket_error)?;
+    if addr != 0 {
+        validate_sockaddr_out(addr, addrlen_ptr)?;
+    }
     let wait_key =
         timeout_ms.map(|timeout_ms| timed_wait_key(NR_recvfrom, fd, handle, timeout_ms as usize));
     let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
@@ -1948,7 +1954,21 @@ fn read_sockaddr_in(ptr: usize, len: usize) -> Result<([u8; 4], u16), i64> {
     Ok((ip, port))
 }
 
+fn validate_sockaddr_out(ptr: usize, len_ptr: usize) -> Result<(), i64> {
+    if ptr == 0 || len_ptr == 0 {
+        return Err(EFAULT);
+    }
+    let len = read_socklen(len_ptr)?;
+    if len < 16 {
+        return Err(EINVAL);
+    }
+    process::write_user_buffer(ptr, 16).ok_or(EFAULT)?;
+    process::write_user_buffer(len_ptr, 4).ok_or(EFAULT)?;
+    Ok(())
+}
+
 fn write_sockaddr_in(ptr: usize, len_ptr: usize, ip: [u8; 4], port: u16) -> Result<(), i64> {
+    validate_sockaddr_out(ptr, len_ptr)?;
     let out = process::write_user_buffer(ptr, 16).ok_or(EFAULT)?;
     for byte in out.iter_mut() {
         *byte = 0;
@@ -1956,10 +1976,8 @@ fn write_sockaddr_in(ptr: usize, len_ptr: usize, ip: [u8; 4], port: u16) -> Resu
     out[0..2].copy_from_slice(&(AF_INET as u16).to_le_bytes());
     out[2..4].copy_from_slice(&port.to_be_bytes());
     out[4..8].copy_from_slice(&ip);
-    if len_ptr != 0 {
-        let len_out = process::write_user_buffer(len_ptr, 4).ok_or(EFAULT)?;
-        len_out.copy_from_slice(&(16u32).to_le_bytes());
-    }
+    let len_out = process::write_user_buffer(len_ptr, 4).ok_or(EFAULT)?;
+    len_out.copy_from_slice(&(16u32).to_le_bytes());
     Ok(())
 }
 
