@@ -182,6 +182,9 @@ const AT_EACCESS: i32 = 0x200;
 const AT_REMOVEDIR: i32 = 0x200;
 const AT_SYMLINK_FOLLOW: i32 = 0x400;
 const AT_EMPTY_PATH: i32 = 0x1000;
+const ACCESS_R_OK: i32 = 4;
+const ACCESS_W_OK: i32 = 2;
+const ACCESS_X_OK: i32 = 1;
 const SOCKET_FD_BASE: usize = 1000;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
@@ -1675,6 +1678,7 @@ fn linux_close(fd: usize) -> Result<u64, i64> {
 }
 
 fn linux_access(path_ptr: usize, mode: i32) -> Result<u64, i64> {
+    validate_access_mode(mode)?;
     let path = read_user_cstr_errno(path_ptr)?;
     linux_access_path(&path, mode)
 }
@@ -1683,18 +1687,26 @@ fn linux_faccessat(dirfd: i32, path_ptr: usize, mode: i32, flags: i32) -> Result
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EACCESS | AT_EMPTY_PATH) != 0 {
         return Err(EINVAL);
     }
+    validate_access_mode(mode)?;
     let path = resolve_at_path(dirfd, path_ptr, flags)?;
     linux_access_path(&path, mode)
 }
 
-fn linux_access_path(path: &str, mode: i32) -> Result<u64, i64> {
-    const R_OK: i32 = 4;
-    const W_OK: i32 = 2;
-    const X_OK: i32 = 1;
-    if mode & !(R_OK | W_OK | X_OK) != 0 {
+fn validate_access_mode(mode: i32) -> Result<(), i64> {
+    if mode & !(ACCESS_R_OK | ACCESS_W_OK | ACCESS_X_OK) != 0 {
         return Err(EINVAL);
     }
-    process::user_access(path, mode & R_OK != 0, mode & W_OK != 0, mode & X_OK != 0)
+    Ok(())
+}
+
+fn linux_access_path(path: &str, mode: i32) -> Result<u64, i64> {
+    validate_access_mode(mode)?;
+    process::user_access(
+        path,
+        mode & ACCESS_R_OK != 0,
+        mode & ACCESS_W_OK != 0,
+        mode & ACCESS_X_OK != 0,
+    )
         .map(|_| 0)
         .map_err(map_vfs_error)
 }

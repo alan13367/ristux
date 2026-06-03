@@ -253,6 +253,7 @@ case "$SCENARIO" in
     COMMANDS=("cc_fs")
     EXPECTS=(
       "cc_fs: access ok"
+      "cc_fs: access mode errors ok"
       "cc_fs: getdents ok"
       "cc_fs: getdents partial ok"
       "cc_fs: fd metadata syscalls ok"

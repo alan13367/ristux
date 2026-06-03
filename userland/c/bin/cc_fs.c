@@ -98,6 +98,21 @@ static int check_getdents_short_buffer(void) {
     return 0;
 }
 
+static int check_access_mode_errors(void) {
+    errno = 0;
+    if (access((const char *)~0UL, 8) != -1 || errno != EINVAL) {
+        printf("cc_fs: access mode errno=%d\n", errno);
+        return 1;
+    }
+    errno = 0;
+    if (faccessat(AT_FDCWD, (const char *)~0UL, 8, 0) != -1 || errno != EINVAL) {
+        printf("cc_fs: faccessat mode errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_fs: access mode errors ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp/cc_fs";
     const char *path = "/tmp/cc_fs/item";
@@ -127,6 +142,9 @@ int main(void) {
         return 1;
     }
     puts("cc_fs: access ok");
+    if (check_access_mode_errors() != 0) {
+        return 1;
+    }
 
     fd = open(dir, O_RDONLY, 0);
     if (fd < 0) {
