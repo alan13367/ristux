@@ -134,6 +134,7 @@ case "$SCENARIO" in
       "cc_futex: wake waiter ok"
       "cc_futex: nanosleep invalid ok"
       "cc_futex: nanosleep overflow ok"
+      "cc_futex: nanosleep yield ok"
       "cc_futex: done"
     )
     ;;
@@ -224,6 +225,7 @@ case "$SCENARIO" in
       "^cc_futex: wake waiter ok$"
       "^cc_futex: nanosleep invalid ok$"
       "^cc_futex: nanosleep overflow ok$"
+      "^cc_futex: nanosleep yield ok$"
       "^cc_futex: done$"
       "TTY canonical line ready: cc_cow"
       "^cc_cow: fork storm ok$"

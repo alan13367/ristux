@@ -272,7 +272,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
         NR_dup3 => linux_dup3(a0 as usize, a1 as usize, a2 as u32),
-        NR_nanosleep => linux_nanosleep(a0 as usize, a1 as usize),
+        NR_nanosleep => linux_nanosleep(frame, a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
         NR_connect => linux_connect(a0 as usize, a1 as usize, a2 as usize),
@@ -2947,26 +2947,28 @@ fn linux_getrandom(buf: usize, len: usize, flags: u32) -> Result<u64, i64> {
     Ok(len as u64)
 }
 
-fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {
+fn linux_nanosleep(frame: &mut SyscallInterruptFrame, req: usize, rem: usize) -> Result<u64, i64> {
     let bytes = process::read_user(req, 16).ok_or(EFAULT)?;
     let sec = i64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EFAULT)?);
     let nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
     if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
         return Err(EINVAL);
     }
-    let hz = crate::config::PIT_TARGET_HZ as u64;
-    let sec_ticks = (sec as u64).checked_mul(hz).ok_or(EINVAL)?;
-    let nsec_ticks = (nsec as u64)
-        .checked_mul(hz)
-        .and_then(|ticks| ticks.checked_add(999_999_999))
-        .map(|ticks| ticks / 1_000_000_000)
+    let timeout_ms = (sec as u64)
+        .checked_mul(1000)
+        .and_then(|ms| ms.checked_add((nsec as u64).checked_add(999_999)? / 1_000_000))
         .ok_or(EINVAL)?;
-    let sleep_ticks = sec_ticks.checked_add(nsec_ticks).ok_or(EINVAL)?;
-    let target = crate::time::monotonic_ticks()
-        .checked_add(sleep_ticks)
-        .ok_or(EINVAL)?;
-    while crate::time::monotonic_ticks() < target {
-        core::hint::spin_loop();
+    if timeout_ms != 0 {
+        let key = timed_wait_key(NR_nanosleep, req, rem, timeout_ms as usize);
+        loop {
+            let now_ms = crate::time::uptime_millis();
+            let deadline_ms = timed_wait_deadline_errno(key, timeout_ms, now_ms)?;
+            if now_ms >= deadline_ms {
+                process::clear_timed_wait(key);
+                break;
+            }
+            block_for_io(frame, Some(deadline_ms))?;
+        }
     }
     if rem != 0 {
         let out = process::write_user_buffer(rem, 16).ok_or(EFAULT)?;

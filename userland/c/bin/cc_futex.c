@@ -198,6 +198,64 @@ static int check_nanosleep_overflow(void) {
     return 0;
 }
 
+static int check_nanosleep_yields(void) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_futex: nanosleep yield pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        puts("cc_futex: nanosleep yield fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(2);
+        }
+        struct timespec req = { 0, 200000000L };
+        errno = 0;
+        if (nanosleep(&req, NULL) != 0) {
+            _exit(3);
+        }
+        close(pipefd[1]);
+        _exit(0);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: nanosleep yield ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    int status = 0;
+    errno = 0;
+    if (waitpid(child, &status, WNOHANG) != 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: nanosleep yield wait failed");
+        return 1;
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_futex: nanosleep yield child failed");
+        return 1;
+    }
+
+    puts("cc_futex: nanosleep yield ok");
+    return 0;
+}
+
 int main(void) {
     if (check_gettid() != 0 ||
         check_wait_mismatch() != 0 ||
@@ -206,7 +264,8 @@ int main(void) {
         check_wake_empty() != 0 ||
         check_wake_waiter() != 0 ||
         check_nanosleep_invalid() != 0 ||
-        check_nanosleep_overflow() != 0) {
+        check_nanosleep_overflow() != 0 ||
+        check_nanosleep_yields() != 0) {
         return 1;
     }
     puts("cc_futex: done");
