@@ -3371,7 +3371,10 @@ fn linux_getdents64(fd: usize, dirp: usize, count: usize) -> Result<u64, i64> {
         let entry = &entries[index];
         let reclen = align8(DIRENT64_HEADER + entry.name.len() + 1);
         if reclen > count {
-            return Err(EINVAL);
+            if written == 0 {
+                return Err(EINVAL);
+            }
+            break;
         }
         if written + reclen > count {
             break;

@@ -25,6 +25,79 @@ static int dir_contains(int fd, const char *needle) {
     return 0;
 }
 
+static int touch_file(const char *path) {
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (fd < 0) {
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
+static int check_getdents_short_buffer(void) {
+    const char *dir = "/tmp/cc_fs_partial";
+    const char *short_path = "/tmp/cc_fs_partial/a";
+    char long_name[72];
+    char long_path[96];
+    memset(long_name, 'z', sizeof(long_name) - 1);
+    long_name[sizeof(long_name) - 1] = '\0';
+    strcpy(long_path, dir);
+    strcat(long_path, "/");
+    strcat(long_path, long_name);
+
+    if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
+        puts("cc_fs: getdents partial mkdir failed");
+        return 1;
+    }
+    if (touch_file(short_path) < 0 || touch_file(long_path) < 0) {
+        puts("cc_fs: getdents partial create failed");
+        return 1;
+    }
+
+    int fd = open(dir, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_fs: getdents partial open failed");
+        return 1;
+    }
+
+    char small[24];
+    memset(small, 0, sizeof(small));
+    errno = 0;
+    int nread = getdents64(fd, (struct linux_dirent64 *)small, sizeof(small));
+    if (nread != (int)sizeof(small)) {
+        close(fd);
+        printf("cc_fs: getdents partial first errno=%d nread=%d\n", errno, nread);
+        return 1;
+    }
+    struct linux_dirent64 *first = (struct linux_dirent64 *)small;
+    if (first->d_reclen != sizeof(small) || strcmp(first->d_name, "a") != 0) {
+        close(fd);
+        puts("cc_fs: getdents partial first entry failed");
+        return 1;
+    }
+
+    char large[256];
+    memset(large, 0, sizeof(large));
+    nread = getdents64(fd, (struct linux_dirent64 *)large, sizeof(large));
+    close(fd);
+    if (nread <= 0) {
+        printf("cc_fs: getdents partial second nread=%d\n", nread);
+        return 1;
+    }
+    struct linux_dirent64 *second = (struct linux_dirent64 *)large;
+    if (strcmp(second->d_name, long_name) != 0) {
+        puts("cc_fs: getdents partial resume failed");
+        return 1;
+    }
+
+    if (unlink(short_path) != 0 || unlink(long_path) != 0 || rmdir(dir) != 0) {
+        puts("cc_fs: getdents partial cleanup failed");
+        return 1;
+    }
+    puts("cc_fs: getdents partial ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp/cc_fs";
     const char *path = "/tmp/cc_fs/item";
@@ -67,6 +140,9 @@ int main(void) {
         return 1;
     }
     puts("cc_fs: getdents ok");
+    if (check_getdents_short_buffer() != 0) {
+        return 1;
+    }
 
     int dirfd = open(dir, O_RDONLY, 0);
     if (dirfd < 0) {
