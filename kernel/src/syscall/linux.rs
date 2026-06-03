@@ -1766,11 +1766,18 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
         table.socket(crate::net::socket::SocketDomain::Inet, socket_type)
     })
     .ok_or(EINVAL)?;
-    if process::install_socket_handle(handle).is_err() {
+    if let Err(err) = process::install_socket_handle(handle) {
         let _ = crate::net::socket::with_sockets(|table| table.close(handle));
-        return Err(ENOMEM);
+        return Err(map_socket_install_error(err));
     }
     Ok((SOCKET_FD_BASE + handle) as u64)
+}
+
+fn map_socket_install_error(err: process::SocketInstallError) -> i64 {
+    match err {
+        process::SocketInstallError::TooManyOpenFiles => EMFILE,
+        process::SocketInstallError::OutOfMemory => ENOMEM,
+    }
 }
 
 fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
@@ -1827,9 +1834,9 @@ fn linux_accept(
                 if let Some(key) = wait_key {
                     process::clear_timed_wait(key);
                 }
-                if process::install_socket_handle(accepted).is_err() {
+                if let Err(err) = process::install_socket_handle(accepted) {
                     let _ = crate::net::socket::with_sockets(|table| table.close(accepted));
-                    return Err(ENOMEM);
+                    return Err(map_socket_install_error(err));
                 }
                 if addr != 0 {
                     let peer = peer.unwrap_or(crate::net::socket::SocketAddress {

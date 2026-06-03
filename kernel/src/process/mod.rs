@@ -658,6 +658,10 @@ impl Process {
 
     fn add_socket_handle(&mut self, handle: usize) -> Result<(), SocketInstallError> {
         if !self.socket_handles.contains(&handle) {
+            let open_count = self.fds.len().saturating_add(self.socket_handles.len());
+            if open_count >= self.fd_limit() {
+                return Err(SocketInstallError::TooManyOpenFiles);
+            }
             self.socket_handles
                 .try_reserve_exact(1)
                 .map_err(|_| SocketInstallError::OutOfMemory)?;
@@ -1787,6 +1791,7 @@ pub enum FdInstallError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SocketInstallError {
+    TooManyOpenFiles,
     OutOfMemory,
 }
 

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -126,6 +127,18 @@ static int check_fd_exhaustion(void) {
         close_fd_list(fds, count);
         return 1;
     }
+
+    errno = 0;
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock != -1 || errno != EMFILE) {
+        if (sock >= 0) {
+            close(sock);
+        }
+        puts("cc_fcntl: socket exhaustion failed");
+        close_fd_list(fds, count);
+        return 1;
+    }
+    puts("cc_fcntl: socket exhaustion ok");
 
     close(fds[--count]);
     int pipefd[2] = { -1, -1 };

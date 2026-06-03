@@ -290,6 +290,7 @@ case "$SCENARIO" in
       "^cc_fcntl: broken pipe errno ok$"
       "^cc_fcntl: pipe2 dup3 ok$"
       "^cc_fcntl: cloexec ok$"
+      "^cc_fcntl: socket exhaustion ok$"
       "^cc_fcntl: fd exhaustion ok$"
       "^cc_fcntl: done$"
       "TTY canonical line ready: cc_futex"
