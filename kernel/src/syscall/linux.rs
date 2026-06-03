@@ -343,8 +343,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_readlink => linux_readlink(a0 as usize, a1 as usize, a2 as usize),
         NR_chmod => linux_chmod(a0 as usize, a1 as u16),
         NR_fchmod => linux_fchmod(a0 as usize, a1 as u16),
-        NR_chown => linux_chown(a0 as usize, a1 as u32, a2 as u32),
-        NR_fchown => linux_fchown(a0 as usize, a1 as u32, a2 as u32),
+        NR_chown => linux_chown(a0 as usize, a1, a2),
+        NR_fchown => linux_fchown(a0 as usize, a1, a2),
         NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
         NR_getrlimit => linux_getrlimit(a0 as i32, a1 as usize),
         NR_getrusage => linux_getrusage(a0 as i32, a1 as usize),
@@ -380,7 +380,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
         NR_openat => linux_openat(a0 as i32, a1 as usize, a2 as i32, a3 as u32),
         NR_mkdirat => linux_mkdirat(a0 as i32, a1 as usize, a2 as u16),
-        NR_fchownat => linux_fchownat(a0 as i32, a1 as usize, a2 as u32, a3 as u32, a4 as i32),
+        NR_fchownat => linux_fchownat(a0 as i32, a1 as usize, a2, a3, a4 as i32),
         NR_futimesat => linux_futimesat(a0 as i32, a1 as usize, a2 as usize),
         NR_newfstatat => linux_newfstatat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
         NR_unlinkat => linux_unlinkat(a0 as i32, a1 as usize, a2 as i32),
@@ -2508,28 +2508,42 @@ fn linux_fchmodat(dirfd: i32, path_ptr: usize, mode: u16) -> Result<u64, i64> {
         .map_err(map_vfs_error)
 }
 
-fn linux_chown(path_ptr: usize, uid: u32, gid: u32) -> Result<u64, i64> {
+fn linux_chown(path_ptr: usize, uid: u64, gid: u64) -> Result<u64, i64> {
+    let uid = parse_chown_id_arg(uid)?;
+    let gid = parse_chown_id_arg(gid)?;
     let path = read_user_cstr_errno(path_ptr)?;
     process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)
 }
 
-fn linux_fchown(fd: usize, uid: u32, gid: u32) -> Result<u64, i64> {
+fn linux_fchown(fd: usize, uid: u64, gid: u64) -> Result<u64, i64> {
+    let uid = parse_chown_id_arg(uid)?;
+    let gid = parse_chown_id_arg(gid)?;
     let path = fs::fd_path(process::user_vfs_fd(fd).ok_or(EBADF)?).map_err(map_vfs_error)?;
     process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)
 }
 
-fn linux_fchownat(dirfd: i32, path_ptr: usize, uid: u32, gid: u32, flags: i32) -> Result<u64, i64> {
+fn linux_fchownat(dirfd: i32, path_ptr: usize, uid: u64, gid: u64, flags: i32) -> Result<u64, i64> {
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(EINVAL);
     }
+    let uid = parse_chown_id_arg(uid)?;
+    let gid = parse_chown_id_arg(gid)?;
     let path = resolve_at_path(dirfd, path_ptr, flags)?;
     process::user_chown(&path, uid, gid)
         .map(|_| 0)
         .map_err(map_vfs_error)
+}
+
+fn parse_chown_id_arg(id: u64) -> Result<u32, i64> {
+    if id == u64::MAX {
+        Ok(u32::MAX)
+    } else {
+        parse_id_arg(id)
+    }
 }
 
 fn linux_unlink(path_ptr: usize) -> Result<u64, i64> {

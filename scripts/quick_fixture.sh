@@ -344,6 +344,7 @@ case "$SCENARIO" in
       "^cc_links: symlink ok$"
       "^cc_links: rename ok$"
       "^cc_links: chown ok$"
+      "^cc_links: chown overflow ok$"
       "^cc_links: rmdir ok$"
       "^cc_links: done$"
       "TTY canonical line ready: cc_proc"

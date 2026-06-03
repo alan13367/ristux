@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 int main(void) {
@@ -100,6 +101,40 @@ int main(void) {
         return 1;
     }
     puts("cc_links: chown ok");
+
+    unsigned long too_large = 0x100000000UL;
+    errno = 0;
+    if (syscall(SYS_chown, (long)moved, (long)too_large, 1000L, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_links: chown overflow failed");
+        return 1;
+    }
+    fd = open(moved, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_links: fchown overflow open failed");
+        return 1;
+    }
+    errno = 0;
+    int fchown_overflow_ok =
+        syscall(SYS_fchown, fd, 1000L, (long)too_large, 0, 0, 0) == -1 &&
+        errno == EINVAL;
+    close(fd);
+    if (!fchown_overflow_ok) {
+        puts("cc_links: fchown overflow failed");
+        return 1;
+    }
+    errno = 0;
+    if (syscall(SYS_fchownat, AT_FDCWD, (long)moved, (long)too_large,
+                1000L, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_links: fchownat overflow failed");
+        return 1;
+    }
+    if (stat(moved, &st) != 0 || st.st_uid != 1000 || st.st_gid != 1000) {
+        puts("cc_links: chown overflow changed owner");
+        return 1;
+    }
+    puts("cc_links: chown overflow ok");
 
     if (unlink(symlink_path) != 0 || unlink(hard) != 0 || unlink(moved) != 0 || rmdir(dir) != 0) {
         puts("cc_links: cleanup failed");
