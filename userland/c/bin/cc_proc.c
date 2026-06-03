@@ -313,7 +313,7 @@ static int check_exec_unterminated_path(void) {
         char *argv[] = { path, NULL };
         char *envp[] = { NULL };
         execve(path, argv, envp);
-        _exit(errno == EFAULT ? 0 : 102);
+        _exit(errno == ENAMETOOLONG ? 0 : 102);
     }
     if (wait_for_zero(child, "cc_proc: exec unterminated path failed") != 0) {
         return 1;

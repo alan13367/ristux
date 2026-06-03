@@ -41,6 +41,32 @@ static int check_protected_path_fault(const char *path) {
     return 0;
 }
 
+static int check_path_too_long(void) {
+    char *path = mmap(NULL, 8192, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (path == MAP_FAILED) {
+        puts("cc_path: long path mmap failed");
+        return 1;
+    }
+    memset(path, 'a', 4096);
+    path[4096] = '\0';
+
+    errno = 0;
+    int fd = open(path, O_RDONLY, 0);
+    int ok = fd == -1 && errno == ENAMETOOLONG;
+    if (fd >= 0) {
+        close(fd);
+    }
+    munmap(path, 8192);
+    if (!ok) {
+        printf("cc_path: long path errno=%d\n", errno);
+        return 1;
+    }
+
+    puts("cc_path: long path ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp//cc_path/./";
     const char *write_path = "/tmp//cc_path/./file";
@@ -108,6 +134,9 @@ int main(void) {
     puts("cc_path: fault ok");
 
     if (check_protected_path_fault(read_path) != 0) {
+        return 1;
+    }
+    if (check_path_too_long() != 0) {
         return 1;
     }
 

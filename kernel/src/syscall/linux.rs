@@ -161,6 +161,7 @@ const EISDIR: i64 = -21;
 const ENOSPC: i64 = -28;
 const EMLINK: i64 = -31;
 const EPIPE: i64 = -32;
+const ENAMETOOLONG: i64 = -36;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
@@ -3785,12 +3786,14 @@ fn linux_rt_sigpending(set_ptr: usize, sigset_size: usize) -> Result<u64, i64> {
 enum UserStringError {
     BadAddress,
     OutOfMemory,
+    TooLong,
 }
 
 fn map_user_string_error(err: UserStringError) -> i64 {
     match err {
         UserStringError::BadAddress => EFAULT,
         UserStringError::OutOfMemory => ENOMEM,
+        UserStringError::TooLong => ENAMETOOLONG,
     }
 }
 
@@ -3815,7 +3818,7 @@ fn read_user_cstr(addr: usize) -> Result<alloc::string::String, UserStringError>
         buf.push(slice[0]);
         offset += 1;
     }
-    Err(UserStringError::BadAddress)
+    Err(UserStringError::TooLong)
 }
 
 fn resolve_at_path(dirfd: i32, path_ptr: usize, flags: i32) -> Result<alloc::string::String, i64> {
@@ -3950,13 +3953,14 @@ enum UserVectorError {
     BadAddress,
     OutOfMemory,
     TooManyEntries,
+    StringTooLong,
 }
 
 fn map_user_vector_error(err: UserVectorError) -> i64 {
     match err {
         UserVectorError::BadAddress => EFAULT,
         UserVectorError::OutOfMemory => ENOMEM,
-        UserVectorError::TooManyEntries => E2BIG,
+        UserVectorError::TooManyEntries | UserVectorError::StringTooLong => E2BIG,
     }
 }
 
@@ -3964,6 +3968,7 @@ fn map_user_string_to_vector_error(err: UserStringError) -> UserVectorError {
     match err {
         UserStringError::BadAddress => UserVectorError::BadAddress,
         UserStringError::OutOfMemory => UserVectorError::OutOfMemory,
+        UserStringError::TooLong => UserVectorError::StringTooLong,
     }
 }
 
