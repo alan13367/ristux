@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static volatile int saw_signal;
@@ -51,6 +52,10 @@ static void on_cont(int signum) {
     if (signum == SIGCONT) {
         saw_cont = 1;
     }
+}
+
+static void on_blocked_usr1(int signum) {
+    _exit(signum == SIGUSR1 ? 0 : 5);
 }
 
 static int check_stop_wait_once(void) {
@@ -569,6 +574,81 @@ static int check_external_signal_handler(void) {
     return 0;
 }
 
+static int check_signal_wakes_blocked_syscall(void) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_signal: blocked wake pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        puts("cc_signal: blocked wake fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        if (signal(SIGUSR1, on_blocked_usr1) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(pipefd[1]);
+
+        struct timespec req = { 5, 0 };
+        nanosleep(&req, NULL);
+        _exit(4);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: blocked wake ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    struct timespec delay = { 0, 20000000L };
+    nanosleep(&delay, NULL);
+
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: blocked wake send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_signal: blocked wake ok");
+                return 0;
+            }
+            puts("cc_signal: blocked wake child failed");
+            return 1;
+        }
+        if (waited < 0) {
+            puts("cc_signal: blocked wake wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    puts("cc_signal: blocked wake timeout failed");
+    return 1;
+}
+
 static int check_sigchld_disposition(void) {
     if (raise(SIGCHLD) != 0 || saw_sigchld) {
         puts("cc_signal: sigchld default failed");
@@ -819,6 +899,7 @@ int main(int argc, char **argv) {
     if (check_additional_signals() != 0 ||
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
+        check_signal_wakes_blocked_syscall() != 0 ||
         check_invalid_raw_handler() != 0 ||
         check_sigaction_fault_preserves_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||

@@ -1409,9 +1409,18 @@ impl ProcessTable {
             return Some(WakeList::new());
         }
         if should_queue_signal(process, status, current) {
-            let process = self.get_mut(pid)?;
-            queue_signal(process, status);
-            Some(WakeList::new())
+            let mut wake = WakeList::new();
+            {
+                let process = self.get_mut(pid)?;
+                queue_signal(process, status);
+                if next_deliverable_pending_signal(process).is_some()
+                    && matches!(process.state, ProcessState::Blocked(_))
+                {
+                    process.state = ProcessState::Ready;
+                    wake.push_unique(pid);
+                }
+            }
+            Some(wake)
         } else {
             if let Some(signal) = stop_signal_from_status(status) {
                 return self.stop(pid, signal);
