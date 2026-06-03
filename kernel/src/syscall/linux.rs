@@ -2263,6 +2263,9 @@ fn linux_setresuid(ruid: u64, euid: u64, suid: u64) -> Result<u64, i64> {
 
 fn linux_getresuid(ruid_ptr: usize, euid_ptr: usize, suid_ptr: usize) -> Result<u64, i64> {
     let (ruid, euid, suid) = process::current_resuid().ok_or(ESRCH)?;
+    validate_user_u32_out(ruid_ptr)?;
+    validate_user_u32_out(euid_ptr)?;
+    validate_user_u32_out(suid_ptr)?;
     write_user_u32(ruid_ptr, ruid)?;
     write_user_u32(euid_ptr, euid)?;
     write_user_u32(suid_ptr, suid)?;
@@ -2293,10 +2296,19 @@ fn linux_setresgid(rgid: u64, egid: u64, sgid: u64) -> Result<u64, i64> {
 
 fn linux_getresgid(rgid_ptr: usize, egid_ptr: usize, sgid_ptr: usize) -> Result<u64, i64> {
     let (rgid, egid, sgid) = process::current_resgid().ok_or(ESRCH)?;
+    validate_user_u32_out(rgid_ptr)?;
+    validate_user_u32_out(egid_ptr)?;
+    validate_user_u32_out(sgid_ptr)?;
     write_user_u32(rgid_ptr, rgid)?;
     write_user_u32(egid_ptr, egid)?;
     write_user_u32(sgid_ptr, sgid)?;
     Ok(0)
+}
+
+fn validate_user_u32_out(ptr: usize) -> Result<(), i64> {
+    process::write_user_buffer(ptr, core::mem::size_of::<u32>())
+        .map(|_| ())
+        .ok_or(EFAULT)
 }
 
 fn write_user_u32(ptr: usize, value: u32) -> Result<(), i64> {

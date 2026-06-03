@@ -5,6 +5,29 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+static int check_res_id_faults(void) {
+    uid_t ruid = 77;
+    uid_t suid = 88;
+    errno = 0;
+    if (getresuid(&ruid, (uid_t *)~0UL, &suid) != -1 || errno != EFAULT ||
+        ruid != 77 || suid != 88) {
+        puts("cc_cred: getresuid fault failed");
+        return 1;
+    }
+
+    gid_t rgid = 77;
+    gid_t sgid = 88;
+    errno = 0;
+    if (getresgid(&rgid, (gid_t *)~0UL, &sgid) != -1 || errno != EFAULT ||
+        rgid != 77 || sgid != 88) {
+        puts("cc_cred: getresgid fault failed");
+        return 1;
+    }
+
+    puts("cc_cred: res id faults ok");
+    return 0;
+}
+
 int main(void) {
     uid_t uid = getuid();
     uid_t euid = geteuid();
@@ -33,6 +56,9 @@ int main(void) {
         return 1;
     }
     puts("cc_cred: ids ok");
+    if (check_res_id_faults() != 0) {
+        return 1;
+    }
 
     if (setuid(uid) < 0 || setgid(gid) < 0) {
         puts("cc_cred: setid failed");
