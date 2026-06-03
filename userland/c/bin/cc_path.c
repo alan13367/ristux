@@ -2,8 +2,44 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+static int check_protected_path_fault(const char *path) {
+    char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        puts("cc_path: protected path mmap failed");
+        return 1;
+    }
+    strcpy(page, path);
+    if (mprotect(page, 4096, PROT_NONE) < 0) {
+        munmap(page, 4096);
+        puts("cc_path: protected path mprotect failed");
+        return 1;
+    }
+
+    errno = 0;
+    int fd = open(page, O_RDONLY, 0);
+    int ok = fd == -1 && errno == EFAULT;
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (mprotect(page, 4096, PROT_READ | PROT_WRITE) < 0) {
+        munmap(page, 4096);
+        puts("cc_path: protected path restore failed");
+        return 1;
+    }
+    munmap(page, 4096);
+    if (!ok) {
+        printf("cc_path: protected path errno=%d\n", errno);
+        return 1;
+    }
+
+    puts("cc_path: protected path fault ok");
+    return 0;
+}
 
 int main(void) {
     const char *dir = "/tmp//cc_path/./";
@@ -70,6 +106,10 @@ int main(void) {
         return 1;
     }
     puts("cc_path: fault ok");
+
+    if (check_protected_path_fault(read_path) != 0) {
+        return 1;
+    }
 
     unlink(link_path);
     unlink(read_path);
