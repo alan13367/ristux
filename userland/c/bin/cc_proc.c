@@ -301,6 +301,51 @@ static int check_exec_vector_limits(void) {
     return 0;
 }
 
+static int check_exec_long_strings(void) {
+    static char long_arg[4097];
+    static char long_env[4097];
+
+    memset(long_arg, 'a', sizeof(long_arg) - 1);
+    long_arg[sizeof(long_arg) - 1] = '\0';
+    long_env[0] = 'K';
+    long_env[1] = '=';
+    memset(long_env + 2, 'b', sizeof(long_env) - 3);
+    long_env[sizeof(long_env) - 1] = '\0';
+
+    char *empty_env[] = { NULL };
+    char *long_argv[] = { "/bin/false", long_arg, NULL };
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec long argv fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        execve("/bin/false", long_argv, empty_env);
+        _exit(errno == E2BIG ? 0 : 104);
+    }
+    if (wait_for_zero(child, "cc_proc: exec long argv failed") != 0) {
+        return 1;
+    }
+
+    char *argv[] = { "/bin/false", NULL };
+    char *long_envp[] = { long_env, NULL };
+    child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec long env fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        execve("/bin/false", argv, long_envp);
+        _exit(errno == E2BIG ? 0 : 105);
+    }
+    if (wait_for_zero(child, "cc_proc: exec long env failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec long strings ok");
+    return 0;
+}
+
 static int check_exec_unterminated_path(void) {
     pid_t child = fork();
     if (child < 0) {
@@ -876,6 +921,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_vector_limits() != 0) {
+        return 1;
+    }
+    if (check_exec_long_strings() != 0) {
         return 1;
     }
     if (check_exec_unterminated_path() != 0) {
