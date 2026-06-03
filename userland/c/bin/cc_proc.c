@@ -145,6 +145,39 @@ static int patch_first_load_vaddr(unsigned char *image, ssize_t len, unsigned lo
     return -1;
 }
 
+static int patch_second_load_vaddr_to_first(unsigned char *image, ssize_t len) {
+    if (len < 64) {
+        return -1;
+    }
+    unsigned long phoff = read_le64(&image[32]);
+    unsigned long phentsize = read_le16(&image[54]);
+    unsigned long phnum = read_le16(&image[56]);
+    if (phentsize < 56) {
+        return -1;
+    }
+
+    unsigned long first_vaddr = 0;
+    unsigned long loads = 0;
+    for (unsigned long i = 0; i < phnum; i++) {
+        unsigned long off = phoff + i * phentsize;
+        if (off + 56 > (unsigned long)len) {
+            return -1;
+        }
+        if (read_le32(&image[off]) != 1) {
+            continue;
+        }
+        if (loads == 0) {
+            first_vaddr = read_le64(&image[off + 16]);
+        } else {
+            write_le64(&image[off + 16], first_vaddr);
+            write_le64(&image[off + 24], first_vaddr);
+            return 0;
+        }
+        loads++;
+    }
+    return -1;
+}
+
 static int patch_first_load_flags(unsigned char *image, ssize_t len, unsigned long flags) {
     if (len < 64) {
         return -1;
@@ -527,6 +560,76 @@ static int check_exec_reserved_segment(void) {
     return 0;
 }
 
+static int check_exec_overlapping_segment(void) {
+    const char *source = "/bin/true";
+    const char *path = "/tmp/cc_proc_overlap_segment";
+    static unsigned char image[65536];
+    ssize_t total = 0;
+
+    int in = open(source, O_RDONLY, 0);
+    if (in < 0) {
+        puts("cc_proc: exec overlap segment source failed");
+        return 1;
+    }
+    for (;;) {
+        if ((size_t)total == sizeof(image)) {
+            close(in);
+            puts("cc_proc: exec overlap segment too large");
+            return 1;
+        }
+        ssize_t n = read(in, image + total, sizeof(image) - (size_t)total);
+        if (n < 0) {
+            close(in);
+            puts("cc_proc: exec overlap segment read failed");
+            return 1;
+        }
+        if (n == 0) {
+            break;
+        }
+        total += n;
+    }
+    close(in);
+    if (total < 64 || memcmp(image, "\177ELF", 4) != 0 ||
+        patch_second_load_vaddr_to_first(image, total) != 0) {
+        puts("cc_proc: exec overlap segment source invalid");
+        return 1;
+    }
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec overlap segment create failed");
+        return 1;
+    }
+    if (write(fd, image, (size_t)total) != total) {
+        close(fd);
+        puts("cc_proc: exec overlap segment write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(path, 0755) < 0) {
+        puts("cc_proc: exec overlap segment chmod failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec overlap segment fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == ENOEXEC ? 0 : 109);
+    }
+    if (wait_for_zero(child, "cc_proc: exec overlap segment failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec overlap segment ok");
+    return 0;
+}
+
 static int check_exec_wx_segment(void) {
     const char *source = "/bin/true";
     const char *path = "/tmp/cc_proc_wx_segment";
@@ -707,6 +810,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_reserved_segment() != 0) {
+        return 1;
+    }
+    if (check_exec_overlapping_segment() != 0) {
         return 1;
     }
     if (check_exec_wx_segment() != 0) {

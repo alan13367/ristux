@@ -192,6 +192,7 @@ case "$SCENARIO" in
       "cc_proc: exec bad entry ok"
       "cc_proc: exec high segment ok"
       "cc_proc: exec reserved segment ok"
+      "cc_proc: exec overlap segment ok"
       "cc_proc: exec wx segment ok"
       "cc_proc: done"
     )
@@ -378,6 +379,7 @@ case "$SCENARIO" in
       "^cc_proc: exec bad entry ok$"
       "^cc_proc: exec high segment ok$"
       "^cc_proc: exec reserved segment ok$"
+      "^cc_proc: exec overlap segment ok$"
       "^cc_proc: exec wx segment ok$"
       "^cc_proc: done$"
       "TTY canonical line ready: cc_procfs"
