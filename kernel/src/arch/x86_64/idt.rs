@@ -48,11 +48,50 @@ syscall_interrupt_stub:
     pop r14
     pop r15
     iretq
+
+.global page_fault_stub
+page_fault_stub:
+    cld
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rax
+    mov rdi, rsp
+    call page_fault_dispatch
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    add rsp, 8
+    iretq
 "#
 );
 
 unsafe extern "C" {
     fn syscall_interrupt_stub();
+    fn page_fault_stub();
 }
 
 #[repr(C)]
@@ -136,6 +175,56 @@ pub struct InterruptStackFrame {
     stack_segment: u64,
 }
 
+#[repr(C)]
+pub struct PageFaultInterruptFrame {
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+    rsi: u64,
+    rdi: u64,
+    rbp: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    error_code: u64,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+}
+
+impl PageFaultInterruptFrame {
+    fn apply_saved(&mut self, saved: crate::process::SavedSyscallFrame) {
+        self.rax = saved.rax;
+        self.rbx = saved.rbx;
+        self.rcx = saved.rcx;
+        self.rdx = saved.rdx;
+        self.rsi = saved.rsi;
+        self.rdi = saved.rdi;
+        self.rbp = saved.rbp;
+        self.r8 = saved.r8;
+        self.r9 = saved.r9;
+        self.r10 = saved.r10;
+        self.r11 = saved.r11;
+        self.r12 = saved.r12;
+        self.r13 = saved.r13;
+        self.r14 = saved.r14;
+        self.r15 = saved.r15;
+        self.rip = saved.rip;
+        self.cs = saved.cs;
+        self.rflags = saved.rflags;
+        self.rsp = saved.rsp;
+        self.ss = saved.ss;
+    }
+}
+
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
 pub fn init() {
@@ -151,7 +240,7 @@ pub fn init() {
         );
         (*idt).set_handler(12, stack_segment_fault_handler as *const () as u64);
         (*idt).set_handler(13, general_protection_fault_handler as *const () as u64);
-        (*idt).set_handler(14, page_fault_handler as *const () as u64);
+        (*idt).set_handler(14, page_fault_stub as *const () as u64);
         (*idt).set_handler(
             super::interrupts::TIMER_VECTOR as usize,
             timer_interrupt_handler as *const () as u64,
@@ -246,34 +335,62 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     );
 }
 
-extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+#[unsafe(no_mangle)]
+pub extern "C" fn page_fault_dispatch(frame: &mut PageFaultInterruptFrame) {
     let fault_addr: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_addr, options(nomem, nostack, preserves_flags));
     }
 
-    if crate::process::handle_page_fault(fault_addr as usize, error_code) {
+    if crate::process::handle_page_fault(fault_addr as usize, frame.error_code) {
         return;
     }
 
-    let user_fault = error_code & 0x4 != 0;
+    let user_fault = frame.error_code & 0x4 != 0;
     if user_fault {
-        let had_user = crate::process::current_pid().is_some();
+        let Some(pid) = crate::process::current_pid() else {
+            panic!(
+                "user page fault at {:#x}, error code {:#x}, without a current process",
+                fault_addr, frame.error_code
+            );
+        };
         crate::process::kill_current(128 + 11);
         crate::println!(
-            "User page fault at {:#x}, error code {:#x}, killing process",
+            "Process pid {} terminated by SIGSEGV at {:#x}, error code {:#x}",
+            pid,
             fault_addr,
-            error_code
+            frame.error_code
         );
-        if had_user {
-            crate::userspace::return_from_active_user();
-        }
+        let mut saved = crate::process::SavedSyscallFrame {
+            rax: frame.rax,
+            rbx: frame.rbx,
+            rcx: frame.rcx,
+            rdx: frame.rdx,
+            rsi: frame.rsi,
+            rdi: frame.rdi,
+            rbp: frame.rbp,
+            r8: frame.r8,
+            r9: frame.r9,
+            r10: frame.r10,
+            r11: frame.r11,
+            r12: frame.r12,
+            r13: frame.r13,
+            r14: frame.r14,
+            r15: frame.r15,
+            rip: frame.rip,
+            cs: frame.cs,
+            rflags: frame.rflags,
+            rsp: frame.rsp,
+            ss: frame.ss,
+        };
+        let _ = crate::sched::yield_to_runnable_frame(&mut saved);
+        frame.apply_saved(saved);
         return;
     }
 
     panic!(
         "page fault exception at {:#x}, error code {:#x}, rip {:#x}",
-        fault_addr, error_code, stack_frame.instruction_pointer
+        fault_addr, frame.error_code, frame.rip
     );
 }
 

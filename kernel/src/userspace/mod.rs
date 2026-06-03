@@ -32,18 +32,6 @@ user_enter_with_return:
     iretq
 .Luser_enter_return:
     ret
-
-.global user_exit_to_kernel
-.type user_exit_to_kernel, @function
-user_exit_to_kernel:
-    mov rbx, [rdi + 16]
-    mov rbp, [rdi + 24]
-    mov r12, [rdi + 32]
-    mov r13, [rdi + 40]
-    mov r14, [rdi + 48]
-    mov r15, [rdi + 56]
-    mov rsp, [rdi]
-    jmp qword ptr [rdi + 8]
 "#
 );
 
@@ -57,7 +45,6 @@ unsafe extern "C" {
         argc: u64,
         argv: u64,
     );
-    fn user_exit_to_kernel(context: *const UserReturnContext) -> !;
 }
 
 static mut USERSPACE_STATS: UserspaceStats = UserspaceStats {
@@ -361,12 +348,6 @@ pub fn record_user_exit(pid: u64, status: i32, unmapped_pages: usize) {
 pub fn record_active_syscall() {
     unsafe {
         USERSPACE_STATS.syscalls_handled += 1;
-    }
-}
-
-pub fn return_from_active_user() -> ! {
-    unsafe {
-        user_exit_to_kernel(ptr::addr_of!(USER_RETURN_CONTEXT));
     }
 }
 

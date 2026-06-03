@@ -89,6 +89,32 @@ static int check_elf_runtime_permissions(void) {
     return 0;
 }
 
+static void trigger_unmapped_user_write(void) {
+    volatile unsigned long *ptr = (volatile unsigned long *)0x59000000UL;
+    *ptr = 0x5e6f;
+}
+
+static int check_user_page_fault_containment(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: user fault fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        trigger_unmapped_user_write();
+        _exit(111);
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGSEGV) {
+        puts("cc_proc: user fault containment failed");
+        return 1;
+    }
+    puts("cc_proc: user fault containment ok");
+    return 0;
+}
+
 static void write_le64(unsigned char *out, unsigned long value) {
     for (int i = 0; i < 8; i++) {
         out[i] = (unsigned char)((value >> (i * 8)) & 0xff);
@@ -789,6 +815,9 @@ int main(void) {
         return 1;
     }
     if (check_elf_runtime_permissions() != 0) {
+        return 1;
+    }
+    if (check_user_page_fault_containment() != 0) {
         return 1;
     }
     if (check_exec_vector_limits() != 0) {

@@ -226,6 +226,17 @@ pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
     }
 }
 
+pub fn yield_to_runnable_frame(frame: &mut SavedSyscallFrame) -> Pid {
+    loop {
+        if let Some(pid) = dispatch_saved_frame(frame) {
+            return pid;
+        }
+
+        increment_idle_loops(current_cpu_id());
+        crate::arch::x86_64::instructions::halt_until_interrupt();
+    }
+}
+
 /// Voluntarily yield from a runnable user process. Unlike `yield_from_syscall`,
 /// the saved frame is resumed after the syscall instead of restarting it.
 pub fn yield_current_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
@@ -253,6 +264,17 @@ pub fn yield_current_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> 
 
         increment_idle_loops(current_cpu_id());
         crate::arch::x86_64::instructions::halt_until_interrupt();
+    }
+}
+
+fn dispatch_saved_frame(frame: &mut SavedSyscallFrame) -> Option<Pid> {
+    let next = dispatch_local()?;
+    if process::restore_syscall_frame(next, frame) {
+        process::set_current(next);
+        Some(next)
+    } else {
+        enqueue(next);
+        None
     }
 }
 
