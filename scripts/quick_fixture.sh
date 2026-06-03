@@ -3017,7 +3017,7 @@ if [[ "$SCENARIO" == "ext2-reboot" ]]; then
   fi
   check_log "$REBOOT_SERIAL_LOG" \
     "Kernel self-test harness passed" \
-    "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." \
+    "Ext2 mounted from /dev/vda as / with devfs, procfs, and tmpfs overlays." \
     "TTY canonical line ready: alice" \
     "TTY canonical line ready: cc_ext2 verify" \
     "^cc_ext2: reboot persistence ok$" \
@@ -3100,7 +3100,7 @@ if [[ "$SCENARIO" == "pkg-reboot" ]]; then
   fi
   check_log "$REBOOT_SERIAL_LOG" \
     "Kernel self-test harness passed" \
-    "Ext2 mounted as / with devfs, procfs, and tmpfs overlays." \
+    "Ext2 mounted from /dev/vda as / with devfs, procfs, and tmpfs overlays." \
     "TTY canonical line ready: pkg info reboot-pkg" \
     "^name: reboot-pkg$" \
     "^version: 1\\.0$" \

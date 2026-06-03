@@ -3162,7 +3162,9 @@ char *strerror(int errnum) {
     case ENOTDIR: return "Not a directory";
     case EINVAL: return "Invalid argument";
     case ENOTTY: return "Inappropriate ioctl for device";
+    case ENOSPC: return "No space left on device";
     case EROFS: return "Read-only file system";
+    case EMLINK: return "Too many links";
     case EPIPE: return "Broken pipe";
     case ERANGE: return "Result too large";
     case ENAMETOOLONG: return "File name too long";

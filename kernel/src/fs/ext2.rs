@@ -25,6 +25,7 @@ pub enum Ext2Error {
     NotDirectory,
     NotFile,
     AlreadyExists,
+    TooManyLinks,
     NoSpace,
     DirectoryFull,
     IoError,
@@ -111,6 +112,12 @@ impl Inode {
             blocks: [0; EXT2_N_BLOCKS],
         }
     }
+}
+
+fn increment_links(inode: &mut Inode) -> Result<(), Ext2Error> {
+    inode.links = inode.links.checked_add(1).ok_or(Ext2Error::TooManyLinks)?;
+    inode.ctime = current_ext2_time();
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -353,6 +360,7 @@ impl Ext2Fs {
         if !parent.is_dir() {
             return Err(Ext2Error::NotDirectory);
         }
+        increment_links(&mut parent)?;
 
         let ino = self.allocate_inode()?;
         let block = match self.allocate_block() {
@@ -378,7 +386,6 @@ impl Ext2Fs {
             let _ = self.free_inode(ino);
             return Err(err);
         }
-        parent.links = parent.links.saturating_add(1);
         self.write_inode(parent_ino, &parent)
     }
 
@@ -394,13 +401,13 @@ impl Ext2Fs {
         if !source.is_file() {
             return Err(Ext2Error::NotFile);
         }
+        increment_links(&mut source)?;
         let (parent_path, name) = split_parent_name(new_path)?;
         let (parent_ino, parent) = self.lookup_path(&parent_path)?;
         if !parent.is_dir() {
             return Err(Ext2Error::NotDirectory);
         }
         self.insert_dir_entry(parent_ino, &parent, source_ino, &name, EXT2_FT_REG_FILE)?;
-        source.links = source.links.saturating_add(1);
         self.write_inode(source_ino, &source)
     }
 
@@ -1329,6 +1336,13 @@ fn split_parent_name(path: &str) -> Result<(String, String), Ext2Error> {
 }
 
 pub fn self_test() -> Result<(), Ext2Error> {
+    let mut saturated = Inode::empty_file(0, 0, 0o644);
+    saturated.links = u16::MAX;
+    if increment_links(&mut saturated) != Err(Ext2Error::TooManyLinks) {
+        crate::println!("Ext2 self-test accepted saturated link count.");
+        return Err(Ext2Error::TooManyLinks);
+    }
+
     let fs = Ext2Fs::mount().inspect_err(|err| {
         crate::println!("Ext2 self-test mount failed: {:?}", err);
     })?;

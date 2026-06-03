@@ -63,7 +63,9 @@ static int check_string(void) {
              strcasecmp(copy, "dropbear") == 0 &&
              strncasecmp(copy, "DROP", 4) == 0 &&
              strlen(strerror(EINVAL)) > 0 &&
-             strcmp(strerror(EPIPE), "Broken pipe") == 0;
+             strcmp(strerror(EPIPE), "Broken pipe") == 0 &&
+             strcmp(strerror(ENOSPC), "No space left on device") == 0 &&
+             strcmp(strerror(EMLINK), "Too many links") == 0;
     free(copy);
     if (!ok) {
         puts("cc_libc_compat: string failed");

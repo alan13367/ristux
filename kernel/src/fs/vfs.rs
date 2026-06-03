@@ -60,6 +60,8 @@ pub enum VfsError {
     PermissionDenied,
     WouldBlock,
     TooManyOpenFiles,
+    TooManyLinks,
+    NoSpace,
     OutOfMemory,
 }
 
@@ -74,6 +76,8 @@ impl fmt::Display for VfsError {
             Self::PermissionDenied => f.write_str("permission denied"),
             Self::WouldBlock => f.write_str("would block"),
             Self::TooManyOpenFiles => f.write_str("too many open files"),
+            Self::TooManyLinks => f.write_str("too many links"),
+            Self::NoSpace => f.write_str("no space left on device"),
             Self::OutOfMemory => f.write_str("out of memory"),
         }
     }
@@ -2967,11 +2971,11 @@ fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
         ext2::Ext2Error::NotFound => VfsError::NotFound,
         ext2::Ext2Error::NotDirectory | ext2::Ext2Error::NotFile => VfsError::NotFile,
         ext2::Ext2Error::AlreadyExists => VfsError::AlreadyExists,
+        ext2::Ext2Error::TooManyLinks => VfsError::TooManyLinks,
+        ext2::Ext2Error::NoSpace | ext2::Ext2Error::DirectoryFull => VfsError::NoSpace,
         ext2::Ext2Error::InvalidSuperblock
         | ext2::Ext2Error::IoError
-        | ext2::Ext2Error::Unsupported
-        | ext2::Ext2Error::NoSpace
-        | ext2::Ext2Error::DirectoryFull => VfsError::BadFd,
+        | ext2::Ext2Error::Unsupported => VfsError::BadFd,
     }
 }
 

@@ -155,6 +155,8 @@ const EAGAIN: i64 = -11;
 const EACCES: i64 = -13;
 const EEXIST: i64 = -17;
 const ENOTDIR: i64 = -20;
+const ENOSPC: i64 = -28;
+const EMLINK: i64 = -31;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
@@ -3495,6 +3497,8 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::AlreadyExists => EEXIST,
         fs::vfs::VfsError::BadFd => EBADF,
         fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
+        fs::vfs::VfsError::TooManyLinks => EMLINK,
+        fs::vfs::VfsError::NoSpace => ENOSPC,
         fs::vfs::VfsError::OutOfMemory => ENOMEM,
         _ => EINVAL,
     }
