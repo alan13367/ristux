@@ -319,6 +319,41 @@ static int check_exec_vector_limits(void) {
     return 0;
 }
 
+static int expect_execve_errno(const char *label, char **argv, char **envp,
+                               int expected_errno) {
+    pid_t child = fork();
+    if (child < 0) {
+        printf("cc_proc: %s fork failed\n", label);
+        return 1;
+    }
+    if (child == 0) {
+        execve("/bin/false", argv, envp);
+        _exit(errno == expected_errno ? 0 : 120);
+    }
+    return wait_for_zero(child, label);
+}
+
+static int check_exec_vector_faults(void) {
+    char *argv[] = { "/bin/false", NULL };
+    char *envp[] = { NULL };
+    char *bad_argv_string[] = { "/bin/false", (char *)~0UL, NULL };
+    char *bad_env_string[] = { (char *)~0UL, NULL };
+
+    if (expect_execve_errno("cc_proc: exec argv pointer fault failed",
+                            (char **)~0UL, envp, EFAULT) != 0 ||
+        expect_execve_errno("cc_proc: exec envp pointer fault failed", argv,
+                            (char **)~0UL, EFAULT) != 0 ||
+        expect_execve_errno("cc_proc: exec argv string fault failed",
+                            bad_argv_string, envp, EFAULT) != 0 ||
+        expect_execve_errno("cc_proc: exec env string fault failed", argv,
+                            bad_env_string, EFAULT) != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec vector faults ok");
+    return 0;
+}
+
 static int check_exec_long_strings(void) {
     static char long_arg[4097];
     static char long_env[4097];
@@ -1047,6 +1082,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_vector_limits() != 0) {
+        return 1;
+    }
+    if (check_exec_vector_faults() != 0) {
         return 1;
     }
     if (check_exec_long_strings() != 0) {
