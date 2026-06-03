@@ -122,7 +122,7 @@ impl Signal {
 
     pub const fn has_ignore_default(self) -> bool {
         match self {
-            Self::Child | Self::Urg | Self::Winch => true,
+            Self::Child | Self::Cont | Self::Urg | Self::Winch => true,
             _ => false,
         }
     }
@@ -134,7 +134,11 @@ pub fn init() {
 
 pub fn send(pid: process::Pid, signal: Signal) -> bool {
     let delivered = match signal {
-        Signal::Cont => process::continue_process(pid),
+        Signal::Cont => {
+            let continued = process::continue_process(pid);
+            let signaled = process::signal(pid, signal.default_status());
+            continued || signaled
+        }
         _ => process::signal(pid, signal.default_status()),
     };
     if delivered && process::current_pid() != Some(pid) {

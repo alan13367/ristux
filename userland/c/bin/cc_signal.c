@@ -11,6 +11,7 @@ static volatile int saw_usr1;
 static volatile int saw_usr2;
 static volatile int saw_external_usr1;
 static volatile int saw_sigchld;
+static volatile int saw_cont;
 
 static void on_sigint(int signum) {
     if (signum == SIGINT) {
@@ -43,6 +44,12 @@ static void on_external_usr1(int signum) {
 static void on_sigchld(int signum) {
     if (signum == SIGCHLD) {
         saw_sigchld = 1;
+    }
+}
+
+static void on_cont(int signum) {
+    if (signum == SIGCONT) {
+        saw_cont = 1;
     }
 }
 
@@ -461,6 +468,25 @@ static int check_standard_signal_defaults(void) {
     return 0;
 }
 
+static int check_sigcont_handler(void) {
+    if (raise(SIGCONT) != 0) {
+        puts("cc_signal: sigcont default failed");
+        return 1;
+    }
+    saw_cont = 0;
+    if (signal(SIGCONT, on_cont) == SIG_ERR ||
+        raise(SIGCONT) != 0 || !saw_cont) {
+        puts("cc_signal: sigcont handler failed");
+        return 1;
+    }
+    if (signal(SIGCONT, SIG_DFL) == SIG_ERR) {
+        puts("cc_signal: sigcont restore failed");
+        return 1;
+    }
+    puts("cc_signal: sigcont handler ok");
+    return 0;
+}
+
 static int check_external_signal_handler(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -772,6 +798,7 @@ int main(int argc, char **argv) {
         check_sigstop_uncatchable() != 0 ||
         check_external_sigstop() != 0 ||
         check_standard_signal_defaults() != 0 ||
+        check_sigcont_handler() != 0 ||
         check_stop_wait_once() != 0 ||
         check_ignored_signals() != 0) {
         return 1;
