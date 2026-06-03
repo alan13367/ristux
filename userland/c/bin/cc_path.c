@@ -67,6 +67,17 @@ static int check_path_too_long(void) {
     return 0;
 }
 
+static int check_readlink_zero_length(const char *link_path) {
+    char target[16];
+    errno = 0;
+    if (readlink(link_path, target, 0) != -1 || errno != EINVAL) {
+        printf("cc_path: readlink zero errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_path: readlink zero ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp//cc_path/./";
     const char *write_path = "/tmp//cc_path/./file";
@@ -125,6 +136,10 @@ int main(void) {
         return 1;
     }
     puts("cc_path: symlink ok");
+
+    if (check_readlink_zero_length(link_path) != 0) {
+        return 1;
+    }
 
     errno = 0;
     if (open((const char *)~0UL, O_RDONLY, 0) != -1 || errno != EFAULT) {

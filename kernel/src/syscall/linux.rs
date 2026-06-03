@@ -2843,14 +2843,24 @@ fn linux_symlinkat(target_ptr: usize, dirfd: i32, link_ptr: usize) -> Result<u64
 }
 
 fn linux_readlink(path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
+    validate_readlink_len(len)?;
     let path = read_user_cstr_errno(path_ptr)?;
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
     linux_readlink_path(&path, buf, len)
 }
 
 fn linux_readlinkat(dirfd: i32, path_ptr: usize, buf: usize, len: usize) -> Result<u64, i64> {
+    validate_readlink_len(len)?;
     let path = resolve_at_path(dirfd, path_ptr, 0)?;
     linux_readlink_path(&path, buf, len)
+}
+
+fn validate_readlink_len(len: usize) -> Result<(), i64> {
+    if len == 0 {
+        Err(EINVAL)
+    } else {
+        Ok(())
+    }
 }
 
 fn linux_readlink_path(path: &str, buf: usize, len: usize) -> Result<u64, i64> {
