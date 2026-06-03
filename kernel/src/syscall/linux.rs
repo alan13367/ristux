@@ -219,6 +219,7 @@ const POLLERR: i16 = 0x008;
 const POLLHUP: i16 = 0x010;
 const POLLNVAL: i16 = 0x020;
 const MSG_DONTWAIT: i32 = 0x40;
+const SUPPORTED_MSG_FLAGS: i32 = MSG_DONTWAIT;
 const GRND_NONBLOCK: u32 = 0x0001;
 const GRND_RANDOM: u32 = 0x0002;
 const IOV_MAX: usize = 1024;
@@ -1886,10 +1887,11 @@ fn linux_sendto(
     fd: usize,
     buf: usize,
     len: usize,
-    _flags: i32,
+    flags: i32,
     addr: usize,
     addrlen: usize,
 ) -> Result<u64, i64> {
+    validate_msg_flags(flags)?;
     let handle = socket_handle(fd)?;
     let target = if addr != 0 {
         let (ip, port) = read_sockaddr_in(addr, addrlen)?;
@@ -1915,6 +1917,7 @@ fn linux_recvfrom(
     addr: usize,
     addrlen_ptr: usize,
 ) -> Result<u64, i64> {
+    validate_msg_flags(flags)?;
     let handle = socket_handle(fd)?;
     process::write_user_buffer(buf, len).ok_or(EFAULT)?;
     let nonblocking = crate::net::socket::with_sockets(|table| {
@@ -1968,6 +1971,13 @@ fn linux_recvfrom(
             Err(err) => return Err(map_socket_error(err)),
         }
     }
+}
+
+fn validate_msg_flags(flags: i32) -> Result<(), i64> {
+    if flags & !SUPPORTED_MSG_FLAGS != 0 {
+        return Err(EINVAL);
+    }
+    Ok(())
 }
 
 fn linux_bind(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {

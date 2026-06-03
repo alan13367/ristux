@@ -13,6 +13,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define BAD_MSG_FLAGS 0x40000000
+
 static volatile int saw_recv_signal;
 
 static void loopback_addr(struct sockaddr_in *addr, unsigned short port) {
@@ -217,6 +219,12 @@ int main(void) {
         puts("cc_socket: nonblock recv failed");
         return 1;
     }
+    errno = 0;
+    if (recvfrom(server, buf, sizeof(buf), BAD_MSG_FLAGS, NULL, NULL) != -1 ||
+        errno != EINVAL) {
+        puts("cc_socket: recv flags failed");
+        return 1;
+    }
     if (fcntl(server, F_SETFL, flags) < 0) {
         puts("cc_socket: fcntl restore failed");
         return 1;
@@ -229,6 +237,15 @@ int main(void) {
     }
 
     const char query[] = "dns?";
+    errno = 0;
+    if (sendto(client, query, sizeof(query) - 1, BAD_MSG_FLAGS,
+               (struct sockaddr *)&server_addr, sizeof(server_addr)) != -1 ||
+        errno != EINVAL) {
+        puts("cc_socket: send flags failed");
+        return 1;
+    }
+    puts("cc_socket: msg flags errors ok");
+
     if (sendto(client, query, sizeof(query) - 1, 0,
                (struct sockaddr *)&server_addr, sizeof(server_addr)) !=
         (ssize_t)(sizeof(query) - 1)) {
