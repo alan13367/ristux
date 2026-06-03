@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -16,6 +17,53 @@ static void close_fd_list(int *fds, int count) {
     for (int i = 0; i < count; i++) {
         close(fds[i]);
     }
+}
+
+static int check_pipe_output_fault(void) {
+    int fd = open("/dev/null", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_fcntl: pipe fault baseline open failed");
+        return 1;
+    }
+    close(fd);
+
+    errno = 0;
+    if (pipe((int *)1) != -1 || errno != EFAULT) {
+        puts("cc_fcntl: pipe bad pointer failed");
+        return 1;
+    }
+
+    char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("cc_fcntl: pipe fault mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    if (mprotect(page, 4096, PROT_NONE) < 0) {
+        printf("cc_fcntl: pipe fault protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+
+    errno = 0;
+    if (pipe((int *)page) != -1 || errno != EFAULT) {
+        puts("cc_fcntl: pipe protected pointer failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    if (munmap(page, 4096) < 0) {
+        puts("cc_fcntl: pipe fault munmap failed");
+        return 1;
+    }
+
+    fd = open("/dev/null", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_fcntl: pipe fault fd leak failed");
+        return 1;
+    }
+    close(fd);
+    puts("cc_fcntl: pipe output fault ok");
+    return 0;
 }
 
 static int check_fd_exhaustion(void) {
@@ -100,6 +148,10 @@ int main(int argc, char **argv) {
     puts("cc_fcntl: nonblock ok");
     close(pipefd[0]);
     close(pipefd[1]);
+
+    if (check_pipe_output_fault() != 0) {
+        return 1;
+    }
 
     int flagged[2];
     if (pipe2(flagged, O_NONBLOCK | O_CLOEXEC) < 0) {

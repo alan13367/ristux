@@ -1636,6 +1636,7 @@ fn linux_pipe2(pipefd: usize, flags: u32) -> Result<u64, i64> {
     if flags & !(O_NONBLOCK | O_CLOEXEC) != 0 {
         return Err(EINVAL);
     }
+    process::write_user_buffer(pipefd, 8).ok_or(EFAULT)?;
     let (read_fd, write_fd) = fs::create_pipe(4096).map_err(|_| ENOMEM)?;
     let status_flags = flags & O_NONBLOCK;
     let fd_flags = if flags & O_CLOEXEC != 0 {

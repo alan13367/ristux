@@ -282,6 +282,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "TTY canonical line ready: cc_fcntl"
       "^cc_fcntl: nonblock ok$"
+      "^cc_fcntl: pipe output fault ok$"
       "^cc_fcntl: pipe2 dup3 ok$"
       "^cc_fcntl: cloexec ok$"
       "^cc_fcntl: fd exhaustion ok$"
