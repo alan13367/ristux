@@ -537,6 +537,7 @@ case "$SCENARIO" in
       "cc_libc_compat: resource syslog ok"
       "cc_libc_compat: uname ok"
       "cc_libc_compat: time format ok"
+      "cc_libc_compat: gettimeofday fault ok"
       "cc_libc_compat: process accounting ok"
       "cc_libc_compat: setjmp ok"
       "cc_libc_compat: dropbear types ok"

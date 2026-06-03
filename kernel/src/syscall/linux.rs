@@ -2825,6 +2825,12 @@ fn linux_time(tloc: usize) -> Result<u64, i64> {
 fn linux_gettimeofday(tv: usize, tz: usize) -> Result<u64, i64> {
     let now = crate::time::unix_time() as i64;
     if tv != 0 {
+        process::write_user_buffer(tv, 16).ok_or(EFAULT)?;
+    }
+    if tz != 0 {
+        process::write_user_buffer(tz, 8).ok_or(EFAULT)?;
+    }
+    if tv != 0 {
         let out = process::write_user_buffer(tv, 16).ok_or(EFAULT)?;
         out[0..8].copy_from_slice(&now.to_le_bytes());
         out[8..16].copy_from_slice(&0i64.to_le_bytes());

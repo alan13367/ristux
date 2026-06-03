@@ -341,6 +341,20 @@ static int check_time_format(void) {
     return 0;
 }
 
+static int check_gettimeofday_fault(void) {
+    struct timeval tv = {1234, 5678};
+    errno = 0;
+    if (gettimeofday(&tv, (struct timezone *)1) != -1 ||
+        errno != EFAULT ||
+        tv.tv_sec != 1234 ||
+        tv.tv_usec != 5678) {
+        puts("cc_libc_compat: gettimeofday fault failed");
+        return 1;
+    }
+    puts("cc_libc_compat: gettimeofday fault ok");
+    return 0;
+}
+
 static int check_process_accounting(void) {
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0 ||
@@ -576,6 +590,7 @@ int main(void) {
         check_resource_syslog() != 0 ||
         check_uname() != 0 ||
         check_time_format() != 0 ||
+        check_gettimeofday_fault() != 0 ||
         check_process_accounting() != 0 ||
         check_setjmp() != 0 ||
         check_dropbear_types() != 0 ||
