@@ -267,6 +267,46 @@ pub fn yield_current_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> 
     }
 }
 
+/// Preempt the current ring-3 frame on a timer tick when another runnable user
+/// process is queued for the bootstrap dispatcher.
+pub fn preempt_current_user_frame(frame: &mut SavedSyscallFrame) -> bool {
+    let cpu_id = current_cpu_id();
+    if cpu_id != USER_DISPATCH_CPU_ID || !local_preempt_candidate(cpu_id) {
+        return false;
+    }
+    let Some(self_pid) = process::current_pid() else {
+        return false;
+    };
+
+    process::save_syscall_frame(self_pid, frame);
+    if !process::mark_ready(self_pid) {
+        return false;
+    }
+
+    loop {
+        let Some(next) = dispatch_local() else {
+            if process::restore_syscall_frame(self_pid, frame) {
+                process::set_current(self_pid);
+            }
+            return false;
+        };
+
+        if next == self_pid {
+            if process::restore_syscall_frame(self_pid, frame) {
+                process::set_current(self_pid);
+            }
+            return false;
+        }
+
+        enqueue(self_pid);
+        if process::restore_syscall_frame(next, frame) {
+            process::set_current(next);
+            return true;
+        }
+        enqueue(next);
+    }
+}
+
 fn dispatch_saved_frame(frame: &mut SavedSyscallFrame) -> Option<Pid> {
     let next = dispatch_local()?;
     if process::restore_syscall_frame(next, frame) {
@@ -359,6 +399,14 @@ fn take_reschedule_pending(cpu_id: usize) -> bool {
     let pending = guard.reschedule_pending;
     guard.reschedule_pending = false;
     pending
+}
+
+fn local_preempt_candidate(cpu_id: usize) -> bool {
+    if cpu_id >= MAX_CPUS {
+        return false;
+    }
+    let guard = CPU_SCHED[cpu_id].lock.lock();
+    guard.reschedule_pending || !guard.run_queue.is_empty()
 }
 
 fn increment_idle_loops(cpu_id: usize) {

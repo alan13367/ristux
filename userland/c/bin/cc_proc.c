@@ -3,16 +3,27 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#define CLONE_VM 0x00000100UL
+#define CLONE_SETTLS 0x00080000UL
+#define TLS_SENTINEL 0x1122334455667788UL
 
 static const char elf_rodata_probe[] = "rodata-permission-probe";
 static int elf_data_probe_value = 7;
 static unsigned char elf_data_exec_probe[] = { 0xc3 };
 
 static void elf_text_probe(void) {
+}
+
+static unsigned long read_fs_zero(void) {
+    unsigned long value = 0;
+    __asm__ volatile("movq %%fs:0, %0" : "=r"(value));
+    return value;
 }
 
 static int contains(const char *haystack, const char *needle) {
@@ -802,16 +813,15 @@ static int check_exec_wx_segment(void) {
 
 static int check_clone_sigchld(void) {
     errno = 0;
-    if (syscall(SYS_clone, SIGCHLD | 0x100, 0, 0, 0, 0, 0) != -1 ||
+    if (syscall(SYS_clone, SIGCHLD | CLONE_VM, 0, 0, 0, 0, 0) != -1 ||
         errno != EINVAL) {
         puts("cc_proc: clone flags failed");
         return 1;
     }
 
-    int child_stack_word = 0;
     errno = 0;
-    if (syscall(SYS_clone, SIGCHLD, (long)&child_stack_word, 0, 0, 0, 0) != -1 ||
-        errno != EINVAL) {
+    if (syscall(SYS_clone, SIGCHLD, 0x70000000L, 0, 0, 0, 0) != -1 ||
+        errno != EFAULT) {
         puts("cc_proc: clone stack failed");
         return 1;
     }
@@ -860,6 +870,88 @@ static int check_clone_sigchld(void) {
     }
 
     puts("cc_proc: clone sigchld ok");
+    return 0;
+}
+
+static int check_clone_tls(void) {
+    unsigned long *tls_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (tls_page == MAP_FAILED) {
+        puts("cc_proc: clone tls mmap failed");
+        return 1;
+    }
+    tls_page[0] = TLS_SENTINEL;
+
+    errno = 0;
+    long cloned = syscall(SYS_clone, SIGCHLD | CLONE_SETTLS, 0, 0, 0,
+                          (long)tls_page, 0);
+    if (cloned < 0) {
+        munmap(tls_page, 4096);
+        puts("cc_proc: clone tls syscall failed");
+        return 1;
+    }
+    if (cloned == 0) {
+        _exit(read_fs_zero() == TLS_SENTINEL ? 0 : 77);
+    }
+
+    int status = 0;
+    if (waitpid((pid_t)cloned, &status, 0) != (pid_t)cloned ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        munmap(tls_page, 4096);
+        puts("cc_proc: clone tls wait failed");
+        return 1;
+    }
+    if (munmap(tls_page, 4096) < 0) {
+        puts("cc_proc: clone tls munmap failed");
+        return 1;
+    }
+
+    puts("cc_proc: clone tls ok");
+    return 0;
+}
+
+static int check_preemptive_scheduling(void) {
+    pid_t spinner = fork();
+    if (spinner < 0) {
+        puts("cc_proc: preempt spinner fork failed");
+        return 1;
+    }
+    if (spinner == 0) {
+        for (;;) {
+            __asm__ volatile("" ::: "memory");
+        }
+    }
+
+    pid_t observer = fork();
+    if (observer < 0) {
+        kill(spinner, SIGKILL);
+        waitpid(spinner, NULL, 0);
+        puts("cc_proc: preempt observer fork failed");
+        return 1;
+    }
+    if (observer == 0) {
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(observer, &status, 0) != observer || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        kill(spinner, SIGKILL);
+        waitpid(spinner, NULL, 0);
+        puts("cc_proc: preempt observer wait failed");
+        return 1;
+    }
+    if (kill(spinner, SIGKILL) < 0) {
+        puts("cc_proc: preempt spinner kill failed");
+        return 1;
+    }
+    if (waitpid(spinner, &status, 0) != spinner || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGKILL) {
+        puts("cc_proc: preempt spinner wait failed");
+        return 1;
+    }
+
+    puts("cc_proc: preemptive scheduling ok");
     return 0;
 }
 
@@ -912,6 +1004,12 @@ int main(void) {
     puts("cc_proc: pipe exec ok");
     puts("cc_proc: wait ok");
     if (check_clone_sigchld() != 0) {
+        return 1;
+    }
+    if (check_clone_tls() != 0) {
+        return 1;
+    }
+    if (check_preemptive_scheduling() != 0) {
         return 1;
     }
     if (check_elf_runtime_permissions() != 0) {

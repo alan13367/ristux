@@ -173,6 +173,7 @@ pub struct Process {
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
     interrupted_syscall: bool,
+    user_fs_base: u64,
     fpu_state: fpu::FpuState,
 }
 
@@ -476,6 +477,7 @@ impl Process {
             is_user: true,
             saved_syscall: None,
             interrupted_syscall: false,
+            user_fs_base: 0,
             fpu_state: fpu::initial_state(),
         }
     }
@@ -834,6 +836,7 @@ impl Process {
         old.destroy();
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
+        self.user_fs_base = 0;
         self.name = name;
         self.entry = entry;
         self.stack_top = stack.stack_top;
@@ -1754,6 +1757,7 @@ impl Process {
             is_user: self.is_user,
             saved_syscall: None,
             interrupted_syscall: false,
+            user_fs_base: self.user_fs_base,
             fpu_state: self.fpu_state,
         })
     }
@@ -1794,6 +1798,16 @@ pub fn init() {
 
 pub fn fork(parent: Pid) -> Result<Pid, ForkError> {
     with_table(|table| table.fork(parent))
+}
+
+pub fn set_user_fs_base(pid: Pid, base: u64) -> bool {
+    with_table(|table| {
+        let Some(process) = table.get_mut(pid) else {
+            return false;
+        };
+        process.user_fs_base = base;
+        true
+    })
 }
 
 pub fn exec(pid: Pid, path: &str) -> bool {
@@ -2404,7 +2418,7 @@ pub fn deliverable_signal_action_current() -> Option<(u8, usize, u32)> {
 
 pub fn set_current(pid: Pid) {
     *CURRENT_PID.lock() = Some(pid);
-    let p4 = with_table(|table| {
+    let context = with_table(|table| {
         for process in &mut table.processes {
             if process.pid == pid {
                 process.state = ProcessState::Running;
@@ -2412,12 +2426,13 @@ pub fn set_current(pid: Pid) {
                 process.state = ProcessState::Ready;
             }
         }
-        table.get(pid).map(|p| p.address_space.p4_phys())
+        table.get(pid).map(|p| (p.address_space.p4_phys(), p.user_fs_base))
     });
-    if let Some(p4) = p4 {
+    if let Some((p4, user_fs_base)) = context {
         unsafe {
             paging::switch_cr3(p4);
         }
+        crate::arch::x86_64::set_user_fs_base(user_fs_base);
     }
 }
 
@@ -2426,6 +2441,7 @@ pub fn clear_current() {
     unsafe {
         paging::switch_cr3(paging::boot_root_table() as usize);
     }
+    crate::arch::x86_64::set_user_fs_base(0);
 }
 
 pub fn current_pid() -> Option<Pid> {

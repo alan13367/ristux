@@ -87,6 +87,11 @@ syscall_interrupt_stub:
     iretq
 .endm
 
+.global timer_interrupt_stub
+timer_interrupt_stub:
+    push 0
+    cpu_exception_stub timer_interrupt_dispatch
+
 .global divide_error_stub
 divide_error_stub:
     push 0
@@ -109,6 +114,7 @@ page_fault_stub:
 
 unsafe extern "C" {
     fn syscall_interrupt_stub();
+    fn timer_interrupt_stub();
     fn divide_error_stub();
     fn invalid_opcode_stub();
     fn general_protection_fault_stub();
@@ -293,7 +299,7 @@ pub fn init() {
         (*idt).set_handler(14, page_fault_stub as *const () as u64);
         (*idt).set_handler(
             super::interrupts::TIMER_VECTOR as usize,
-            timer_interrupt_handler as *const () as u64,
+            timer_interrupt_stub as *const () as u64,
         );
         (*idt).set_handler(
             super::interrupts::KEYBOARD_VECTOR as usize,
@@ -425,6 +431,21 @@ pub extern "C" fn page_fault_dispatch(frame: &mut CpuExceptionInterruptFrame) {
     );
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn timer_interrupt_dispatch(frame: &mut CpuExceptionInterruptFrame) {
+    super::interrupts::timer_tick();
+    if !frame.is_user() {
+        return;
+    }
+
+    crate::process::save_current_fpu();
+    let mut saved = frame.saved();
+    if crate::sched::preempt_current_user_frame(&mut saved) {
+        frame.apply_saved(saved);
+    }
+    crate::process::restore_current_fpu();
+}
+
 fn terminate_user_exception(
     frame: &mut CpuExceptionInterruptFrame,
     signal: u8,
@@ -453,10 +474,6 @@ fn terminate_user_exception(
     let _ = crate::sched::yield_to_runnable_frame(&mut saved);
     frame.apply_saved(saved);
     true
-}
-
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    super::interrupts::timer_tick();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

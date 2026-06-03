@@ -216,6 +216,22 @@ const MAP_SHARED: i32 = 0x01;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_FIXED: i32 = 0x10;
 const MAP_ANONYMOUS: i32 = 0x20;
+const USER_ADDRESS_TOP: usize = 0x8000_0000;
+const CLONE_SIGNAL_MASK: u64 = 0xff;
+const CLONE_VM: u64 = 0x0000_0100;
+const CLONE_FS: u64 = 0x0000_0200;
+const CLONE_FILES: u64 = 0x0000_0400;
+const CLONE_SIGHAND: u64 = 0x0000_0800;
+const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
+const CLONE_THREAD: u64 = 0x0001_0000;
+const CLONE_SETTLS: u64 = 0x0008_0000;
+const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
+const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
+const SUPPORTED_CLONE_FLAGS: u64 = CLONE_SETTLS;
+const UNSUPPORTED_SHARED_CLONE_FLAGS: u64 =
+    CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+const UNSUPPORTED_TID_CLONE_FLAGS: u64 =
+    CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_CHILD_SETTID;
 const MS_ASYNC: i32 = 0x1;
 const MS_INVALIDATE: i32 = 0x2;
 const MS_SYNC: i32 = 0x4;
@@ -604,7 +620,6 @@ fn linux_rt_sigreturn(frame: &mut SyscallInterruptFrame, saved_ptr: usize) -> Re
 fn sanitize_linux_saved_frame(saved: &mut process::SavedSyscallFrame) -> Result<(), i64> {
     const USER_CODE: u64 = 0x33;
     const USER_DATA: u64 = 0x2b;
-    const USER_ADDRESS_TOP: u64 = 0x8000_0000;
     const RFLAGS_CF: u64 = 1 << 0;
     const RFLAGS_FIXED: u64 = 1 << 1;
     const RFLAGS_PF: u64 = 1 << 2;
@@ -630,9 +645,9 @@ fn sanitize_linux_saved_frame(saved: &mut process::SavedSyscallFrame) -> Result<
         return Err(EINVAL);
     }
     if saved.rip == 0
-        || saved.rip >= USER_ADDRESS_TOP
+        || saved.rip >= USER_ADDRESS_TOP as u64
         || saved.rsp == 0
-        || saved.rsp >= USER_ADDRESS_TOP
+        || saved.rsp >= USER_ADDRESS_TOP as u64
     {
         return Err(EINVAL);
     }
@@ -2345,19 +2360,72 @@ fn linux_clone(
     tls: usize,
 ) -> Result<u64, i64> {
     let sigchld = crate::signal::Signal::Child.number() as u64;
-    if flags != sigchld || child_stack != 0 || parent_tid != 0 || child_tid != 0 || tls != 0 {
+    let exit_signal = flags & CLONE_SIGNAL_MASK;
+    let option_flags = flags & !CLONE_SIGNAL_MASK;
+    if exit_signal != sigchld
+        || option_flags & (UNSUPPORTED_SHARED_CLONE_FLAGS | UNSUPPORTED_TID_CLONE_FLAGS) != 0
+        || option_flags & !SUPPORTED_CLONE_FLAGS != 0
+        || parent_tid != 0
+        || child_tid != 0
+        || (tls != 0 && option_flags & CLONE_SETTLS == 0)
+    {
         return Err(EINVAL);
     }
-    linux_fork(frame)
+
+    let child_rsp = validate_clone_child_stack(frame.rsp, child_stack)?;
+    let child_fs_base = if option_flags & CLONE_SETTLS != 0 {
+        Some(validate_clone_tls_base(tls)?)
+    } else {
+        None
+    };
+    clone_fork_child(frame, child_rsp, child_fs_base)
 }
 
 fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
+    clone_fork_child(frame, frame.rsp, None)
+}
+
+fn validate_clone_child_stack(parent_rsp: u64, child_stack: usize) -> Result<u64, i64> {
+    if child_stack == 0 {
+        return Ok(parent_rsp);
+    }
+    if child_stack >= USER_ADDRESS_TOP {
+        return Err(EINVAL);
+    }
+    let probe = child_stack.checked_sub(1).ok_or(EINVAL)?;
+    if !process::is_user_readable(probe, 1) || process::write_user_buffer(probe, 1).is_none() {
+        return Err(EFAULT);
+    }
+    Ok(child_stack as u64)
+}
+
+fn validate_clone_tls_base(tls: usize) -> Result<u64, i64> {
+    if tls == 0 {
+        return Ok(0);
+    }
+    if tls >= USER_ADDRESS_TOP {
+        return Err(EINVAL);
+    }
+    if !process::is_user_readable(tls, 1) {
+        return Err(EFAULT);
+    }
+    Ok(tls as u64)
+}
+
+fn clone_fork_child(
+    frame: &mut SyscallInterruptFrame,
+    child_rsp: u64,
+    child_fs_base: Option<u64>,
+) -> Result<u64, i64> {
     let parent = process::current_pid().ok_or(ESRCH)?;
     let child = process::fork(parent).map_err(map_fork_error)?;
+    if let Some(fs_base) = child_fs_base {
+        let _ = process::set_user_fs_base(child, fs_base);
+    }
     // Seed the child's resumable syscall frame so the scheduler can iretq into
     // it. The child wakes up at the user instruction immediately after the
     // syscall (frame.rip is already past it), with rax = 0.
-    let mut child_frame = crate::process::SavedSyscallFrame {
+    let child_frame = crate::process::SavedSyscallFrame {
         rax: 0,
         rbx: frame.rbx,
         rcx: frame.rcx,
@@ -2376,10 +2444,9 @@ fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {
         rip: frame.rip,
         cs: frame.cs,
         rflags: frame.rflags,
-        rsp: frame.rsp,
+        rsp: child_rsp,
         ss: frame.ss,
     };
-    let _ = &mut child_frame;
     process::save_syscall_frame(child, &child_frame);
     Ok(child as u64)
 }
