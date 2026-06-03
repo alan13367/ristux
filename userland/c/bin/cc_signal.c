@@ -1213,6 +1213,26 @@ static int check_additional_signals(void) {
     return 0;
 }
 
+static int check_sigreturn_rejects_kernel_segments(void) {
+    unsigned long frame[21];
+    memset(frame, 0, sizeof(frame));
+    frame[15] = (unsigned long)check_sigreturn_rejects_kernel_segments;
+    frame[16] = 0x08;
+    frame[17] = 0x202;
+    frame[18] = (unsigned long)(frame + 21);
+    frame[19] = 0x10;
+    frame[20] = 0;
+
+    errno = 0;
+    if (syscall(SYS_rt_sigreturn, (long)frame, 0, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_signal: sigreturn segment validation failed");
+        return 1;
+    }
+    puts("cc_signal: sigreturn segment validation ok");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "exec-reset-probe") == 0) {
         raise(SIGUSR1);
@@ -1304,6 +1324,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     puts("cc_signal: sigreturn validation ok");
+    if (check_sigreturn_rejects_kernel_segments() != 0) {
+        return 1;
+    }
 
     pid_t parent = getpid();
     pid_t child = fork();
