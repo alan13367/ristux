@@ -2639,6 +2639,9 @@ fn linux_times(buf_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_setrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
+    if !matches!(resource, RLIMIT_CORE | RLIMIT_NOFILE) {
+        return Err(EINVAL);
+    }
     let (cur, max) = read_rlimit(rlim_ptr)?;
     match resource {
         RLIMIT_CORE => {

@@ -268,6 +268,12 @@ static int check_resource_syslog(void) {
         puts("cc_libc_compat: setrlimit fault failed");
         return 1;
     }
+    errno = 0;
+    if (setrlimit(999, NULL) != -1 || errno != EINVAL) {
+        puts("cc_libc_compat: invalid setrlimit failed");
+        return 1;
+    }
+    puts("cc_libc_compat: rlimit errors ok");
     openlog("cc_libc_compat", LOG_PID, LOG_AUTHPRIV);
     syslog(LOG_INFO, "syslog ok %d", 42);
     int old = setlogmask(LOG_UPTO(LOG_ERR));
