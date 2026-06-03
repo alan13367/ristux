@@ -268,6 +268,103 @@ static int check_wait_process_groups(void) {
     return 0;
 }
 
+static int check_orphan_reparent(void) {
+    int report_pipe[2];
+    if (pipe(report_pipe) < 0) {
+        puts("cc_session: orphan pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(report_pipe[0]);
+        close(report_pipe[1]);
+        puts("cc_session: orphan fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(report_pipe[0]);
+        int start_pipe[2];
+        if (pipe(start_pipe) < 0) {
+            pid_t failed = -1;
+            (void)write(report_pipe[1], &failed, sizeof(failed));
+            close(report_pipe[1]);
+            _exit(2);
+        }
+        pid_t grandchild = fork();
+        if (grandchild < 0) {
+            pid_t failed = -1;
+            (void)write(report_pipe[1], &failed, sizeof(failed));
+            close(start_pipe[0]);
+            close(start_pipe[1]);
+            close(report_pipe[1]);
+            _exit(2);
+        }
+        if (grandchild == 0) {
+            close(start_pipe[1]);
+            char start = 0;
+            (void)read(start_pipe[0], &start, 1);
+            close(start_pipe[0]);
+            for (int i = 0; i < 100000; i++) {
+                if (getppid() == 1) {
+                    break;
+                }
+                getpid();
+            }
+            pid_t observed = getppid();
+            (void)write(report_pipe[1], &observed, sizeof(observed));
+            close(report_pipe[1]);
+            _exit(0);
+        }
+
+        close(start_pipe[0]);
+        (void)write(report_pipe[1], &grandchild, sizeof(grandchild));
+        char start = 'x';
+        (void)write(start_pipe[1], &start, 1);
+        close(start_pipe[1]);
+        close(report_pipe[1]);
+        _exit(0);
+    }
+
+    close(report_pipe[1]);
+    pid_t grandchild = -1;
+    if (read(report_pipe[0], &grandchild, sizeof(grandchild)) !=
+        (ssize_t)sizeof(grandchild)) {
+        close(report_pipe[0]);
+        waitpid(child, NULL, 0);
+        puts("cc_session: orphan grandchild read failed");
+        return 1;
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || grandchild <= 0) {
+        close(report_pipe[0]);
+        puts("cc_session: orphan child failed");
+        return 1;
+    }
+
+    pid_t observed_parent = -1;
+    if (read(report_pipe[0], &observed_parent, sizeof(observed_parent)) !=
+        (ssize_t)sizeof(observed_parent)) {
+        close(report_pipe[0]);
+        puts("cc_session: orphan parent read failed");
+        return 1;
+    }
+    close(report_pipe[0]);
+
+    errno = 0;
+    if (observed_parent != 1 ||
+        waitpid(grandchild, &status, WNOHANG) != -1 ||
+        errno != ECHILD) {
+        puts("cc_session: orphan reparent failed");
+        return 1;
+    }
+
+    puts("cc_session: orphan reparent ok");
+    return 0;
+}
+
 static int check_wait_continued_once(void) {
     pid_t child = fork();
     if (child < 0) {
@@ -428,6 +525,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_process_groups() != 0) {
+        return 1;
+    }
+    if (check_orphan_reparent() != 0) {
         return 1;
     }
     if (check_wait_continued_once() != 0) {
