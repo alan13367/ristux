@@ -94,21 +94,50 @@ static void trigger_unmapped_user_write(void) {
     *ptr = 0x5e6f;
 }
 
-static int check_user_page_fault_containment(void) {
+static void trigger_divide_error(void) {
+    __asm__ volatile(
+        "xor %%edx, %%edx\n"
+        "mov $1, %%eax\n"
+        "xor %%ecx, %%ecx\n"
+        "div %%ecx\n"
+        :
+        :
+        : "rax", "rcx", "rdx");
+}
+
+static void trigger_invalid_opcode(void) {
+    __asm__ volatile("ud2");
+}
+
+static void trigger_general_protection(void) {
+    __asm__ volatile("cli");
+}
+
+static int expect_user_fault_signal(const char *label, void (*trigger)(void), int signal) {
     pid_t child = fork();
     if (child < 0) {
-        puts("cc_proc: user fault fork failed");
+        printf("cc_proc: %s fork failed\n", label);
         return 1;
     }
     if (child == 0) {
-        trigger_unmapped_user_write();
+        trigger();
         _exit(111);
     }
 
     int status = 0;
     if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
-        WTERMSIG(status) != SIGSEGV) {
-        puts("cc_proc: user fault containment failed");
+        WTERMSIG(status) != signal) {
+        printf("cc_proc: %s containment failed\n", label);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_user_fault_containment(void) {
+    if (expect_user_fault_signal("user page fault", trigger_unmapped_user_write, SIGSEGV) != 0 ||
+        expect_user_fault_signal("user divide error", trigger_divide_error, SIGFPE) != 0 ||
+        expect_user_fault_signal("user invalid opcode", trigger_invalid_opcode, SIGILL) != 0 ||
+        expect_user_fault_signal("user gpf", trigger_general_protection, SIGSEGV) != 0) {
         return 1;
     }
     puts("cc_proc: user fault containment ok");
@@ -817,7 +846,7 @@ int main(void) {
     if (check_elf_runtime_permissions() != 0) {
         return 1;
     }
-    if (check_user_page_fault_containment() != 0) {
+    if (check_user_fault_containment() != 0) {
         return 1;
     }
     if (check_exec_vector_limits() != 0) {

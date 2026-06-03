@@ -49,8 +49,7 @@ syscall_interrupt_stub:
     pop r15
     iretq
 
-.global page_fault_stub
-page_fault_stub:
+.macro cpu_exception_stub dispatch
     cld
     push r15
     push r14
@@ -68,7 +67,7 @@ page_fault_stub:
     push rbx
     push rax
     mov rdi, rsp
-    call page_fault_dispatch
+    call \dispatch
     pop rax
     pop rbx
     pop rcx
@@ -86,11 +85,33 @@ page_fault_stub:
     pop r15
     add rsp, 8
     iretq
+.endm
+
+.global divide_error_stub
+divide_error_stub:
+    push 0
+    cpu_exception_stub divide_error_dispatch
+
+.global invalid_opcode_stub
+invalid_opcode_stub:
+    push 0
+    cpu_exception_stub invalid_opcode_dispatch
+
+.global general_protection_fault_stub
+general_protection_fault_stub:
+    cpu_exception_stub general_protection_fault_dispatch
+
+.global page_fault_stub
+page_fault_stub:
+    cpu_exception_stub page_fault_dispatch
 "#
 );
 
 unsafe extern "C" {
     fn syscall_interrupt_stub();
+    fn divide_error_stub();
+    fn invalid_opcode_stub();
+    fn general_protection_fault_stub();
     fn page_fault_stub();
 }
 
@@ -176,7 +197,7 @@ pub struct InterruptStackFrame {
 }
 
 #[repr(C)]
-pub struct PageFaultInterruptFrame {
+pub struct CpuExceptionInterruptFrame {
     rax: u64,
     rbx: u64,
     rcx: u64,
@@ -200,7 +221,36 @@ pub struct PageFaultInterruptFrame {
     ss: u64,
 }
 
-impl PageFaultInterruptFrame {
+impl CpuExceptionInterruptFrame {
+    fn is_user(&self) -> bool {
+        self.cs & 3 == 3
+    }
+
+    fn saved(&self) -> crate::process::SavedSyscallFrame {
+        crate::process::SavedSyscallFrame {
+            rax: self.rax,
+            rbx: self.rbx,
+            rcx: self.rcx,
+            rdx: self.rdx,
+            rsi: self.rsi,
+            rdi: self.rdi,
+            rbp: self.rbp,
+            r8: self.r8,
+            r9: self.r9,
+            r10: self.r10,
+            r11: self.r11,
+            r12: self.r12,
+            r13: self.r13,
+            r14: self.r14,
+            r15: self.r15,
+            rip: self.rip,
+            cs: self.cs,
+            rflags: self.rflags,
+            rsp: self.rsp,
+            ss: self.ss,
+        }
+    }
+
     fn apply_saved(&mut self, saved: crate::process::SavedSyscallFrame) {
         self.rax = saved.rax;
         self.rbx = saved.rbx;
@@ -230,16 +280,16 @@ static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 pub fn init() {
     unsafe {
         let idt = ptr::addr_of_mut!(IDT);
-        (*idt).set_handler(0, divide_error_handler as *const () as u64);
+        (*idt).set_handler(0, divide_error_stub as *const () as u64);
         (*idt).set_handler(3, breakpoint_handler as *const () as u64);
-        (*idt).set_handler(6, invalid_opcode_handler as *const () as u64);
+        (*idt).set_handler(6, invalid_opcode_stub as *const () as u64);
         (*idt).set_handler_with_ist(
             8,
             double_fault_handler as *const () as u64,
             gdt::double_fault_ist(),
         );
         (*idt).set_handler(12, stack_segment_fault_handler as *const () as u64);
-        (*idt).set_handler(13, general_protection_fault_handler as *const () as u64);
+        (*idt).set_handler(13, general_protection_fault_stub as *const () as u64);
         (*idt).set_handler(14, page_fault_stub as *const () as u64);
         (*idt).set_handler(
             super::interrupts::TIMER_VECTOR as usize,
@@ -296,16 +346,8 @@ pub fn install_syscall_gate() {
     );
 }
 
-extern "x86-interrupt" fn divide_error_handler(_stack_frame: InterruptStackFrame) {
-    panic!("divide error exception");
-}
-
 extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
     crate::println!("breakpoint exception");
-}
-
-extern "x86-interrupt" fn invalid_opcode_handler(_stack_frame: InterruptStackFrame) {
-    panic!("invalid opcode exception");
 }
 
 extern "x86-interrupt" fn double_fault_handler(
@@ -325,18 +367,40 @@ extern "x86-interrupt" fn stack_segment_fault_handler(
     );
 }
 
-extern "x86-interrupt" fn general_protection_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: u64,
-) {
+#[unsafe(no_mangle)]
+pub extern "C" fn divide_error_dispatch(frame: &mut CpuExceptionInterruptFrame) {
+    if terminate_user_exception(frame, crate::signal::Signal::Fpe.number(), "SIGFPE", frame.rip) {
+        return;
+    }
+    panic!("divide error exception at rip {:#x}", frame.rip);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn invalid_opcode_dispatch(frame: &mut CpuExceptionInterruptFrame) {
+    if terminate_user_exception(frame, crate::signal::Signal::Ill.number(), "SIGILL", frame.rip) {
+        return;
+    }
+    panic!("invalid opcode exception at rip {:#x}", frame.rip);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn general_protection_fault_dispatch(frame: &mut CpuExceptionInterruptFrame) {
+    if terminate_user_exception(
+        frame,
+        crate::signal::Signal::Segv.number(),
+        "SIGSEGV",
+        frame.rip,
+    ) {
+        return;
+    }
     panic!(
         "general protection fault exception, error code {:#x}, rip {:#x}",
-        error_code, stack_frame.instruction_pointer
+        frame.error_code, frame.rip
     );
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn page_fault_dispatch(frame: &mut PageFaultInterruptFrame) {
+pub extern "C" fn page_fault_dispatch(frame: &mut CpuExceptionInterruptFrame) {
     let fault_addr: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_addr, options(nomem, nostack, preserves_flags));
@@ -346,45 +410,12 @@ pub extern "C" fn page_fault_dispatch(frame: &mut PageFaultInterruptFrame) {
         return;
     }
 
-    let user_fault = frame.error_code & 0x4 != 0;
-    if user_fault {
-        let Some(pid) = crate::process::current_pid() else {
-            panic!(
-                "user page fault at {:#x}, error code {:#x}, without a current process",
-                fault_addr, frame.error_code
-            );
-        };
-        crate::process::kill_current(128 + 11);
-        crate::println!(
-            "Process pid {} terminated by SIGSEGV at {:#x}, error code {:#x}",
-            pid,
-            fault_addr,
-            frame.error_code
-        );
-        let mut saved = crate::process::SavedSyscallFrame {
-            rax: frame.rax,
-            rbx: frame.rbx,
-            rcx: frame.rcx,
-            rdx: frame.rdx,
-            rsi: frame.rsi,
-            rdi: frame.rdi,
-            rbp: frame.rbp,
-            r8: frame.r8,
-            r9: frame.r9,
-            r10: frame.r10,
-            r11: frame.r11,
-            r12: frame.r12,
-            r13: frame.r13,
-            r14: frame.r14,
-            r15: frame.r15,
-            rip: frame.rip,
-            cs: frame.cs,
-            rflags: frame.rflags,
-            rsp: frame.rsp,
-            ss: frame.ss,
-        };
-        let _ = crate::sched::yield_to_runnable_frame(&mut saved);
-        frame.apply_saved(saved);
+    if terminate_user_exception(
+        frame,
+        crate::signal::Signal::Segv.number(),
+        "SIGSEGV",
+        fault_addr,
+    ) {
         return;
     }
 
@@ -392,6 +423,36 @@ pub extern "C" fn page_fault_dispatch(frame: &mut PageFaultInterruptFrame) {
         "page fault exception at {:#x}, error code {:#x}, rip {:#x}",
         fault_addr, frame.error_code, frame.rip
     );
+}
+
+fn terminate_user_exception(
+    frame: &mut CpuExceptionInterruptFrame,
+    signal: u8,
+    signal_name: &str,
+    fault_addr: u64,
+) -> bool {
+    if !frame.is_user() {
+        return false;
+    }
+    let Some(pid) = crate::process::current_pid() else {
+        panic!(
+            "user exception {} at {:#x}, error code {:#x}, without a current process",
+            signal_name, fault_addr, frame.error_code
+        );
+    };
+
+    crate::process::kill_current(128 + signal as i32);
+    crate::println!(
+        "Process pid {} terminated by {} at {:#x}, error code {:#x}",
+        pid,
+        signal_name,
+        fault_addr,
+        frame.error_code
+    );
+    let mut saved = frame.saved();
+    let _ = crate::sched::yield_to_runnable_frame(&mut saved);
+    frame.apply_saved(saved);
+    true
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
