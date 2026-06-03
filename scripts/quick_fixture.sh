@@ -119,6 +119,7 @@ case "$SCENARIO" in
       "cc_file_sync: truncate sync ok"
       "cc_file_sync: readonly rejection ok"
       "cc_file_sync: directory read errno ok"
+      "cc_file_sync: directory write open errno ok"
       "cc_file_sync: tmpfs large offset ok"
       "cc_file_sync: ext2 large offset ok"
       "cc_file_sync: done"

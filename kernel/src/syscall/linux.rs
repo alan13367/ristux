@@ -1028,7 +1028,7 @@ fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
         mode as u16,
     )
     .map(|fd| fd as u64)
-    .map_err(map_vfs_error)
+    .map_err(map_open_vfs_error)
 }
 
 fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
@@ -3897,6 +3897,13 @@ fn map_write_vfs_error(err: fs::vfs::VfsError) -> i64 {
 }
 
 fn map_read_vfs_error(err: fs::vfs::VfsError) -> i64 {
+    match err {
+        fs::vfs::VfsError::NotFile => EISDIR,
+        other => map_vfs_error(other),
+    }
+}
+
+fn map_open_vfs_error(err: fs::vfs::VfsError) -> i64 {
     match err {
         fs::vfs::VfsError::NotFile => EISDIR,
         other => map_vfs_error(other),

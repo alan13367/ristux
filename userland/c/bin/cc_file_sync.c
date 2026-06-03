@@ -93,6 +93,17 @@ static int check_directory_read_rejected(void) {
         return 1;
     }
     puts("cc_file_sync: directory read errno ok");
+
+    errno = 0;
+    fd = open(path, O_WRONLY, 0);
+    if (fd != -1 || errno != EISDIR) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        puts("cc_file_sync: directory write open errno failed");
+        return 1;
+    }
+    puts("cc_file_sync: directory write open errno ok");
     return 0;
 }
 
