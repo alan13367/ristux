@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -365,6 +366,130 @@ static int check_orphan_reparent(void) {
     return 0;
 }
 
+static int check_orphaned_stopped_process_group(void) {
+    int report_pipe[2];
+    int hang_pipe[2];
+    if (pipe(report_pipe) < 0 || pipe(hang_pipe) < 0) {
+        puts("cc_session: orphan pgrp pipe failed");
+        return 1;
+    }
+
+    pid_t parent = fork();
+    if (parent < 0) {
+        close(report_pipe[0]);
+        close(report_pipe[1]);
+        close(hang_pipe[0]);
+        close(hang_pipe[1]);
+        puts("cc_session: orphan pgrp fork failed");
+        return 1;
+    }
+    if (parent == 0) {
+        close(report_pipe[0]);
+        close(hang_pipe[0]);
+        pid_t child = fork();
+        if (child < 0) {
+            pid_t failed = -1;
+            (void)write(report_pipe[1], &failed, sizeof(failed));
+            close(report_pipe[1]);
+            close(hang_pipe[1]);
+            _exit(2);
+        }
+        if (child == 0) {
+            close(report_pipe[1]);
+            if (setpgid(0, 0) < 0) {
+                close(hang_pipe[1]);
+                _exit(3);
+            }
+            if (signal(SIGHUP, SIG_DFL) == SIG_ERR ||
+                signal(SIGCONT, SIG_DFL) == SIG_ERR) {
+                close(hang_pipe[1]);
+                _exit(7);
+            }
+            for (;;) {
+                getpid();
+            }
+        }
+
+        if (setpgid(child, child) < 0) {
+            pid_t failed = -1;
+            (void)write(report_pipe[1], &failed, sizeof(failed));
+            kill(child, SIGKILL);
+            close(report_pipe[1]);
+            close(hang_pipe[1]);
+            _exit(4);
+        }
+        (void)write(report_pipe[1], &child, sizeof(child));
+        if (kill(child, SIGTSTP) < 0) {
+            close(report_pipe[1]);
+            close(hang_pipe[1]);
+            _exit(5);
+        }
+
+        int status = 0;
+        if (waitpid(child, &status, WUNTRACED) != child ||
+            !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP) {
+            close(report_pipe[1]);
+            close(hang_pipe[1]);
+            _exit(6);
+        }
+        char stopped = 's';
+        (void)write(report_pipe[1], &stopped, 1);
+        close(report_pipe[1]);
+        close(hang_pipe[1]);
+        _exit(0);
+    }
+
+    close(report_pipe[1]);
+    close(hang_pipe[1]);
+    pid_t child = -1;
+    if (read(report_pipe[0], &child, sizeof(child)) != (ssize_t)sizeof(child) ||
+        child <= 0) {
+        close(report_pipe[0]);
+        close(hang_pipe[0]);
+        waitpid(parent, NULL, 0);
+        puts("cc_session: orphan pgrp child failed");
+        return 1;
+    }
+    char stopped = 0;
+    if (read(report_pipe[0], &stopped, 1) != 1 || stopped != 's') {
+        close(report_pipe[0]);
+        close(hang_pipe[0]);
+        kill(-child, SIGCONT);
+        kill(-child, SIGTERM);
+        waitpid(parent, NULL, 0);
+        puts("cc_session: orphan pgrp stop failed");
+        return 1;
+    }
+    close(report_pipe[0]);
+
+    int status = 0;
+    if (waitpid(parent, &status, 0) != parent || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        close(hang_pipe[0]);
+        kill(-child, SIGCONT);
+        kill(-child, SIGTERM);
+        puts("cc_session: orphan pgrp parent failed");
+        return 1;
+    }
+
+    struct pollfd pfd;
+    pfd.fd = hang_pipe[0];
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int ready = poll(&pfd, 1, 1000);
+    if (ready != 1 || (pfd.revents & POLLHUP) == 0) {
+        close(hang_pipe[0]);
+        kill(-child, SIGCONT);
+        kill(-child, SIGTERM);
+        puts("cc_session: orphan pgrp hup failed");
+        return 1;
+    }
+    close(hang_pipe[0]);
+
+    puts("cc_session: orphan pgrp hup ok");
+    return 0;
+}
+
 static int check_wait_continued_once(void) {
     pid_t child = fork();
     if (child < 0) {
@@ -528,6 +653,9 @@ int main(void) {
         return 1;
     }
     if (check_orphan_reparent() != 0) {
+        return 1;
+    }
+    if (check_orphaned_stopped_process_group() != 0) {
         return 1;
     }
     if (check_wait_continued_once() != 0) {

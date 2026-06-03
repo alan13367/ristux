@@ -630,6 +630,7 @@ case "$SCENARIO" in
       "cc_session: wait nohang ok"
       "cc_session: wait pgrp ok"
       "cc_session: orphan reparent ok"
+      "cc_session: orphan pgrp hup ok"
       "cc_session: wait continued ok"
       "cc_session: wait rusage ok"
       "cc_session: done"

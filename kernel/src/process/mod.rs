@@ -118,6 +118,15 @@ impl WakeList {
     fn as_slice(&self) -> &[Pid] {
         &self.pids[..self.len]
     }
+
+    fn extend(&mut self, other: WakeList) {
+        for pid in other.as_slice() {
+            self.push_unique(*pid);
+        }
+        if other.overflow {
+            self.overflow = true;
+        }
+    }
 }
 
 pub struct Process {
@@ -1305,6 +1314,7 @@ impl ProcessTable {
         }
         let init_exists = self.get(INIT_PID).is_some();
         let new_parent = if init_exists { Some(INIT_PID) } else { None };
+        let mut orphan_candidates = Vec::new();
         let mut index = 0;
         while index < self.processes.len() {
             let adopted_waitable = {
@@ -1312,6 +1322,11 @@ impl ProcessTable {
                 if process.parent != Some(old_parent) {
                     None
                 } else {
+                    if !orphan_candidates.contains(&process.pgrp)
+                        && orphan_candidates.try_reserve_exact(1).is_ok()
+                    {
+                        orphan_candidates.push(process.pgrp);
+                    }
                     process.parent = new_parent;
                     if init_exists
                         && matches!(
@@ -1329,6 +1344,77 @@ impl ProcessTable {
                 self.wake_waiter_for_child(INIT_PID, child, wake);
             }
             index += 1;
+        }
+        self.notify_orphaned_stopped_groups(&orphan_candidates, wake);
+    }
+
+    fn notify_orphaned_stopped_groups(&mut self, candidates: &[Pid], wake: &mut WakeList) {
+        for pgrp in candidates {
+            if self.process_group_is_orphaned(*pgrp) && self.process_group_has_stopped_member(*pgrp)
+            {
+                self.signal_process_group(*pgrp, crate::signal::Signal::Hup, wake);
+                self.signal_process_group(*pgrp, crate::signal::Signal::Cont, wake);
+            }
+        }
+    }
+
+    fn process_group_is_orphaned(&self, pgrp: Pid) -> bool {
+        for process in self.processes.iter().filter(|process| {
+            process.pgrp == pgrp && !matches!(process.state, ProcessState::Zombie(_))
+        }) {
+            let Some(parent) = process.parent.and_then(|parent| self.get(parent)) else {
+                continue;
+            };
+            // Init adopts the child after parent death; it is not a job-control
+            // parent that keeps the process group non-orphaned.
+            if parent.pid == INIT_PID {
+                continue;
+            }
+            if parent.sid == process.sid
+                && parent.pgrp != process.pgrp
+                && !matches!(parent.state, ProcessState::Zombie(_))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn process_group_has_stopped_member(&self, pgrp: Pid) -> bool {
+        self.processes.iter().any(|process| {
+            process.pgrp == pgrp && matches!(process.state, ProcessState::Stopped(_))
+        })
+    }
+
+    fn process_group_members(&self, pgrp: Pid) -> Vec<Pid> {
+        let mut members = Vec::new();
+        for process in self.processes.iter().filter(|process| {
+            process.pgrp == pgrp && !matches!(process.state, ProcessState::Zombie(_))
+        }) {
+            if members.try_reserve_exact(1).is_err() {
+                break;
+            }
+            members.push(process.pid);
+        }
+        members
+    }
+
+    fn signal_process_group(
+        &mut self,
+        pgrp: Pid,
+        signal: crate::signal::Signal,
+        wake: &mut WakeList,
+    ) {
+        let members = self.process_group_members(pgrp);
+        for pid in members {
+            if signal == crate::signal::Signal::Cont {
+                if let Some(continued_wake) = self.continue_process(pid) {
+                    wake.extend(continued_wake);
+                }
+            }
+            if let Some(signal_wake) = self.signal(pid, signal.default_status(), current_pid()) {
+                wake.extend(signal_wake);
+            }
         }
     }
 
