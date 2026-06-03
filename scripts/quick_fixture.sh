@@ -727,6 +727,7 @@ case "$SCENARIO" in
   socket)
     COMMANDS=("cc_socket")
     EXPECTS=(
+      "cc_socket: type flags ok"
       "cc_socket: so_error fault ok"
       "cc_socket: addr fault ok"
       "cc_socket: msg flags errors ok"

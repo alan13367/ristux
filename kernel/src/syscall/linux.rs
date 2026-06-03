@@ -190,6 +190,9 @@ const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const SOCK_DGRAM: i32 = 2;
 const SOCK_RAW: i32 = 3;
+const SOCK_TYPE_MASK: i32 = 0xf;
+const SOCK_NONBLOCK: i32 = 0o4000;
+const SOCK_CLOEXEC: i32 = 0o2000000;
 const IPPROTO_ICMP: i32 = 1;
 const SOL_SOCKET: i32 = 1;
 const SO_REUSEADDR: i32 = 2;
@@ -1786,16 +1789,38 @@ fn linux_socket(domain: i32, kind: i32, _protocol: i32) -> Result<u64, i64> {
     if domain != AF_INET {
         return Err(EINVAL);
     }
-    let socket_type = match kind & 0xf {
+    if kind & !(SOCK_TYPE_MASK | SOCK_NONBLOCK | SOCK_CLOEXEC) != 0 {
+        return Err(EINVAL);
+    }
+    let socket_type = match kind & SOCK_TYPE_MASK {
         SOCK_STREAM => crate::net::socket::SocketType::Stream,
         SOCK_DGRAM => crate::net::socket::SocketType::Datagram,
         SOCK_RAW if _protocol == IPPROTO_ICMP => crate::net::socket::SocketType::RawIcmp,
         _ => return Err(EINVAL),
     };
+    let status_flags = if kind & SOCK_NONBLOCK != 0 {
+        O_NONBLOCK
+    } else {
+        0
+    };
+    let fd_flags = if kind & SOCK_CLOEXEC != 0 {
+        process::FD_CLOEXEC
+    } else {
+        0
+    };
     let handle = crate::net::socket::with_sockets(|table| {
         table.socket(crate::net::socket::SocketDomain::Inet, socket_type)
     })
     .ok_or(EINVAL)?;
+    let flag_result = crate::net::socket::with_sockets(|table| {
+        table.set_status_flags(handle, status_flags)?;
+        table.set_fd_flags(handle, fd_flags)?;
+        Ok(())
+    });
+    if let Err(err) = flag_result {
+        let _ = crate::net::socket::with_sockets(|table| table.close(handle));
+        return Err(map_socket_error(err));
+    }
     if let Err(err) = process::install_socket_handle(handle) {
         let _ = crate::net::socket::with_sockets(|table| table.close(handle));
         return Err(map_socket_install_error(err));

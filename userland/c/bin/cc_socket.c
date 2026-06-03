@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define BAD_SOCKET_TYPE_FLAGS 0x40000000
 #define BAD_MSG_FLAGS 0x40000000
 
 static volatile int saw_recv_signal;
@@ -28,6 +29,41 @@ static void on_recv_signal(int signum) {
     if (signum == SIGUSR1) {
         saw_recv_signal = 1;
     }
+}
+
+static int check_socket_type_flags(void) {
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        puts("cc_socket: type flag socket failed");
+        return 1;
+    }
+    int status_flags = fcntl(fd, F_GETFL);
+    int fd_flags = fcntl(fd, F_GETFD);
+    if ((status_flags & O_NONBLOCK) == 0 || (fd_flags & FD_CLOEXEC) == 0) {
+        close(fd);
+        puts("cc_socket: type flags missing");
+        return 1;
+    }
+    char byte = 0;
+    errno = 0;
+    if (recvfrom(fd, &byte, sizeof(byte), 0, NULL, NULL) != -1 || errno != EAGAIN) {
+        close(fd);
+        puts("cc_socket: type nonblock failed");
+        return 1;
+    }
+    close(fd);
+
+    errno = 0;
+    fd = socket(AF_INET, SOCK_DGRAM | BAD_SOCKET_TYPE_FLAGS, 0);
+    if (fd != -1 || errno != EINVAL) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        puts("cc_socket: bad type flags failed");
+        return 1;
+    }
+    puts("cc_socket: type flags ok");
+    return 0;
 }
 
 static int check_recv_interrupted_by_signal(void) {
@@ -139,6 +175,10 @@ static int check_recv_interrupted_by_signal(void) {
 }
 
 int main(void) {
+    if (check_socket_type_flags() != 0) {
+        return 1;
+    }
+
     int server = socket(AF_INET, SOCK_DGRAM, 0);
     int client = socket(AF_INET, SOCK_DGRAM, 0);
     if (server < 0 || client < 0) {
