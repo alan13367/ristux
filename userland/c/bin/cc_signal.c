@@ -402,6 +402,65 @@ static int check_external_sigstop(void) {
     return 0;
 }
 
+static int check_standard_signal_defaults(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: standard fatal fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        raise(SIGALRM);
+        _exit(42);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGALRM) {
+        puts("cc_signal: standard fatal default failed");
+        return 1;
+    }
+
+    if (raise(SIGWINCH) != 0) {
+        puts("cc_signal: standard ignore default failed");
+        return 1;
+    }
+
+    child = fork();
+    if (child < 0) {
+        puts("cc_signal: standard stop fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        for (;;) {
+            syscall(SYS_sched_yield);
+        }
+    }
+    if (kill(child, SIGTTIN) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: standard stop send failed");
+        return 1;
+    }
+    status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTTIN) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: standard stop default failed");
+        return 1;
+    }
+    if (kill(child, SIGCONT) < 0 || kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGTERM) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: standard stop cleanup failed");
+        return 1;
+    }
+
+    puts("cc_signal: standard defaults ok");
+    return 0;
+}
+
 static int check_external_signal_handler(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -712,6 +771,7 @@ int main(int argc, char **argv) {
         check_sigkill_uncatchable() != 0 ||
         check_sigstop_uncatchable() != 0 ||
         check_external_sigstop() != 0 ||
+        check_standard_signal_defaults() != 0 ||
         check_stop_wait_once() != 0 ||
         check_ignored_signals() != 0) {
         return 1;

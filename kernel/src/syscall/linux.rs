@@ -446,8 +446,10 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
                 return true;
             }
         }
-        if signum == crate::signal::Signal::Tstp.number() as usize
-            || signum == crate::signal::Signal::Stop.number() as usize
+        if u8::try_from(signum)
+            .ok()
+            .and_then(crate::signal::Signal::from_number)
+            .is_some_and(|signal| signal.has_stop_default())
         {
             let saved = saved_from_linux_frame(frame);
             process::save_syscall_frame(pid, &saved);

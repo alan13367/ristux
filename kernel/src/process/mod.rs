@@ -259,10 +259,9 @@ fn is_uncatchable_signal(signal: u8) -> bool {
 }
 
 fn stop_signal_from_status(status: i32) -> Option<u8> {
-    if status == crate::signal::Signal::Tstp.default_status() {
-        Some(crate::signal::Signal::Tstp.number())
-    } else if status == crate::signal::Signal::Stop.default_status() {
-        Some(crate::signal::Signal::Stop.number())
+    let signal = signal_from_legacy_status(status).and_then(crate::signal::Signal::from_number)?;
+    if signal.has_stop_default() {
+        Some(signal.number())
     } else {
         None
     }
@@ -280,9 +279,12 @@ fn is_ignored_signal(process: &Process, status: i32) -> bool {
         .get(signal as usize)
         .copied()
         .unwrap_or(crate::signal::DEFAULT_HANDLER);
-    if handler == crate::signal::DEFAULT_HANDLER && signal == crate::signal::Signal::Child.number()
-    {
-        return true;
+    if handler == crate::signal::DEFAULT_HANDLER {
+        if let Some(signal) = crate::signal::Signal::from_number(signal) {
+            if signal.has_ignore_default() {
+                return true;
+            }
+        }
     }
     handler == crate::signal::IGNORE_HANDLER
 }
