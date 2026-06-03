@@ -185,6 +185,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_proc: pipe exec ok"
       "cc_proc: wait ok"
+      "cc_proc: clone unsupported forms ok"
       "cc_proc: clone sigchld ok"
       "cc_proc: elf permissions ok"
       "cc_proc: user fault containment ok"
@@ -376,6 +377,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_proc"
       "^cc_proc: pipe exec ok$"
       "^cc_proc: wait ok$"
+      "^cc_proc: clone unsupported forms ok$"
       "^cc_proc: clone sigchld ok$"
       "^cc_proc: elf permissions ok$"
       "^cc_proc: user fault containment ok$"

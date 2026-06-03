@@ -771,6 +771,32 @@ static int check_clone_sigchld(void) {
         return 1;
     }
 
+    int parent_tid = 0;
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD, 0, (long)&parent_tid, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_proc: clone parent tid failed");
+        return 1;
+    }
+
+    int child_tid = 0;
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD, 0, 0, (long)&child_tid, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_proc: clone child tid failed");
+        return 1;
+    }
+
+    unsigned long tls = 0x70000000UL;
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD, 0, 0, 0, (long)tls, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_proc: clone tls failed");
+        return 1;
+    }
+
+    puts("cc_proc: clone unsupported forms ok");
+
     errno = 0;
     long cloned = syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0, 0);
     if (cloned < 0) {
