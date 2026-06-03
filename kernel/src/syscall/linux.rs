@@ -896,6 +896,10 @@ fn linux_read(
     buf: usize,
     len: usize,
 ) -> Result<u64, i64> {
+    if len == 0 {
+        validate_zero_length_read_fd(fd)?;
+        return Ok(0);
+    }
     // Validate the user buffer up front; we'll re-acquire each iteration to
     // avoid holding the slice across yield points.
     {
@@ -953,6 +957,20 @@ fn linux_read(
             Err(err) => return Err(map_read_vfs_error(err)),
         }
     }
+}
+
+fn validate_zero_length_read_fd(fd: usize) -> Result<(), i64> {
+    if process::user_vfs_fd(fd).is_some() {
+        return Ok(());
+    }
+    if fd >= SOCKET_FD_BASE {
+        let handle = socket_handle(fd)?;
+        crate::net::socket::with_sockets(|table| table.status_flags(handle))
+            .map(|_| ())
+            .map_err(map_socket_error)?;
+        return Ok(());
+    }
+    Err(EBADF)
 }
 
 fn linux_pread64(

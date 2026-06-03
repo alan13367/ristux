@@ -183,7 +183,13 @@ int main(int argc, char **argv) {
         puts("cc_fcntl: pipe transfer failed");
         return 1;
     }
+    errno = 0;
+    if (read(pipefd[0], (void *)1, 0) != 0) {
+        puts("cc_fcntl: zero read failed");
+        return 1;
+    }
     puts("cc_fcntl: nonblock ok");
+    puts("cc_fcntl: zero length pipe read ok");
     close(pipefd[0]);
     close(pipefd[1]);
 
