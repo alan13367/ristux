@@ -3171,6 +3171,7 @@ char *strerror(int errnum) {
     case EFAULT: return "Bad address";
     case EEXIST: return "File exists";
     case ENOTDIR: return "Not a directory";
+    case EISDIR: return "Is a directory";
     case EINVAL: return "Invalid argument";
     case ENOTTY: return "Inappropriate ioctl for device";
     case ENOSPC: return "No space left on device";

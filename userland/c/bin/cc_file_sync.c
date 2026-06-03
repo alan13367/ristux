@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int check_truncate_and_sync(void) {
@@ -71,6 +72,30 @@ static int check_readonly_rejected(void) {
     return 0;
 }
 
+static int check_directory_read_rejected(void) {
+    const char *path = "/tmp/cc_file_sync_dir";
+    errno = 0;
+    if (mkdir(path, 0755) < 0 && errno != EEXIST) {
+        puts("cc_file_sync: directory mkdir failed");
+        return 1;
+    }
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_file_sync: directory open failed");
+        return 1;
+    }
+    char byte = 0;
+    errno = 0;
+    int ok = read(fd, &byte, 1) == -1 && errno == EISDIR;
+    close(fd);
+    if (!ok) {
+        puts("cc_file_sync: directory read errno failed");
+        return 1;
+    }
+    puts("cc_file_sync: directory read errno ok");
+    return 0;
+}
+
 static int check_large_offset_rejected(const char *path, const char *label) {
     unlink(path);
     int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0644);
@@ -114,6 +139,7 @@ static int check_large_offset_rejected(const char *path, const char *label) {
 int main(void) {
     if (check_truncate_and_sync() != 0 ||
         check_readonly_rejected() != 0 ||
+        check_directory_read_rejected() != 0 ||
         check_large_offset_rejected("/tmp/cc_file_sync_large.txt", "tmpfs") != 0 ||
         check_large_offset_rejected("/home/cc_file_sync_large.txt", "ext2") != 0) {
         return 1;

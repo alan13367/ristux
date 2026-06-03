@@ -19,6 +19,7 @@ extern int errno;
 #define EEXIST 17
 #define ENODEV 19
 #define ENOTDIR 20
+#define EISDIR 21
 #define EINVAL 22
 #define EMFILE 24
 #define ENOTTY 25

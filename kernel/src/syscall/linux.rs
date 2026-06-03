@@ -157,6 +157,7 @@ const EAGAIN: i64 = -11;
 const EACCES: i64 = -13;
 const EEXIST: i64 = -17;
 const ENOTDIR: i64 = -20;
+const EISDIR: i64 = -21;
 const ENOSPC: i64 = -28;
 const EMLINK: i64 = -31;
 const EPIPE: i64 = -32;
@@ -949,7 +950,7 @@ fn linux_read(
                 process::block_current(process::BlockReason::WaitIo);
                 yield_blocked_or_interrupted(frame)?;
             }
-            Err(_) => return Err(EBADF),
+            Err(err) => return Err(map_read_vfs_error(err)),
         }
     }
 }
@@ -3875,6 +3876,13 @@ fn map_write_vfs_error(err: fs::vfs::VfsError) -> i64 {
         }
     }
     map_vfs_error(err)
+}
+
+fn map_read_vfs_error(err: fs::vfs::VfsError) -> i64 {
+    match err {
+        fs::vfs::VfsError::NotFile => EISDIR,
+        other => map_vfs_error(other),
+    }
 }
 
 fn map_cwd_error(err: fs::vfs::VfsError) -> i64 {
