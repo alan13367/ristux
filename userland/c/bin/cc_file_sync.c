@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -70,8 +71,44 @@ static int check_readonly_rejected(void) {
     return 0;
 }
 
+static int check_large_offset_rejected(const char *path, const char *label) {
+    unlink(path);
+    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (fd < 0) {
+        printf("cc_file_sync: %s large open failed\n", label);
+        return 1;
+    }
+    if (lseek(fd, LONG_MAX, SEEK_SET) != LONG_MAX) {
+        printf("cc_file_sync: %s large seek failed errno=%d\n", label, errno);
+        close(fd);
+        unlink(path);
+        return 1;
+    }
+    errno = 0;
+    if (lseek(fd, 1, SEEK_CUR) != -1 || errno != EINVAL) {
+        printf("cc_file_sync: %s seek overflow errno=%d\n", label, errno);
+        close(fd);
+        unlink(path);
+        return 1;
+    }
+    errno = 0;
+    if (write(fd, "x", 1) != -1 || errno != ENOSPC) {
+        printf("cc_file_sync: %s sparse overflow errno=%d\n", label, errno);
+        close(fd);
+        unlink(path);
+        return 1;
+    }
+    close(fd);
+    unlink(path);
+    printf("cc_file_sync: %s large offset ok\n", label);
+    return 0;
+}
+
 int main(void) {
-    if (check_truncate_and_sync() != 0 || check_readonly_rejected() != 0) {
+    if (check_truncate_and_sync() != 0 ||
+        check_readonly_rejected() != 0 ||
+        check_large_offset_rejected("/tmp/cc_file_sync_large.txt", "tmpfs") != 0 ||
+        check_large_offset_rejected("/home/cc_file_sync_large.txt", "ext2") != 0) {
         return 1;
     }
     puts("cc_file_sync: done");

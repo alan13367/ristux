@@ -650,11 +650,11 @@ fn linux_write(
                         return Err(CONTEXT_SWITCHED);
                     }
                 }
-                Err(_) => {
+                Err(err) => {
                     return if total > 0 {
                         Ok(total as u64)
                     } else {
-                        Err(EBADF)
+                        Err(map_vfs_error(err))
                     };
                 }
             }
@@ -688,7 +688,7 @@ fn linux_write_bytes(fd: usize, bytes: &[u8]) -> Result<usize, i64> {
         return match fs::write(vfs_fd, bytes) {
             Ok(n) => Ok(n),
             Err(fs::vfs::VfsError::WouldBlock) => Err(EAGAIN),
-            Err(_) => Err(EBADF),
+            Err(err) => Err(map_vfs_error(err)),
         };
     }
     if fd >= SOCKET_FD_BASE {

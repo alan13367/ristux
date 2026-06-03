@@ -511,6 +511,53 @@ fn read_queue(
     Ok(read)
 }
 
+fn resize_file_buffer(data: &mut Vec<u8>, len: usize) -> Result<(), VfsError> {
+    if len <= data.len() {
+        data.truncate(len);
+        return Ok(());
+    }
+    data.try_reserve_exact(len - data.len())
+        .map_err(|_| VfsError::NoSpace)?;
+    data.resize(len, 0);
+    Ok(())
+}
+
+fn checked_file_end(offset: usize, len: usize) -> Result<usize, VfsError> {
+    let end = offset.checked_add(len).ok_or(VfsError::NoSpace)?;
+    if end > isize::MAX as usize {
+        return Err(VfsError::NoSpace);
+    }
+    Ok(end)
+}
+
+fn checked_seek_offset(base: usize, offset: isize) -> Result<usize, VfsError> {
+    let target = if offset >= 0 {
+        base.checked_add(offset as usize).ok_or(VfsError::BadFd)?
+    } else {
+        let delta = offset.checked_neg().ok_or(VfsError::BadFd)? as usize;
+        base.checked_sub(delta).ok_or(VfsError::BadFd)?
+    };
+    if target > isize::MAX as usize {
+        return Err(VfsError::BadFd);
+    }
+    Ok(target)
+}
+
+fn seek_target(cursor: usize, size: usize, offset: isize, whence: u32) -> Result<usize, VfsError> {
+    match whence {
+        0 => {
+            if offset < 0 {
+                Err(VfsError::BadFd)
+            } else {
+                Ok(offset as usize)
+            }
+        }
+        1 => checked_seek_offset(cursor, offset),
+        2 => checked_seek_offset(size, offset),
+        _ => Err(VfsError::BadFd),
+    }
+}
+
 pub struct Vfs {
     nodes: Vec<Node>,
     open_files: Vec<Option<OpenHandle>>,
@@ -1710,11 +1757,11 @@ impl Vfs {
                 .read_file(&path)
                 .map_err(map_ext2_error)?;
             if offset > data.len() {
-                data.resize(offset, 0);
+                resize_file_buffer(&mut data, offset)?;
             }
-            let end = offset + input.len();
+            let end = checked_file_end(offset, input.len())?;
             if end > data.len() {
-                data.resize(end, 0);
+                resize_file_buffer(&mut data, end)?;
             }
             data[offset..end].copy_from_slice(input);
             self.root_ext2_mut()
@@ -1791,11 +1838,11 @@ impl Vfs {
                 let data_node = canonical_node_index(&self.nodes, *node);
                 let node = &mut self.nodes[data_node];
                 if *offset > node.data.len() {
-                    node.data.resize(*offset, 0);
+                    resize_file_buffer(&mut node.data, *offset)?;
                 }
-                let end = *offset + input.len();
+                let end = checked_file_end(*offset, input.len())?;
                 if end > node.data.len() {
-                    node.data.resize(end, 0);
+                    resize_file_buffer(&mut node.data, end)?;
                 }
                 node.data[*offset..end].copy_from_slice(input);
                 *offset = end;
@@ -1855,7 +1902,7 @@ impl Vfs {
                 .ok_or(VfsError::NotFound)?
                 .read_file(&path)
                 .map_err(map_ext2_error)?;
-            data.resize(len, 0);
+            resize_file_buffer(&mut data, len)?;
             self.root_ext2_mut()
                 .ok_or(VfsError::NotFound)?
                 .write_file(&path, &data)
@@ -1876,7 +1923,7 @@ impl Vfs {
         if self.nodes[data_node].kind != NodeKind::File {
             return Err(VfsError::NotFile);
         }
-        self.nodes[data_node].data.resize(len, 0);
+        resize_file_buffer(&mut self.nodes[data_node].data, len)?;
         self.nodes[data_node].timestamps.modified_at = crate::time::filesystem_timestamp();
         Ok(())
     }
@@ -1955,21 +2002,13 @@ impl Vfs {
                 .and_then(|fs| fs.metadata(&path).ok())
                 .map(|meta| meta.size as usize)
                 .ok_or(VfsError::NotFound)?;
-            let new_offset = match whence {
-                0 => offset,
-                1 => cursor as isize + offset,
-                2 => size as isize + offset,
-                _ => return Err(VfsError::BadFd),
-            };
-            if new_offset < 0 {
-                return Err(VfsError::BadFd);
-            }
+            let new_offset = seek_target(cursor, size, offset, whence)?;
             if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =
                 self.open_files.get_mut(fd)
             {
-                *cursor = new_offset as usize;
+                *cursor = new_offset;
             }
-            return Ok(new_offset as usize);
+            return Ok(new_offset);
         }
 
         if let Some((path, cursor)) = self
@@ -1987,21 +2026,13 @@ impl Vfs {
                 .list_dir(&path)
                 .map_err(map_ext2_error)?
                 .len();
-            let new_offset = match whence {
-                0 => offset,
-                1 => cursor as isize + offset,
-                2 => size as isize + offset,
-                _ => return Err(VfsError::BadFd),
-            };
-            if new_offset < 0 {
-                return Err(VfsError::BadFd);
-            }
+            let new_offset = seek_target(cursor, size, offset, whence)?;
             if let Some(Some(OpenHandle::Ext2Dir { offset: cursor, .. })) =
                 self.open_files.get_mut(fd)
             {
-                *cursor = new_offset as usize;
+                *cursor = new_offset;
             }
-            return Ok(new_offset as usize);
+            return Ok(new_offset);
         }
 
         let Some(handle) = self.open_files.get_mut(fd).and_then(Option::as_mut) else {
@@ -2038,16 +2069,8 @@ impl Vfs {
                 return Err(VfsError::BadFd);
             }
         };
-        let new_offset = match whence {
-            0 => offset,
-            1 => *cursor as isize + offset,
-            2 => size as isize + offset,
-            _ => return Err(VfsError::BadFd),
-        };
-        if new_offset < 0 {
-            return Err(VfsError::BadFd);
-        }
-        *cursor = new_offset as usize;
+        let new_offset = seek_target(*cursor, size, offset, whence)?;
+        *cursor = new_offset;
         Ok(*cursor)
     }
 
