@@ -689,6 +689,7 @@ case "$SCENARIO" in
       "cc_socket: so_error fault ok"
       "cc_socket: addr fault ok"
       "cc_socket: udp loopback ok"
+      "cc_socket: recv interrupt ok"
       "cc_socket: options ok"
       "cc_socket: done"
     )

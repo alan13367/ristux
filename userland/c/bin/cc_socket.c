@@ -4,17 +4,136 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+static volatile int saw_recv_signal;
 
 static void loopback_addr(struct sockaddr_in *addr, unsigned short port) {
     memset(addr, 0, sizeof(*addr));
     addr->sin_family = AF_INET;
     addr->sin_port = htons(port);
     addr->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+}
+
+static void on_recv_signal(int signum) {
+    if (signum == SIGUSR1) {
+        saw_recv_signal = 1;
+    }
+}
+
+static int check_recv_interrupted_by_signal(void) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        puts("cc_socket: recv interrupt socket failed");
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    loopback_addr(&addr, 19055);
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(sock);
+        puts("cc_socket: recv interrupt bind failed");
+        return 1;
+    }
+
+    int ready_pipe[2];
+    if (pipe(ready_pipe) < 0) {
+        close(sock);
+        puts("cc_socket: recv interrupt pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        close(sock);
+        puts("cc_socket: recv interrupt fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(ready_pipe[0]);
+        saw_recv_signal = 0;
+        if (signal(SIGUSR1, on_recv_signal) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(ready_pipe[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(ready_pipe[1]);
+
+        char buf[8];
+        errno = 0;
+        ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
+        if (n != -1) {
+            _exit(10);
+        }
+        if (errno != EINTR) {
+            _exit(20);
+        }
+        if (!saw_recv_signal) {
+            _exit(30);
+        }
+        _exit(0);
+    }
+
+    close(ready_pipe[1]);
+    char ready = 0;
+    if (read(ready_pipe[0], &ready, 1) != 1) {
+        close(ready_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        close(sock);
+        puts("cc_socket: recv interrupt ready failed");
+        return 1;
+    }
+    close(ready_pipe[0]);
+
+    for (int i = 0; i < 100; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        close(sock);
+        puts("cc_socket: recv interrupt send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            close(sock);
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_socket: recv interrupt ok");
+                return 0;
+            }
+            printf("cc_socket: recv interrupt child status=%d\n", status);
+            return 1;
+        }
+        if (waited < 0) {
+            close(sock);
+            puts("cc_socket: recv interrupt wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    close(sock);
+    puts("cc_socket: recv interrupt timeout");
+    return 1;
 }
 
 int main(void) {
@@ -182,6 +301,10 @@ int main(void) {
     errno = 0;
     if (accept(listener, NULL, NULL) != -1 || errno != EAGAIN) {
         puts("cc_socket: accept timeout failed");
+        return 1;
+    }
+
+    if (check_recv_interrupted_by_signal() != 0) {
         return 1;
     }
 
