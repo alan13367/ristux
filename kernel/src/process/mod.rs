@@ -1313,15 +1313,21 @@ impl ProcessTable {
     }
 
     fn stop(&mut self, pid: Pid, signal: u8) -> Option<WakeList> {
-        let process = self.get_mut(pid)?;
-        if matches!(process.state, ProcessState::Zombie(_)) {
-            return Some(WakeList::new());
-        }
-        process.state = ProcessState::Stopped(signal);
-        process.exit_status = None;
-        process.stop_reported = false;
+        let parent = {
+            let process = self.get_mut(pid)?;
+            if matches!(process.state, ProcessState::Zombie(_)) {
+                return Some(WakeList::new());
+            }
+            process.state = ProcessState::Stopped(signal);
+            process.exit_status = None;
+            process.stop_reported = false;
+            process.parent
+        };
         if current_pid() == Some(pid) {
             clear_current();
+        }
+        if let Some(parent) = parent {
+            self.queue_sigchld(parent);
         }
         Some(self.wake_waiters_for(pid))
     }

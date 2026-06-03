@@ -450,10 +450,51 @@ static int check_sigchld_disposition(void) {
         puts("cc_signal: sigchld child failed");
         return 1;
     }
-    if (signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
-        puts("cc_signal: sigchld restore failed");
+
+    saw_sigchld = 0;
+    child = fork();
+    if (child < 0) {
+        puts("cc_signal: sigchld stop fork failed");
         return 1;
     }
+    if (child == 0) {
+        for (;;) {
+            syscall(SYS_sched_yield);
+        }
+    }
+    if (kill(child, SIGTSTP) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld stop send failed");
+        return 1;
+    }
+    for (int i = 0; i < 200000 && !saw_sigchld; i++) {
+        syscall(SYS_sched_yield);
+    }
+    status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP ||
+        !saw_sigchld) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld stop failed");
+        return 1;
+    }
+    if (signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
+        puts("cc_signal: sigchld restore failed");
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        return 1;
+    }
+    if (kill(child, SIGCONT) < 0 || kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGTERM) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld stop cleanup failed");
+        return 1;
+    }
+    puts("cc_signal: sigchld stop ok");
     puts("cc_signal: sigchld child ok");
     puts("cc_signal: sigchld ok");
     return 0;
