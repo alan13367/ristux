@@ -1,8 +1,11 @@
+#include <errno.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -102,6 +105,112 @@ static int check_pipe_writev(void) {
     return 0;
 }
 
+static int check_iovec_faults(void) {
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    int null_fd = open("/dev/null", O_WRONLY, 0);
+    if (zero_fd < 0 || null_fd < 0) {
+        close(zero_fd);
+        close(null_fd);
+        puts("cc_uio: fault device open failed");
+        return 1;
+    }
+
+    struct iovec one_byte;
+    char byte = 'f';
+    one_byte.iov_base = &byte;
+    one_byte.iov_len = 1;
+    errno = 0;
+    if (readv(zero_fd, &one_byte, IOV_MAX + 1) != -1 || errno != EINVAL) {
+        printf("cc_uio: iovcnt limit errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+
+    errno = 0;
+    if (readv(zero_fd, (const struct iovec *)~0UL, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: readv iovec fault errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    errno = 0;
+    if (writev(null_fd, (const struct iovec *)~0UL, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: writev iovec fault errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+
+    struct iovec bad_iov;
+    bad_iov.iov_base = (void *)~0UL;
+    bad_iov.iov_len = 1;
+    errno = 0;
+    if (readv(zero_fd, &bad_iov, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: readv target fault errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    errno = 0;
+    if (writev(null_fd, &bad_iov, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: writev source fault errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+
+    char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("cc_uio: fault mmap failed errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    page[0] = 'u';
+    one_byte.iov_base = page;
+    one_byte.iov_len = 1;
+
+    if (mprotect(page, 4096, PROT_READ) < 0) {
+        printf("cc_uio: fault readonly protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    errno = 0;
+    if (readv(zero_fd, &one_byte, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: readv readonly target errno=%d\n", errno);
+        munmap(page, 4096);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+
+    if (mprotect(page, 4096, PROT_NONE) < 0) {
+        printf("cc_uio: fault none protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    errno = 0;
+    if (writev(null_fd, &one_byte, 1) != -1 || errno != EFAULT) {
+        printf("cc_uio: writev none source errno=%d\n", errno);
+        munmap(page, 4096);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+
+    munmap(page, 4096);
+    close(zero_fd);
+    close(null_fd);
+    puts("cc_uio: fault validation ok");
+    return 0;
+}
+
 static int check_socket_read_write(void) {
     struct sockaddr_in addr;
     loopback_addr(&addr, 18184);
@@ -176,6 +285,9 @@ int main(void) {
         return 1;
     }
     if (check_pipe_writev() != 0) {
+        return 1;
+    }
+    if (check_iovec_faults() != 0) {
         return 1;
     }
     if (check_socket_read_write() != 0) {
