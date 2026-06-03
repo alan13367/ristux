@@ -3502,6 +3502,10 @@ fn deliver_kill_all(
 }
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
+    const SIGACTION_SIZE: usize = 24;
+    const SIGACTION_FLAGS_OFFSET: usize = 16;
+    const SUPPORTED_FLAGS: u32 = process::SIGNAL_FLAG_NOCLDSTOP;
+
     if signum == 0 || signum >= 32 {
         return Err(EINVAL);
     }
@@ -3512,26 +3516,36 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         return Err(EINVAL);
     }
     let pid = process::current_pid().ok_or(ESRCH)?;
-    let new_handler = if act == 0 {
+    let new_action = if act == 0 {
         None
     } else {
-        let bytes = process::read_user(act, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
-        let mut raw = [0u8; core::mem::size_of::<usize>()];
-        raw.copy_from_slice(bytes);
-        Some(usize::from_le_bytes(raw))
+        let bytes = process::read_user(act, SIGACTION_SIZE).ok_or(EFAULT)?;
+        let mut raw_handler = [0u8; core::mem::size_of::<usize>()];
+        raw_handler.copy_from_slice(&bytes[0..core::mem::size_of::<usize>()]);
+        let mut raw_flags = [0u8; core::mem::size_of::<u32>()];
+        raw_flags.copy_from_slice(
+            &bytes[SIGACTION_FLAGS_OFFSET..SIGACTION_FLAGS_OFFSET + core::mem::size_of::<u32>()],
+        );
+        let flags = u32::from_le_bytes(raw_flags);
+        if flags & !SUPPORTED_FLAGS != 0 {
+            return Err(EINVAL);
+        }
+        Some((usize::from_le_bytes(raw_handler), flags))
     };
     if oldact != 0 {
-        process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+        process::write_user_buffer(oldact, SIGACTION_SIZE).ok_or(EFAULT)?;
     }
-    let old = if let Some(handler) = new_handler {
-        process::set_signal_handler(pid, signum, handler).ok_or(EINVAL)?
+    let (old_handler, old_flags) = if let Some((handler, flags)) = new_action {
+        process::set_signal_action(pid, signum, handler, flags).ok_or(EINVAL)?
     } else {
-        process::get_signal_handler(pid, signum).ok_or(EINVAL)?
+        process::get_signal_action(pid, signum).ok_or(EINVAL)?
     };
     if oldact != 0 {
-        let out =
-            process::write_user_buffer(oldact, core::mem::size_of::<usize>()).ok_or(EFAULT)?;
-        out.copy_from_slice(&old.to_le_bytes());
+        let out = process::write_user_buffer(oldact, SIGACTION_SIZE).ok_or(EFAULT)?;
+        out.fill(0);
+        out[0..core::mem::size_of::<usize>()].copy_from_slice(&old_handler.to_le_bytes());
+        out[SIGACTION_FLAGS_OFFSET..SIGACTION_FLAGS_OFFSET + core::mem::size_of::<u32>()]
+            .copy_from_slice(&old_flags.to_le_bytes());
     }
     Ok(0)
 }

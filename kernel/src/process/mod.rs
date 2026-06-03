@@ -25,6 +25,7 @@ pub const MAX_FDS: usize = 256;
 pub const MAX_USER_ARGS: usize = 64;
 pub const MAX_USER_ENVS: usize = 64;
 pub const FD_CLOEXEC: u32 = 1;
+pub const SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
 const MAX_WAKE_PIDS: usize = MAX_FDS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +142,7 @@ pub struct Process {
     pending_signal_status: Option<i32>,
     pub signal_mask: u64,
     pub signal_handlers: [usize; 32],
+    signal_flags: [u32; 32],
     pub state: ProcessState,
     pub address_space: AddressSpace,
     pub credentials: Credentials,
@@ -217,6 +219,12 @@ pub enum WaitSelector {
     Any,
     Pid(Pid),
     ProcessGroup(Pid),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SigchldEvent {
+    Exited,
+    JobControl,
 }
 
 impl WaitSelector {
@@ -430,6 +438,7 @@ impl Process {
             pending_signal_status: None,
             signal_mask: 0,
             signal_handlers: [0; 32],
+            signal_flags: [0; 32],
             state: ProcessState::Ready,
             address_space,
             credentials,
@@ -817,9 +826,10 @@ impl Process {
     }
 
     fn reset_caught_signal_handlers_for_exec(&mut self) {
-        for handler in &mut self.signal_handlers {
+        for (index, handler) in self.signal_handlers.iter_mut().enumerate() {
             if *handler != crate::signal::IGNORE_HANDLER {
                 *handler = crate::signal::DEFAULT_HANDLER;
+                self.signal_flags[index] = 0;
             }
         }
     }
@@ -1273,18 +1283,25 @@ impl ProcessTable {
             self.wake_waiter_for_child(waiter, pid, &mut wake);
         }
         if let Some(parent) = parent_pid {
-            self.queue_sigchld(parent);
+            self.queue_sigchld(parent, SigchldEvent::Exited);
             self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         wake
     }
 
-    fn queue_sigchld(&mut self, parent: Pid) {
+    fn queue_sigchld(&mut self, parent: Pid, event: SigchldEvent) {
         let status = crate::signal::Signal::Child.default_status();
         let current = current_pid();
         let Some(process) = self.get_mut(parent) else {
             return;
         };
+        if event == SigchldEvent::JobControl
+            && process.signal_flags[crate::signal::Signal::Child.number() as usize]
+                & SIGNAL_FLAG_NOCLDSTOP
+                != 0
+        {
+            return;
+        }
         if is_ignored_signal(process, status) {
             return;
         }
@@ -1450,7 +1467,7 @@ impl ProcessTable {
             clear_current();
         }
         if let Some(parent) = parent {
-            self.queue_sigchld(parent);
+            self.queue_sigchld(parent, SigchldEvent::JobControl);
         }
         Some(self.wake_waiters_for(pid))
     }
@@ -1472,7 +1489,7 @@ impl ProcessTable {
         let mut wake = WakeList::new();
         wake.push_unique(pid);
         if let Some(parent) = parent {
-            self.queue_sigchld(parent);
+            self.queue_sigchld(parent, SigchldEvent::JobControl);
             self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         Some(wake)
@@ -1663,6 +1680,7 @@ impl Process {
             pending_signal_status: None,
             signal_mask: self.signal_mask,
             signal_handlers: self.signal_handlers,
+            signal_flags: self.signal_flags,
             state: ProcessState::Ready,
             address_space,
             credentials: self.credentials,
@@ -2282,25 +2300,34 @@ pub fn set_pgid(pid: Pid, pgid: Pid) -> Result<(), SetPgidError> {
     })
 }
 
-pub fn set_signal_handler(pid: Pid, signal: usize, handler: usize) -> Option<usize> {
+pub fn set_signal_action(
+    pid: Pid,
+    signal: usize,
+    handler: usize,
+    flags: u32,
+) -> Option<(usize, u32)> {
     with_table(|table| {
         let process = table.get_mut(pid)?;
         if signal >= process.signal_handlers.len() {
             return None;
         }
         let old = process.signal_handlers[signal];
+        let old_flags = process.signal_flags[signal];
         process.signal_handlers[signal] = handler;
+        process.signal_flags[signal] = flags;
         if handler == crate::signal::IGNORE_HANDLER {
             clear_pending_signal(process, signal);
         }
-        Some(old)
+        Some((old, old_flags))
     })
 }
 
-pub fn get_signal_handler(pid: Pid, signal: usize) -> Option<usize> {
+pub fn get_signal_action(pid: Pid, signal: usize) -> Option<(usize, u32)> {
     with_table(|table| {
         let process = table.get(pid)?;
-        process.signal_handlers.get(signal).copied()
+        let handler = process.signal_handlers.get(signal).copied()?;
+        let flags = process.signal_flags.get(signal).copied()?;
+        Some((handler, flags))
     })
 }
 

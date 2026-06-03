@@ -166,6 +166,7 @@ int optopt;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
+static int signal_action_flags[32];
 #define LIBC_ENV_MAX 64
 static char *managed_environment[LIBC_ENV_MAX + 1];
 static const char *getopt_next;
@@ -2080,29 +2081,37 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
         return -1;
     }
     sighandler_t old = signal_handlers[signum];
+    int old_flags = signal_action_flags[signum];
+    if (act != NULL && (act->sa_flags & ~SA_NOCLDSTOP) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
     if (oldact != NULL) {
         oldact->sa_handler = old;
         oldact->sa_mask = 0;
-        oldact->sa_flags = 0;
+        oldact->sa_flags = old_flags;
     }
     if (act == NULL) {
         return 0;
     }
 
-    signal_handlers[signum] = act->sa_handler;
-    void *kernel_handler;
+    uintptr_t kernel_handler;
     if (act->sa_handler == SIG_DFL) {
-        kernel_handler = NULL;
+        kernel_handler = 0;
     } else if (act->sa_handler == SIG_IGN) {
-        kernel_handler = (void *)SIG_IGN;
+        kernel_handler = 1;
     } else {
-        kernel_handler = (void *)signal_trampoline;
+        kernel_handler = (uintptr_t)signal_trampoline;
     }
-    long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_handler, 0);
+    struct sigaction kernel_act = *act;
+    memcpy(&kernel_act.sa_handler, &kernel_handler, sizeof(kernel_handler));
+    kernel_act.sa_mask = 0;
+    long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_act, 0);
     if (syscall_ret(ret) < 0) {
-        signal_handlers[signum] = old;
         return -1;
     }
+    signal_handlers[signum] = act->sa_handler;
+    signal_action_flags[signum] = act->sa_flags;
     return 0;
 }
 

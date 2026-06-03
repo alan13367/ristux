@@ -1,6 +1,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -305,8 +306,11 @@ static int check_invalid_raw_handler(void) {
         return 1;
     }
     if (child == 0) {
-        void *kernel_handler = (void *)0x1234;
-        if (syscall(SYS_rt_sigaction, SIGUSR1, (long)&kernel_handler, 0, 0, 0, 0) < 0) {
+        struct sigaction raw_action;
+        memset(&raw_action, 0, sizeof(raw_action));
+        uintptr_t raw_handler = 0x1234;
+        memcpy(&raw_action.sa_handler, &raw_handler, sizeof(raw_handler));
+        if (syscall(SYS_rt_sigaction, SIGUSR1, (long)&raw_action, 0, 0, 0, 0) < 0) {
             _exit(2);
         }
         raise(SIGUSR1);
@@ -329,9 +333,11 @@ static int check_sigaction_fault_preserves_handler(void) {
         puts("cc_signal: sigaction fault setup failed");
         return 1;
     }
-    void *kernel_handler = (void *)SIG_IGN;
+    struct sigaction raw_action;
+    memset(&raw_action, 0, sizeof(raw_action));
+    raw_action.sa_handler = SIG_IGN;
     errno = 0;
-    if (syscall(SYS_rt_sigaction, SIGUSR2, (long)&kernel_handler, 1, 0, 0, 0) != -1 ||
+    if (syscall(SYS_rt_sigaction, SIGUSR2, (long)&raw_action, 1, 0, 0, 0) != -1 ||
         errno != EFAULT) {
         puts("cc_signal: sigaction fault failed");
         return 1;
@@ -929,6 +935,87 @@ static int check_sigchld_disposition(void) {
     return 0;
 }
 
+static int check_sigchld_no_cldstop(void) {
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = on_sigchld;
+    act.sa_flags = SA_NOCLDSTOP;
+    if (sigemptyset(&act.sa_mask) < 0 ||
+        sigaction(SIGCHLD, &act, NULL) < 0) {
+        puts("cc_signal: sigchld no-cldstop setup failed");
+        return 1;
+    }
+
+    struct sigaction queried;
+    memset(&queried, 0, sizeof(queried));
+    if (sigaction(SIGCHLD, NULL, &queried) < 0 ||
+        queried.sa_handler != on_sigchld ||
+        queried.sa_flags != SA_NOCLDSTOP) {
+        signal(SIGCHLD, SIG_DFL);
+        puts("cc_signal: sigchld no-cldstop query failed");
+        return 1;
+    }
+
+    saw_sigchld = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        signal(SIGCHLD, SIG_DFL);
+        puts("cc_signal: sigchld no-cldstop fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        for (;;) {
+            syscall(SYS_sched_yield);
+        }
+    }
+
+    if (kill(child, SIGTSTP) < 0) {
+        signal(SIGCHLD, SIG_DFL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld no-cldstop stop send failed");
+        return 1;
+    }
+    for (int i = 0; i < 200000 && !saw_sigchld; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP ||
+        saw_sigchld) {
+        signal(SIGCHLD, SIG_DFL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld no-cldstop stop failed");
+        return 1;
+    }
+
+    if (kill(child, SIGCONT) < 0 ||
+        waitpid(child, &status, WCONTINUED) != child ||
+        !WIFCONTINUED(status) ||
+        saw_sigchld) {
+        signal(SIGCHLD, SIG_DFL);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld no-cldstop continue failed");
+        return 1;
+    }
+
+    if (signal(SIGCHLD, SIG_DFL) == SIG_ERR ||
+        kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child ||
+        !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: sigchld no-cldstop cleanup failed");
+        return 1;
+    }
+
+    puts("cc_signal: sigchld no-cldstop ok");
+    return 0;
+}
+
 static int check_additional_signals(void) {
     if (signal(SIGUSR2, on_usr2) == SIG_ERR || raise(SIGUSR2) != 0 ||
         !saw_usr2) {
@@ -1095,6 +1182,7 @@ int main(int argc, char **argv) {
 
     if (check_additional_signals() != 0 ||
         check_sigchld_disposition() != 0 ||
+        check_sigchld_no_cldstop() != 0 ||
         check_external_signal_handler() != 0 ||
         check_signal_wakes_blocked_syscall() != 0 ||
         check_signal_restarts_syscall_entry() != 0 ||
