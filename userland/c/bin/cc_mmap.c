@@ -113,6 +113,53 @@ static int check_high_user_pointer_rejected(void) {
     return 0;
 }
 
+static int check_mmap_bounds(void) {
+    char *guard = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (guard == MAP_FAILED) {
+        printf("cc_mmap: mmap bounds guard failed errno=%d\n", errno);
+        return 1;
+    }
+    guard[0] = 'b';
+
+    errno = 0;
+    void *zero = mmap(NULL, 0, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (zero != MAP_FAILED || errno != EINVAL) {
+        if (zero != MAP_FAILED) {
+            munmap(zero, 4096);
+        }
+        printf("cc_mmap: mmap zero length errno=%d\n", errno);
+        munmap(guard, 4096);
+        return 1;
+    }
+
+    errno = 0;
+    void *huge = mmap(NULL, 0x08001000UL, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (huge != MAP_FAILED || errno != ENOMEM) {
+        if (huge != MAP_FAILED) {
+            munmap(huge, 0x08001000UL);
+        }
+        printf("cc_mmap: mmap huge length errno=%d\n", errno);
+        munmap(guard, 4096);
+        return 1;
+    }
+
+    guard[0] = 'c';
+    if (guard[0] != 'c') {
+        puts("cc_mmap: mmap bounds guard lost");
+        munmap(guard, 4096);
+        return 1;
+    }
+    if (munmap(guard, 4096) < 0) {
+        puts("cc_mmap: mmap bounds munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: mmap bounds ok");
+    return 0;
+}
+
 static int check_mprotect_failure_atomic(void) {
     char *addr = (char *)0x54000000UL;
     (void)munmap(addr, 8192);
@@ -227,6 +274,9 @@ int main(void) {
         return 1;
     }
     if (check_high_user_pointer_rejected() != 0) {
+        return 1;
+    }
+    if (check_mmap_bounds() != 0) {
         return 1;
     }
 
