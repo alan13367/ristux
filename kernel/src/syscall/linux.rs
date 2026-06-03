@@ -2842,6 +2842,9 @@ fn linux_mmap(
         }
         Some((vfs_fd, file_offset))
     };
+    if let Some((vfs_fd, file_offset)) = file_mapping {
+        preflight_mmap_file_from_vfs(vfs_fd, file_offset)?;
+    }
 
     let initial_protection = if file_mapping.is_some() {
         UserProtection::ReadWrite
@@ -2878,6 +2881,18 @@ fn linux_mmap(
         }
     }
     Ok(mapped as u64)
+}
+
+fn preflight_mmap_file_from_vfs(vfs_fd: usize, offset: usize) -> Result<(), i64> {
+    let dup = fs::duplicate_fd(vfs_fd).map_err(map_vfs_error)?;
+    let result = (|| {
+        let offset = isize::try_from(offset).map_err(|_| EINVAL)?;
+        fs::lseek(dup, offset, 0).map_err(map_vfs_error)?;
+        let mut byte = [0u8; 1];
+        fs::read(dup, &mut byte).map(|_| ()).map_err(map_vfs_error)
+    })();
+    let _ = fs::close(dup);
+    result
 }
 
 fn linux_mprotect(addr: usize, len: usize, prot: i32) -> Result<u64, i64> {

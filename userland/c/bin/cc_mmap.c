@@ -267,6 +267,85 @@ static int check_fixed_failure_preserves_mapping(void) {
     return 0;
 }
 
+static int check_fixed_file_failure_preserves_mapping(void) {
+    char *addr = (char *)0x54004000UL;
+    (void)munmap(addr, 4096);
+
+    char *page = mmap(addr, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (page != addr) {
+        printf("cc_mmap: fixed file preserve setup errno=%d\n", errno);
+        return 1;
+    }
+    page[0] = 'd';
+
+    int fd = open("/", O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_mmap: fixed file preserve dir open failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    void *bad = mmap(page, 4096, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, 0);
+    close(fd);
+    if (bad != MAP_FAILED || errno != EINVAL) {
+        printf("cc_mmap: fixed file preserve failure errno=%d\n", errno);
+        if (bad != MAP_FAILED) {
+            munmap(bad, 4096);
+        } else {
+            munmap(page, 4096);
+        }
+        return 1;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_mmap: fixed file preserve pipe failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (write(pipefd[1], page, 1) != 1) {
+        printf("cc_mmap: fixed file preserve mapping lost errno=%d\n", errno);
+        close(pipefd[0]);
+        close(pipefd[1]);
+        munmap(page, 4096);
+        return 1;
+    }
+    char value = 0;
+    if (read(pipefd[0], &value, 1) != 1 || value != 'd') {
+        puts("cc_mmap: fixed file preserve contents lost");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        munmap(page, 4096);
+        return 1;
+    }
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: fixed file preserve zero open failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, page, 1) != 1) {
+        printf("cc_mmap: fixed file preserve write lost errno=%d\n", errno);
+        close(zero_fd);
+        munmap(page, 4096);
+        return 1;
+    }
+    close(zero_fd);
+
+    if (munmap(page, 4096) < 0) {
+        puts("cc_mmap: fixed file preserve munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: fixed file failure preserves ok");
+    return 0;
+}
+
 int main(void) {
     if (check_brk_shrink() != 0) {
         return 1;
@@ -439,6 +518,9 @@ int main(void) {
         return 1;
     }
     if (check_fixed_failure_preserves_mapping() != 0) {
+        return 1;
+    }
+    if (check_fixed_file_failure_preserves_mapping() != 0) {
         return 1;
     }
 

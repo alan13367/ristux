@@ -314,6 +314,7 @@ case "$SCENARIO" in
       "^cc_mmap: fixed ok$"
       "^cc_mmap: mprotect failure atomic ok$"
       "^cc_mmap: fixed failure preserves ok$"
+      "^cc_mmap: fixed file failure preserves ok$"
       "^cc_mmap: file ok$"
       "^cc_mmap: offset ok$"
       "^cc_mmap: file multi ok$"
