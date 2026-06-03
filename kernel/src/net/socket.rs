@@ -27,6 +27,7 @@ pub struct SocketTable {
 pub enum SocketError {
     BadFd,
     Invalid,
+    RefcountOverflow,
     WouldBlock,
     AddressInUse,
     AlreadyConnected,
@@ -155,7 +156,10 @@ impl SocketTable {
 
     pub fn duplicate(&mut self, handle: usize) -> Result<(), SocketError> {
         let entry = self.entry_mut(handle)?;
-        entry.ref_count = entry.ref_count.saturating_add(1);
+        entry.ref_count = entry
+            .ref_count
+            .checked_add(1)
+            .ok_or(SocketError::RefcountOverflow)?;
         Ok(())
     }
 

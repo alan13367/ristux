@@ -1333,10 +1333,9 @@ impl Process {
             .try_reserve_exact(handles.len())
             .map_err(|_| ForkError::OutOfMemory)?;
         for handle in handles {
-            let result = crate::net::socket::with_sockets(|table| table.duplicate(*handle));
-            if result.is_err() {
+            if let Err(err) = crate::net::socket::with_sockets(|table| table.duplicate(*handle)) {
                 Self::close_socket_handle_list(&duplicated);
-                return Err(ForkError::InvalidProcessState);
+                return Err(map_fork_socket_error(err));
             }
             duplicated.push(*handle);
         }
@@ -1467,6 +1466,13 @@ fn map_fork_paging_error(err: paging::PagingError) -> ForkError {
         paging::PagingError::OutOfFrames
         | paging::PagingError::RefcountOverflow
         | paging::PagingError::RefcountUnavailable => ForkError::OutOfMemory,
+        _ => ForkError::InvalidProcessState,
+    }
+}
+
+fn map_fork_socket_error(err: crate::net::socket::SocketError) -> ForkError {
+    match err {
+        crate::net::socket::SocketError::RefcountOverflow => ForkError::OutOfMemory,
         _ => ForkError::InvalidProcessState,
     }
 }

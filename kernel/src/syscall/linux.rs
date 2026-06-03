@@ -1911,6 +1911,7 @@ fn map_socket_error(err: crate::net::socket::SocketError) -> i64 {
     match err {
         crate::net::socket::SocketError::BadFd => EBADF,
         crate::net::socket::SocketError::Invalid => EINVAL,
+        crate::net::socket::SocketError::RefcountOverflow => EMFILE,
         crate::net::socket::SocketError::WouldBlock => EAGAIN,
         crate::net::socket::SocketError::AddressInUse => EADDRINUSE,
         crate::net::socket::SocketError::AlreadyConnected => EISCONN,
