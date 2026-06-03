@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -63,6 +64,43 @@ static int check_pipe_output_fault(void) {
     }
     close(fd);
     puts("cc_fcntl: pipe output fault ok");
+    return 0;
+}
+
+static int check_broken_pipe_errno(void) {
+    sighandler_t old_pipe = signal(SIGPIPE, SIG_IGN);
+    if (old_pipe == SIG_ERR) {
+        puts("cc_fcntl: broken pipe signal setup failed");
+        return 1;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        signal(SIGPIPE, old_pipe);
+        puts("cc_fcntl: broken pipe setup failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    const char byte = 'x';
+    errno = 0;
+    if (write(pipefd[1], &byte, 0) != 0) {
+        close(pipefd[1]);
+        signal(SIGPIPE, old_pipe);
+        puts("cc_fcntl: broken pipe zero write failed");
+        return 1;
+    }
+
+    errno = 0;
+    int ok = write(pipefd[1], &byte, 1) == -1 && errno == EPIPE;
+    close(pipefd[1]);
+    signal(SIGPIPE, old_pipe);
+
+    if (!ok) {
+        puts("cc_fcntl: broken pipe errno failed");
+        return 1;
+    }
+    puts("cc_fcntl: broken pipe errno ok");
     return 0;
 }
 
@@ -150,6 +188,9 @@ int main(int argc, char **argv) {
     close(pipefd[1]);
 
     if (check_pipe_output_fault() != 0) {
+        return 1;
+    }
+    if (check_broken_pipe_errno() != 0) {
         return 1;
     }
 

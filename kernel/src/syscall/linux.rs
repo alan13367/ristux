@@ -159,6 +159,7 @@ const EEXIST: i64 = -17;
 const ENOTDIR: i64 = -20;
 const ENOSPC: i64 = -28;
 const EMLINK: i64 = -31;
+const EPIPE: i64 = -32;
 const ENOSYS: i64 = -38;
 const EINVAL: i64 = -22;
 const ENOTTY: i64 = -25;
@@ -730,10 +731,11 @@ fn linux_write(
                     yield_blocked_or_interrupted(frame)?;
                 }
                 Err(err) => {
+                    let mapped = map_write_vfs_error(err);
                     return if total > 0 {
                         Ok(total as u64)
                     } else {
-                        Err(map_vfs_error(err))
+                        Err(mapped)
                     };
                 }
             }
@@ -767,7 +769,7 @@ fn linux_write_bytes(fd: usize, bytes: &[u8]) -> Result<usize, i64> {
         return match fs::write(vfs_fd, bytes) {
             Ok(n) => Ok(n),
             Err(fs::vfs::VfsError::WouldBlock) => Err(EAGAIN),
-            Err(err) => Err(map_vfs_error(err)),
+            Err(err) => Err(map_write_vfs_error(err)),
         };
     }
     if fd >= SOCKET_FD_BASE {
@@ -3857,12 +3859,22 @@ fn map_vfs_error(err: fs::vfs::VfsError) -> i64 {
         fs::vfs::VfsError::NotFound => ENOENT,
         fs::vfs::VfsError::AlreadyExists => EEXIST,
         fs::vfs::VfsError::BadFd => EBADF,
+        fs::vfs::VfsError::BrokenPipe => EPIPE,
         fs::vfs::VfsError::TooManyOpenFiles => EMFILE,
         fs::vfs::VfsError::TooManyLinks => EMLINK,
         fs::vfs::VfsError::NoSpace => ENOSPC,
         fs::vfs::VfsError::OutOfMemory => ENOMEM,
         _ => EINVAL,
     }
+}
+
+fn map_write_vfs_error(err: fs::vfs::VfsError) -> i64 {
+    if err == fs::vfs::VfsError::BrokenPipe {
+        if let Some(pid) = process::current_pid() {
+            let _ = crate::signal::send(pid, crate::signal::Signal::Pipe);
+        }
+    }
+    map_vfs_error(err)
 }
 
 fn map_cwd_error(err: fs::vfs::VfsError) -> i64 {

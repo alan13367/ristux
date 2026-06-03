@@ -63,6 +63,7 @@ pub enum VfsError {
     TooManyLinks,
     NoSpace,
     OutOfMemory,
+    BrokenPipe,
 }
 
 impl fmt::Display for VfsError {
@@ -79,6 +80,7 @@ impl fmt::Display for VfsError {
             Self::TooManyLinks => f.write_str("too many links"),
             Self::NoSpace => f.write_str("no space left on device"),
             Self::OutOfMemory => f.write_str("out of memory"),
+            Self::BrokenPipe => f.write_str("broken pipe"),
         }
     }
 }
@@ -232,8 +234,11 @@ impl PipeState {
     }
 
     fn write(&mut self, input: &[u8]) -> Result<usize, VfsError> {
+        if input.is_empty() {
+            return Ok(0);
+        }
         if self.readers == 0 {
-            return Err(VfsError::BadFd);
+            return Err(VfsError::BrokenPipe);
         }
         let mut written = 0;
         for byte in input {
@@ -481,7 +486,11 @@ fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
     const TERMIOS_CC: usize = 17;
     let byte = *termios.get(TERMIOS_CC + index)?;
-    if byte == 0 { None } else { Some(byte) }
+    if byte == 0 {
+        None
+    } else {
+        Some(byte)
+    }
 }
 
 fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {

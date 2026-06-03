@@ -47,6 +47,7 @@ const EMFILE: i64 = -24;
 const ENOMEM: i64 = -12;
 const ENOSPC: i64 = -28;
 const EMLINK: i64 = -31;
+const EPIPE: i64 = -32;
 const EINVAL: i64 = -22;
 const ENOENT: i64 = -2;
 const ESRCH: i64 = -3;
@@ -683,6 +684,7 @@ fn map_vfs_error(err: VfsError) -> SyscallError {
         VfsError::TooManyLinks => SyscallError(EMLINK),
         VfsError::NoSpace => SyscallError(ENOSPC),
         VfsError::OutOfMemory => SyscallError(ENOMEM),
+        VfsError::BrokenPipe => SyscallError(EPIPE),
     }
 }
 
