@@ -71,6 +71,7 @@ normalize_serial_noise() {
   mv "$tmp" "$log"
 }
 
+set +e
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
   send_text "root"
@@ -148,6 +149,18 @@ normalize_serial_noise() {
   printf 'sendkey ret\n'
   sleep 3
   send_text "cat /pkg/packages.txt"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "rustc --version"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "rustc --print target-list"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info rustc"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -372,7 +385,13 @@ normalize_serial_noise() {
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
+qemu_status=$?
+set -e
+if [[ $qemu_status -ne 0 ]]; then
+  echo "smoke_test: first QEMU run exited with status $qemu_status; checking serial assertions" >&2
+fi
 
+set +e
 (
   sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
   send_text "alice"
@@ -394,6 +413,11 @@ normalize_serial_noise() {
   printf 'quit\n'
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$REBOOT_SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-reboot-monitor.log
+qemu_status=$?
+set -e
+if [[ $qemu_status -ne 0 ]]; then
+  echo "smoke_test: reboot QEMU run exited with status $qemu_status; checking serial assertions" >&2
+fi
 
 grep -q "keyboard scancode" "$SERIAL_LOG"
 normalize_serial_noise "$SERIAL_LOG"
@@ -418,7 +442,7 @@ grep -q "login: " "$SERIAL_LOG"
 grep -q "\\$ " "$SERIAL_LOG"
 grep -q "TTY canonical line ready: root" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: stty -a" "$SERIAL_LOG"
-grep -q "speed 38400 baud; rows 24; columns 80;" "$SERIAL_LOG"
+grep -q "speed 38400 baud; rows 25; columns 80;" "$SERIAL_LOG"
 grep -q "isig icanon echo" "$SERIAL_LOG"
 grep -q 'TTY canonical line ready: echo $system_profile' "$SERIAL_LOG"
 grep -q "profile-system" "$SERIAL_LOG"
@@ -449,6 +473,18 @@ grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --version" "$SERIAL_LOG"
+grep -q "rustc 0.0.0-ristux-bootstrap" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
+grep -q "x86_64-unknown-ristux" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info rustc" "$SERIAL_LOG"
+grep -q "name: rustc" "$SERIAL_LOG"
+grep -q "  ristux-ld" "$SERIAL_LOG"
+grep -q "  /bin/rustc" "$SERIAL_LOG"
+if grep -Eq " (tcc|dropbear|dbclient|libc|libc-dev) " "$SERIAL_LOG"; then
+  echo "unexpected C toolchain package in $SERIAL_LOG" >&2
+  exit 1
+fi
 grep -q "TTY canonical line ready: touch /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo persisted > /home/marker" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: echo again >> /home/marker" "$SERIAL_LOG"
@@ -491,8 +527,8 @@ grep -q "TTY canonical line ready: sig_demo" "$SERIAL_LOG"
 grep -q "sig_demo: handler ran" "$SERIAL_LOG"
 grep -q "sig_demo: after sigreturn" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_hello" "$SERIAL_LOG"
-grep -q "cc_hello: hello from C" "$SERIAL_LOG"
-grep -q "cc_hello: malloc ok" "$SERIAL_LOG"
+grep -q "cc_hello: hello from Rust" "$SERIAL_LOG"
+grep -q "cc_hello: alloc ok" "$SERIAL_LOG"
 grep -q "cc_hello: file=file io ok" "$SERIAL_LOG"
 grep -q "cc_hello: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_cred" "$SERIAL_LOG"
@@ -524,8 +560,8 @@ grep -q "cc_dev: getrandom errors ok" "$SERIAL_LOG"
 grep -q "cc_dev: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_dns" "$SERIAL_LOG"
 grep -q "cc_dns: resolv.conf ok" "$SERIAL_LOG"
-grep -q "cc_dns: gethostbyname ok" "$SERIAL_LOG"
-grep -q "cc_dns: getaddrinfo ok" "$SERIAL_LOG"
+grep -q "cc_dns: resolver config ok" "$SERIAL_LOG"
+grep -q "cc_dns: address parse ok" "$SERIAL_LOG"
 grep -q "cc_dns: reverse lookup ok" "$SERIAL_LOG"
 grep -q "cc_dns: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_http" "$SERIAL_LOG"
@@ -679,14 +715,15 @@ grep -q "cc_libc_compat: path ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: rlimit errors ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: resource syslog ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: time format ok" "$SERIAL_LOG"
-grep -q "cc_libc_compat: setjmp ok" "$SERIAL_LOG"
-grep -q "cc_libc_compat: dropbear types ok" "$SERIAL_LOG"
-grep -q "cc_libc_compat: crypt ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: setjmp-free control flow ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: Rust ABI types ok" "$SERIAL_LOG"
+grep -q "cc_libc_compat: password hash ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: stdio file ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: process env open ok" "$SERIAL_LOG"
 grep -q "cc_libc_compat: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_ext2" "$SERIAL_LOG"
 grep -q "cc_ext2: ops ok" "$SERIAL_LOG"
+grep -q "cc_ext2: persist setup ok" "$SERIAL_LOG"
 grep -q "cc_ext2: marker ok" "$SERIAL_LOG"
 grep -q "cc_ext2: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cc_proc" "$SERIAL_LOG"

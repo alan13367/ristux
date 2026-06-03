@@ -6,6 +6,6 @@ libdir=${exec_prefix}lib
 Name: Ristux
 Description: Ristux freestanding userland ABI
 Version: 0.1.0
-Requires: libc
-Cflags: -I${includedir}
-Libs: -L${libdir} -lc
+Requires:
+Cflags:
+Libs:

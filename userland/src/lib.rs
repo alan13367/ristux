@@ -7,6 +7,7 @@ pub mod alloc_impl;
 pub mod installer_support;
 pub mod io;
 pub mod prelude;
+pub mod probe_output;
 pub mod sys;
 
 /// Slice over a NUL-terminated argv array.

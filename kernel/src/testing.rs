@@ -60,7 +60,7 @@ fn run() -> KernelResult<()> {
     let linker = dynamic_linker::stats();
     ensure(
         linker.libraries_loaded >= 1 && linker.relocations_applied >= 4,
-        "dynamic linker did not load and relocate shared objects",
+        "dynamic linker did not resolve the Rust runtime shim",
     )?;
     let smp = smp::stats();
     ensure(smp.started_cpus >= 1, "SMP did not start bootstrap CPU")?;

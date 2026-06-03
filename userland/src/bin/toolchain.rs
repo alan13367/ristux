@@ -56,12 +56,11 @@ fn basename(path: &[u8]) -> &[u8] {
     }
 }
 
-fn append_tcc_args(out: &mut Vec<Vec<u8>>, mode: &[u8], args: &[&[u8]]) -> bool {
-    out.push(b"tcc".to_vec());
+fn append_frontend_args(out: &mut Vec<Vec<u8>>, mode: &[u8], args: &[&[u8]]) -> bool {
+    out.push(b"rustc".to_vec());
     match mode {
-        b"as" => out.push(b"-c".to_vec()),
-        b"cpp" => out.push(b"-E".to_vec()),
-        b"ld" => {}
+        b"ld" => out[0] = b"ristux-ld".to_vec(),
+        b"rustc" => {}
         _ => return false,
     }
     for arg in args {
@@ -76,12 +75,20 @@ fn run_frontend(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         .map(|arg| basename(arg))
         .unwrap_or(b"toolchain");
     let mut owned_args = Vec::new();
-    if !append_tcc_args(&mut owned_args, mode, args.get(1..).unwrap_or(&[])) {
-        write_all(2, b"toolchain: unsupported frontend\n");
+    if !append_frontend_args(&mut owned_args, mode, args.get(1..).unwrap_or(&[])) {
+        write_all(2, b"toolchain: C frontends removed; use rustc or ristux-ld\n");
         return 2;
     }
 
-    let path = cstr(b"/bin/tcc");
+    let program = owned_args
+        .first()
+        .map(|arg| arg.as_slice())
+        .unwrap_or(b"rustc");
+    let path = if program == b"ristux-ld" {
+        cstr(b"/bin/ristux-ld")
+    } else {
+        cstr(b"/bin/rustc")
+    };
     let c_args: Vec<Vec<u8>> = owned_args.iter().map(|arg| cstr(arg)).collect();
     let mut argv: Vec<*const u8> = c_args.iter().map(|arg| arg.as_ptr()).collect();
     argv.push(ptr::null());
@@ -91,7 +98,7 @@ fn run_frontend(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
     envp.push(ptr::null());
 
     let _ = sys::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
-    write_all(2, b"toolchain: cannot execute /bin/tcc\n");
+    write_all(2, b"toolchain: cannot execute Rust toolchain frontend\n");
     127
 }
 

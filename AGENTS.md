@@ -37,8 +37,8 @@ Multiboot2.
 - **Boot:** assembly in `kernel/boot/` (Multiboot2 header + early boot). Kernel linked with `kernel/linker.ld`.
 - **Core subsystems:** process/scheduler/signals, x86_64 paging and address spaces, VFS/ext2/initrd, TTY/PTY, IPC, security credentials, sockets/TCP/UDP, VirtIO block/net, PCI, framebuffer/VGA/serial/keyboard.
 - **Userspace ABI:** Linux-like x86_64 `syscall` ABI documented in `docs/abi.md`; statically linked ELF64 ET_EXEC is the supported baseline.
-- **Userland:** Rust programs in `userland/src/bin/` plus C programs under `userland/c/bin/`; built by the Makefile for `targets/x86_64-ristux-user.json` or `clang --target=x86_64-unknown-none-elf`.
-- **libc/toolchain:** in-tree static C libc/CRT in `userland/c/`; TinyCC, newlib, and Dropbear ports are experimental workload/toolchain probes.
+- **Userland:** Rust programs in `userland/src/bin/`; built by the Makefile for `targets/x86_64-unknown-ristux.json`.
+- **Toolchain:** the default rootfs ships Rust-only `rustc`/`ristux-ld` package scaffolding. The old C libc/CRT, TinyCC, Newlib, and Dropbear probes are removed from the default tree.
 - **Rootfs:** `tools/build_rootfs.rs` consumes `rootfs/manifest.txt` to produce `iso/boot/initrd.bin`; package metadata is also manifest-driven.
 - **Persistent storage:** ext2 image tooling lives in `tools/build_ext2_disk.rs`; VM disk/install image tooling lives in `tools/build_vm_disk.rs`.
 - **No `cargo test`:** verification is done via the QEMU smoke test and the kernel’s built-in self-test harness.
@@ -46,13 +46,13 @@ Multiboot2.
 ## Testing & Verification
 
 - **Smoke test:** boots QEMU headless, injects keys, and asserts on serial log output. Serial log is written to `/tmp/ristux-smoke-serial.log`.
-- **Passing boot signs:** `Kernel self-test harness passed.`, C/userland probe output, keyboard scancodes, `TTY canonical line ready: ...`, ring-3 program exits, no `kernel panic`.
+- **Passing boot signs:** `Kernel self-test harness passed.`, Rust userland/probe output, keyboard scancodes, `TTY canonical line ready: ...`, ring-3 program exits, no `kernel panic`.
 - **CI:** runs on `macos-latest`; installs `i686-elf-grub`, `xorriso`, `mtools`, `qemu` via Homebrew.
 
 ## Gotchas
 
 - Do not add std-dependent crates to the kernel; it is `#![no_std]`.
-- Rust userland is built by Cargo using the custom user target; C userland is built by the Makefile with `clang --target=x86_64-unknown-none-elf` and `rust-lld`.
+- Rust userland is built by Cargo using the custom user target. Do not add C userland, libc/CRT, TinyCC, Newlib, or Dropbear artifacts back to the default rootfs.
 - `make iso` depends on `check-multiboot`, the initrd, and the disk image. If userland/rootfs sources change, `make iso` will rebuild them.
 - The supported near-term platform is QEMU + GRUB + VirtIO. Real hardware readiness is not implied.
 - QEMU defaults: `-m 256M -smp 4 -no-reboot`. `make run` also passes `-no-shutdown`.

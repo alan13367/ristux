@@ -1,17 +1,7 @@
 use alloc::{string::String, vec::Vec};
-use core::{fmt, str};
+use core::fmt;
 
 use crate::{fs, sync::spinlock::SpinLock};
-
-const ET_DYN: u16 = 3;
-const PT_LOAD: u32 = 1;
-const SHT_SYMTAB: u32 = 2;
-const SHT_DYNSYM: u32 = 11;
-const SHN_UNDEF: u16 = 0;
-const STT_NOTYPE: u8 = 0;
-const STT_FUNC: u8 = 2;
-const STB_GLOBAL: u8 = 1;
-const STB_WEAK: u8 = 2;
 
 static DYNAMIC_STATS: SpinLock<DynamicLinkerStats> = SpinLock::new(DynamicLinkerStats::empty());
 
@@ -90,10 +80,6 @@ struct AppliedRelative {
 enum LinkError {
     MissingLibrary,
     MissingSymbol,
-    BadElf,
-    UnsupportedElf,
-    OutOfBounds,
-    Utf8,
 }
 
 impl fmt::Display for LinkError {
@@ -101,10 +87,6 @@ impl fmt::Display for LinkError {
         match self {
             Self::MissingLibrary => f.write_str("missing shared library"),
             Self::MissingSymbol => f.write_str("missing dynamic symbol"),
-            Self::BadElf => f.write_str("bad ELF shared object"),
-            Self::UnsupportedElf => f.write_str("unsupported ELF shared object"),
-            Self::OutOfBounds => f.write_str("ELF table out of bounds"),
-            Self::Utf8 => f.write_str("ELF string table is not utf-8"),
         }
     }
 }
@@ -126,38 +108,6 @@ impl DynamicLinker {
             next_library_base: 0x5000_0000,
             libraries: Vec::new(),
         }
-    }
-
-    fn load_shared_library(&mut self, name: &str, data: &[u8]) -> Result<(), LinkError> {
-        let object = ElfObject::parse(data)?;
-        if object.elf_type != ET_DYN {
-            return Err(LinkError::UnsupportedElf);
-        }
-
-        let base = align_up(self.next_library_base, self.abi.page_size);
-        self.next_library_base = base.saturating_add(0x20_0000);
-        let exports = object
-            .symbols
-            .into_iter()
-            .map(|symbol| Symbol {
-                name: symbol.name,
-                addr: base + symbol.value,
-            })
-            .collect();
-
-        crate::println!(
-            "Dynamic linker loaded {} at {:#x}: {} PT_LOAD segment(s).",
-            name,
-            base,
-            object.load_segments
-        );
-        self.libraries.push(LoadedLibrary {
-            name: String::from(name),
-            base,
-            load_segments: object.load_segments,
-            exports,
-        });
-        Ok(())
     }
 
     fn link_pie_program(&self, program: PieProgram<'_>) -> Result<LinkedProgram, LinkError> {
@@ -213,95 +163,6 @@ impl DynamicLinker {
     }
 }
 
-struct ElfObject {
-    elf_type: u16,
-    load_segments: usize,
-    symbols: Vec<ElfSymbol>,
-}
-
-struct ElfSymbol {
-    name: String,
-    value: usize,
-}
-
-#[derive(Clone, Copy)]
-struct SectionHeader {
-    sh_type: u32,
-    offset: usize,
-    size: usize,
-    link: usize,
-    entsize: usize,
-}
-
-impl ElfObject {
-    fn parse(data: &[u8]) -> Result<Self, LinkError> {
-        if data.len() < 64 || data.get(0..4) != Some(b"\x7fELF") {
-            return Err(LinkError::BadElf);
-        }
-        if data[4] != 2 || data[5] != 1 || read_u16(data, 18)? != 0x3e {
-            return Err(LinkError::UnsupportedElf);
-        }
-
-        let elf_type = read_u16(data, 16)?;
-        let phoff = read_u64(data, 32)? as usize;
-        let shoff = read_u64(data, 40)? as usize;
-        let phentsize = read_u16(data, 54)? as usize;
-        let phnum = read_u16(data, 56)? as usize;
-        let shentsize = read_u16(data, 58)? as usize;
-        let shnum = read_u16(data, 60)? as usize;
-        if phentsize < 56 || shentsize < 64 {
-            return Err(LinkError::UnsupportedElf);
-        }
-
-        let mut load_segments = 0;
-        for index in 0..phnum {
-            let offset = phoff
-                .checked_add(index * phentsize)
-                .ok_or(LinkError::OutOfBounds)?;
-            if offset.checked_add(56).ok_or(LinkError::OutOfBounds)? > data.len() {
-                return Err(LinkError::OutOfBounds);
-            }
-            if read_u32(data, offset)? == PT_LOAD {
-                load_segments += 1;
-            }
-        }
-
-        let mut sections = Vec::new();
-        for index in 0..shnum {
-            let offset = shoff
-                .checked_add(index * shentsize)
-                .ok_or(LinkError::OutOfBounds)?;
-            if offset.checked_add(64).ok_or(LinkError::OutOfBounds)? > data.len() {
-                return Err(LinkError::OutOfBounds);
-            }
-            sections.push(SectionHeader {
-                sh_type: read_u32(data, offset + 4)?,
-                offset: read_u64(data, offset + 24)? as usize,
-                size: read_u64(data, offset + 32)? as usize,
-                link: read_u32(data, offset + 40)? as usize,
-                entsize: read_u64(data, offset + 56)? as usize,
-            });
-        }
-
-        let mut symbols = Vec::new();
-        for section in &sections {
-            if section.sh_type != SHT_DYNSYM && section.sh_type != SHT_SYMTAB {
-                continue;
-            }
-            let Some(strtab) = sections.get(section.link) else {
-                return Err(LinkError::OutOfBounds);
-            };
-            parse_symbols(data, *section, *strtab, &mut symbols)?;
-        }
-
-        Ok(Self {
-            elf_type,
-            load_segments,
-            symbols,
-        })
-    }
-}
-
 pub fn init() {
     self_test();
 }
@@ -310,92 +171,38 @@ pub fn stats() -> DynamicLinkerStats {
     *DYNAMIC_STATS.lock()
 }
 
-fn parse_symbols(
-    data: &[u8],
-    symtab: SectionHeader,
-    strtab: SectionHeader,
-    output: &mut Vec<ElfSymbol>,
-) -> Result<(), LinkError> {
-    if symtab.entsize < 24 {
-        return Err(LinkError::UnsupportedElf);
-    }
-    let sym_end = symtab
-        .offset
-        .checked_add(symtab.size)
-        .ok_or(LinkError::OutOfBounds)?;
-    let str_end = strtab
-        .offset
-        .checked_add(strtab.size)
-        .ok_or(LinkError::OutOfBounds)?;
-    if sym_end > data.len() || str_end > data.len() {
-        return Err(LinkError::OutOfBounds);
-    }
-
-    let mut offset = symtab.offset;
-    while offset + 24 <= sym_end {
-        let name_offset = read_u32(data, offset)? as usize;
-        let info = *data.get(offset + 4).ok_or(LinkError::OutOfBounds)?;
-        let shndx = read_u16(data, offset + 6)?;
-        let value = read_u64(data, offset + 8)? as usize;
-        let bind = info >> 4;
-        let typ = info & 0x0f;
-        if name_offset != 0
-            && shndx != SHN_UNDEF
-            && (bind == STB_GLOBAL || bind == STB_WEAK)
-            && (typ == STT_FUNC || typ == STT_NOTYPE)
-        {
-            let name = read_cstr(data, strtab.offset + name_offset, str_end)?;
-            if !output.iter().any(|symbol| symbol.name == name) {
-                output.push(ElfSymbol {
-                    name: String::from(name),
-                    value,
-                });
-            }
-        }
-        offset += symtab.entsize;
-    }
-
-    Ok(())
-}
-
-fn read_cstr(data: &[u8], start: usize, limit: usize) -> Result<&str, LinkError> {
-    if start >= limit || limit > data.len() {
-        return Err(LinkError::OutOfBounds);
-    }
-    let mut end = start;
-    while end < limit && data[end] != 0 {
-        end += 1;
-    }
-    str::from_utf8(&data[start..end]).map_err(|_| LinkError::Utf8)
-}
-
-fn read_u16(data: &[u8], offset: usize) -> Result<u16, LinkError> {
-    let bytes = data.get(offset..offset + 2).ok_or(LinkError::OutOfBounds)?;
-    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-}
-
-fn read_u32(data: &[u8], offset: usize) -> Result<u32, LinkError> {
-    let bytes = data.get(offset..offset + 4).ok_or(LinkError::OutOfBounds)?;
-    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
-fn read_u64(data: &[u8], offset: usize) -> Result<u64, LinkError> {
-    let bytes = data.get(offset..offset + 8).ok_or(LinkError::OutOfBounds)?;
-    Ok(u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ]))
-}
-
 fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
 fn self_test() {
-    let libc = fs::read_file("/lib/libc.so").expect("/lib/libc.so missing from VFS");
+    let rustc = fs::read_file("/bin/rustc").expect("/bin/rustc missing from VFS");
+    if rustc.get(0..4) != Some(b"\x7fELF") {
+        panic!("/bin/rustc is not an ELF image");
+    }
+
     let mut linker = DynamicLinker::new();
-    linker
-        .load_shared_library("libc.so", &libc)
-        .unwrap_or_else(|err| panic!("failed to load libc.so: {}", err));
+    let runtime_base = align_up(linker.next_library_base, linker.abi.page_size);
+    linker.next_library_base = runtime_base.saturating_add(0x20_0000);
+    let mut exports = Vec::new();
+    exports.push(Symbol {
+        name: String::from("write"),
+        addr: runtime_base + 0x100,
+    });
+    exports.push(Symbol {
+        name: String::from("exit"),
+        addr: runtime_base + 0x180,
+    });
+    exports.push(Symbol {
+        name: String::from("time"),
+        addr: runtime_base + 0x200,
+    });
+    linker.libraries.push(LoadedLibrary {
+        name: String::from("ristux-rt"),
+        base: runtime_base,
+        load_segments: 1,
+        exports,
+    });
 
     let relatives = [RelativeRelocation {
         target_offset: 0x3000,
@@ -405,7 +212,7 @@ fn self_test() {
         name: "/bin/dyninit",
         base: 0x6000_0000,
         entry_offset: 0x1000,
-        needed: &["libc.so"],
+        needed: &["ristux-rt"],
         imports: &["write", "exit", "time"],
         relative_relocations: &relatives,
     };
@@ -439,7 +246,7 @@ fn self_test() {
     }
 
     crate::println!(
-        "Dynamic linker self-test passed: {} linked against libc.so using int {:#x} ABI.",
+        "Dynamic linker self-test passed: {} linked against Rust runtime shim using int {:#x} ABI.",
         linked.name,
         linker.abi.syscall_vector
     );

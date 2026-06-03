@@ -1,7 +1,7 @@
 [build]
-target = "../targets/x86_64-ristux-user.json"
+target = "../targets/x86_64-unknown-ristux.json"
 
-[target.x86_64-ristux-user]
+[target.x86_64-unknown-ristux]
 rustflags = [
     "-C", "relocation-model=static",
     "-C", "link-arg=-T../userland/linker.ld",

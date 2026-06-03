@@ -1,8 +1,0 @@
-TinyCC source snapshot for the Ristux native compiler port.
-
-Source: https://repo.or.cz/tinycc.git
-Branch: mob
-Commit: 3b1fe97a596a7c69e693e962f4fe9b35128b68fd
-
-Only the source, headers, version file, README, and license files required by
-scripts/build_tinycc_port.sh are vendored here.

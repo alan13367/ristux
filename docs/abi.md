@@ -1,27 +1,29 @@
 # Ristux Userspace ABI
 
 This document describes the stable userspace ABI exposed by the x86_64 Ristux
-kernel. It is intentionally Linux-like where that keeps portable C software
-simple, but only the calls and structures listed here are part of the supported
-contract today.
+kernel. It is intentionally Linux-like where that keeps Rust userland and future
+portable workloads simple, but only the calls and structures listed here are
+part of the supported contract today.
 
 ## Target
 
 - Architecture: x86_64.
 - Executable format: statically linked ELF64 ET_EXEC.
 - Code model: freestanding, non-PIE, no red zone.
-- Calling convention: System V AMD64 for C functions.
+- Calling convention: System V AMD64 for Rust `extern "C"` and raw ABI entry
+  points.
 - Syscall convention: Linux x86_64 `syscall` instruction.
 - User/kernel split: userspace runs in ring 3 with user code selector `0x33`
   and user data selector `0x2b`.
 
-The in-tree C target uses:
+The canonical in-tree Rust user target is `x86_64-unknown-ristux` and uses:
 
-- `clang --target=x86_64-unknown-none-elf`
-- `-ffreestanding -fno-builtin -fno-stack-protector -fno-pic`
-- `-mno-red-zone -msoft-float -mno-sse -mno-sse2`
-- `userland/c/linker.ld`
-- `userland/c/crt/crt0.S`, `crti.S`, and `crtn.S`
+- `targets/x86_64-unknown-ristux.json`
+- `-C relocation-model=static`
+- `-C link-arg=-T../userland/linker.ld`
+- `-C link-arg=-nostdlib`
+- `-C link-arg=--no-dynamic-linker`
+- `-C link-arg=-static`
 
 ## Process Startup
 
@@ -33,8 +35,9 @@ arguments in registers:
 - `rdx`: `envp`
 
 `argv` is a null-terminated pointer array with `argc` entries followed by a
-null pointer. `envp` is a null-terminated pointer array. The C runtime stores
-`envp` in `environ` before calling `main(argc, argv, environ)`.
+null pointer. `envp` is a null-terminated pointer array. Rust user programs
+read these directly from `_start` and may preserve `envp` for child `execve`
+calls.
 
 File descriptors `0`, `1`, and `2` are initialized for interactive processes.
 Descriptors are inherited across `fork` and preserved across `execve`.
@@ -51,9 +54,10 @@ non-bootstrap userspace dispatches.
 forms are `flags == SIGCHLD` and `flags == SIGCHLD | CLONE_SETTLS`; the latter
 sets the child's x86_64 FS base before it runs and is intended as TLS groundwork
 for future pthread support. `child_stack` is validated as a userspace stack top
-when supplied, but the in-tree libc only exposes the raw syscall wrapper and
-does not yet provide a pthread stack trampoline. Shared address-space and
-thread-group flags such as `CLONE_VM`, `CLONE_THREAD`, `CLONE_SIGHAND`,
+when supplied, but the in-tree Rust userland currently exposes only raw syscall
+wrappers and does not yet provide a pthread-style stack trampoline. Shared
+address-space and thread-group flags such as `CLONE_VM`, `CLONE_THREAD`,
+`CLONE_SIGHAND`,
 `CLONE_FS`, `CLONE_FILES`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, and
 `CLONE_CHILD_CLEARTID` return `EINVAL`.
 
@@ -66,7 +70,8 @@ Ristux follows Linux x86_64 syscall register assignment:
 - `rax`: return value.
 - Negative returns in the range `-1` through `-4095` are `errno` values.
 
-The C runtime converts negative syscall returns into `-1` and sets `errno`.
+The Rust userland wrappers generally return raw negative syscall values. There
+is no shipped C `errno` translation layer.
 
 ## Supported Syscalls
 
@@ -163,7 +168,7 @@ The current Linux-like syscall surface is:
 | 137 | `statfs` | Reports filesystem block/inode capacity and availability for a path. |
 | 138 | `fstatfs` | Reports filesystem block/inode capacity and availability for a descriptor. |
 | 160 | `setrlimit` | Updates supported per-process resource limits. |
-| 170 | `sethostname` | Root-only host nodename update used by `uname` and libc `gethostname`. |
+| 170 | `sethostname` | Root-only host nodename update used by `uname` and `hostname`. |
 | 186 | `gettid` | Returns the current scheduler thread id; equal to pid until thread groups exist. |
 | 201 | `time` | Seconds since Unix epoch. |
 | 202 | `futex` | Basic `FUTEX_WAIT`/`FUTEX_WAKE` compatibility for uncontended pthread-style users. |
@@ -189,21 +194,19 @@ The current Linux-like syscall surface is:
 
 Unlisted syscall numbers return `-ENOSYS`.
 
-## C Runtime Surface
+## Rust Userland Surface
 
-The in-tree libc currently exposes the Phase E smoke-test surface:
+The in-tree Rust userland currently exercises the hosted ABI surface needed by
+the shell, package tools, installer, networking probes, and the native Rust
+toolchain bootstrap:
 
-- Process: `_exit`, `exit`, `fork`, `execve`, `wait4`, `waitpid`, `getpid`,
-  `gettid`, `getppid`, `setsid`, `uname`, `gethostname`, `sethostname`,
-  `getenv`, `putenv`, `setenv`,
-  `unsetenv`, `clearenv`, `getopt`, `sysconf`, `getpagesize`, `getrlimit`,
-  `setrlimit`, `getrusage`, `times`, and generic `syscall`.
+- Process: `exit`, `fork`, `execve`, `wait4`, `getpid`, `gettid`, `getppid`,
+  `setsid`, `uname`, `sethostname`, environment vectors, resource limits,
+  usage accounting, times, and generic syscall entry.
 - Credentials: `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `setgid`,
-  `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`,
-  `setgroups`, and libc
-  user/group database helpers
-  `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`, `initgroups`, and
-  `getspnam` backed by `/etc/passwd`, `/etc/group`, and `/etc/shadow`.
+  `setresuid`, `getresuid`, `setresgid`, `getresgid`, `getgroups`, and
+  `setgroups`; Rust login and credential tools parse `/etc/passwd`,
+  `/etc/group`, and `/etc/shadow` directly.
 - File descriptors: `read`, `write`, `pread`, `pwrite`, `readv`, `writev`,
   `open`, `close`, `lseek`, `pipe`, `pipe2`, `dup`, `dup2`, `dup3`, `fcntl`,
   `poll`, `select`, `truncate`, `ftruncate`.
@@ -229,9 +232,8 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   handler delivery, and `rt_sigreturn`.
 - Terminal ioctl: `ioctl` with `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`,
   `TIOCGPGRP`, `TIOCSPGRP`, `TIOCGWINSZ`, `TIOCGPTN`, and `TIOCSPTLCK`.
-- Termios: `tcgetattr`, `tcsetattr`, and `cfmakeraw`; canonical and raw reads
-  honor `ICANON`, `ISIG`, `VMIN`, `VTIME`, and the standard control characters
-  used by the in-tree `stty` utility.
+- Termios: canonical and raw reads honor `ICANON`, `ISIG`, `VMIN`, `VTIME`,
+  and the standard control characters used by the in-tree Rust `stty` utility.
 - Keyboard: the PS/2 set-1 translator defaults to a Spanish Mac-oriented
   layout, including `Shift-.` for `:`, the ISO `<`/`>` key, and Option/AltGr
   variants for `[`, `]`, `{`, and `}`. The graphical `make run` path passes
@@ -245,7 +247,7 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - PTY helpers: `posix_openpt`, `grantpt`, `unlockpt`, and `ptsname`; PTY master
   and slave descriptors are pollable byte streams with hangup/error readiness
   when their peer closes. Each PTY stores its own `termios`, window size, and
-  foreground process group for `openpty`, SSH, and login-session setup. PTY
+  foreground process group for shell and login-session setup. PTY
   master input honors `ISIG` control characters such as VINTR, VQUIT, and VSUSP
   by signaling the foreground process group instead of delivering them as bytes,
   and canonical `ECHO` input is line-buffered before slave reads.
@@ -260,11 +262,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   editor over the ANSI console. It uses raw termios input, displays the file
   buffer, supports normal/insert/command modes, and accepts commands such as
   `:w`, `:q`, `:q!`, and `:wq` on the bottom command line.
-- Build tools: `/bin/cc` and `/bin/tcc` are TinyCC, with `/bin/as`,
-  `/bin/ld`, and `/bin/cpp` compatibility frontends that delegate to TinyCC for
-  static in-system builds. `/bin/as` prepends `-c`, `/bin/cpp` prepends `-E`,
-  and `/bin/ld` forwards linker-style arguments to TinyCC, which covers the
-  current single-file, multi-file, and package build fixtures.
+- Build tools: `/bin/rustc` and `/bin/ristux-ld` are present in the default
+  image as the Rust toolchain package surface. The current binaries expose
+  version/target metadata and package integration; native code generation and
+  static ELF linking still require the Cranelift/std bootstrap work.
 - Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
   and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
   client and listener through the normal `socket`/`bind`/`listen`/`connect`/
@@ -276,15 +277,12 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   reporting through `errno` and `SO_ERROR`, retransmit backoff/expiry, and
   safe ACK-dropping for out-of-order payloads. UDP datagram sockets support
   `bind`/`connect`/`sendto`/`recvfrom`, `poll`, `O_NONBLOCK`, `close`, and the
-  SSH-portability options `SO_REUSEADDR`, `SO_ERROR`, `SO_RCVTIMEO`,
-  `SO_SNDTIMEO`, and `TCP_NODELAY` (currently a no-op). libc includes
-  `netdb.h`, `gethostbyname`, `getaddrinfo`, `freeaddrinfo`, and
-  `gai_strerror`; the resolver reads `/etc/resolv.conf` and issues UDP DNS
-  A-record queries.
-- Memory/string/stdio: `mmap`, `munmap`, `mprotect`, `msync`, `brk`, `sbrk`, `malloc`,
-  `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`,
-  `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
-  `printf`, `vprintf`.
+  compatibility options `SO_REUSEADDR`, `SO_ERROR`, `SO_RCVTIMEO`,
+  `SO_SNDTIMEO`, and `TCP_NODELAY` (currently a no-op). The Rust userland
+  resolver reads `/etc/resolv.conf` for lightweight network probes.
+- Memory/string/io: `mmap`, `munmap`, `mprotect`, `msync`, and `brk` are kernel
+  interfaces. Rust userland currently uses a process-local `brk` allocator and
+  small command-specific formatting/input helpers.
 - Threading primitives: `gettid` and Linux-style futex constants are exposed;
   the kernel implements `FUTEX_WAIT` mismatch, timeout, and signal interruption
   behavior plus `FUTEX_WAKE` wakeups as a first pthread-portability layer.
@@ -314,7 +312,8 @@ The kernel writes a compact Linux-compatible subset:
 | 40 | 8 | `st_rdev` |
 | 48 | 8 | `st_size` |
 
-The in-tree C header mirrors this subset in `userland/c/include/sys/stat.h`.
+The Rust userland mirrors this layout in small command-local structs and raw
+byte parsers where needed.
 
 ### `struct linux_dirent64`
 
@@ -331,10 +330,10 @@ Records are padded to 8-byte alignment. `d_off` is the next directory offset.
 ## Signals
 
 Signals are delivered on the interrupted user stack. The kernel builds a small
-saved frame and jumps to the installed handler trampoline. The C trampoline
-invokes the user handler and then calls `rt_sigreturn` with the saved frame
-pointer. Signal masks are tracked in the process model, but only the current
-Phase E handler path is guaranteed.
+saved frame and jumps to the installed handler trampoline. Rust probes install
+raw handler entry points and call `rt_sigreturn` with the saved frame pointer.
+Signal masks are tracked in the process model, but only the current handler
+path is guaranteed.
 
 ## Current Limits
 
@@ -347,8 +346,7 @@ These are explicit non-guarantees of the current ABI:
   reads, and file-backed `MAP_SHARED` writeback via `msync` or unmap. Demand
   paging is not part of the contract yet.
 - Static ELF64 executables are supported; dynamic linking is not.
-- The boot rootfs still uses the in-tree libc. `make newlib-sysroot` builds an
-  upstream Newlib sysroot under `build/ports/newlib/sysroot` and links a static
-  Newlib probe against the Ristux startup and reentrant syscall layer.
+- The boot rootfs is Rust-only. TinyCC, Newlib, Dropbear, and the in-tree C
+  libc/CRT have been removed from the default build and package manifests.
 - Socket coverage is enough for the current TCP/UDP fixtures, not a complete
   POSIX networking ABI.

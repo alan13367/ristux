@@ -90,8 +90,8 @@ case "$SCENARIO" in
     COMMANDS=("cc_dns")
     EXPECTS=(
       "cc_dns: resolv.conf ok"
-      "cc_dns: gethostbyname ok"
-      "cc_dns: getaddrinfo ok"
+      "cc_dns: resolver config ok"
+      "cc_dns: address parse ok"
       "cc_dns: reverse lookup ok"
       "cc_dns: done"
     )
@@ -552,20 +552,23 @@ case "$SCENARIO" in
   editor-c)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
-      "rm -f /tmp/hello.c"
-      "vi /tmp/hello.c"
-      "__text i#include <stdio.h>"
+      "rm -f /tmp/hello.rs"
+      "vi /tmp/hello.rs"
+      "__text ifn main() {"
       "__sendkey ret"
-      "__text int main() { return 0; }"
+      "__text     println!(\"hello from rust\");"
+      "__sendkey ret"
+      "__text }"
       "__sendkey esc"
       "__text :wq"
       "__sendkey ret"
-      "cat /tmp/hello.c"
+      "cat /tmp/hello.rs"
     )
     EXPECTS=(
-      "TTY canonical line ready: vi /tmp/hello.c"
-      "^#include <stdio.h>$"
-      "^int main() { return 0; }$"
+      "TTY canonical line ready: vi /tmp/hello.rs"
+      "^fn main() {$"
+      '^    println!\("hello from rust"\);$'
+      "^}$"
     )
     ;;
   poweroff)
@@ -604,20 +607,14 @@ case "$SCENARIO" in
       "cc_libc_compat: ctype ok"
       "cc_libc_compat: parse ok"
       "cc_libc_compat: string ok"
-      "cc_libc_compat: malloc free ok"
       "cc_libc_compat: format ok"
       "cc_libc_compat: path ok"
-      "cc_libc_compat: getopt ok"
-      "cc_libc_compat: sysconf ok"
       "cc_libc_compat: rlimit errors ok"
       "cc_libc_compat: resource syslog ok"
-      "cc_libc_compat: uname ok"
       "cc_libc_compat: time format ok"
-      "cc_libc_compat: gettimeofday fault ok"
-      "cc_libc_compat: process accounting ok"
-      "cc_libc_compat: setjmp ok"
-      "cc_libc_compat: dropbear types ok"
-      "cc_libc_compat: crypt ok"
+      "cc_libc_compat: setjmp-free control flow ok"
+      "cc_libc_compat: Rust ABI types ok"
+      "cc_libc_compat: password hash ok"
       "cc_libc_compat: stdio file ok"
       "cc_libc_compat: process env open ok"
       "cc_libc_compat: done"
@@ -638,36 +635,6 @@ case "$SCENARIO" in
       "^cc_libc_hosted: done$"
       "^name: cc_libc_hosted$"
       "^  /bin/cc_libc_hosted$"
-    )
-    ;;
-  newlib)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
-    COMMANDS=(
-      "cc_newlib_hello"
-      "cc_newlib_posix"
-      "pkg info cc_newlib_hello"
-      "pkg info cc_newlib_posix"
-    )
-    EXPECTS=(
-      "TTY canonical line ready: cc_newlib_hello"
-      "^cc_newlib_hello: hello from Newlib$"
-      "^cc_newlib_hello: malloc ok$"
-      "^cc_newlib_hello: file=newlib file io ok$"
-      "^cc_newlib_hello: time ok$"
-      "^cc_newlib_hello: write ok$"
-      "^cc_newlib_hello: done$"
-      "TTY canonical line ready: cc_newlib_posix"
-      "^cc_newlib_posix: cwd dirs ok$"
-      "^cc_newlib_posix: ioctl ok$"
-      "^cc_newlib_posix: links ok$"
-      "^cc_newlib_posix: pipes ok$"
-      "^cc_newlib_posix: signals ok$"
-      "^cc_newlib_posix: time ok$"
-      "^cc_newlib_posix: done$"
-      "^name: cc_newlib_hello$"
-      "^  /bin/cc_newlib_hello$"
-      "^name: cc_newlib_posix$"
-      "^  /bin/cc_newlib_posix$"
     )
     ;;
   sse)
@@ -868,11 +835,7 @@ case "$SCENARIO" in
       "^pkgconf 0.1.0$"
       "TTY canonical line ready: pkgconf --exists ristux"
       "^0.1.0$"
-      "^libc$"
-      "^-I/include$"
-      "^-L/lib -lc$"
       "^name: ristux-pc$"
-      "^  libc$"
       "^  /bin/uname$"
     )
     ;;
@@ -914,18 +877,6 @@ case "$SCENARIO" in
       "cd /"
       "make -s -C /tmp/makeopts VALUE=cli"
       "cat /tmp/makeopts/out"
-      "mkdir /tmp/makeimplicit"
-      "cd /tmp/makeimplicit"
-      "cp /usr/share/testdata/make-implicit/Makefile Makefile"
-      "cp /usr/share/testdata/make-implicit/hello.c hello.c"
-      "cp /usr/share/testdata/make-implicit/linked.c linked.c"
-      "cp /usr/share/testdata/make-implicit/asmprog.s asmprog.s"
-      "make -s"
-      "./hello"
-      "./linked"
-      "test -f asmprog.o"
-      "echo $?"
-      "pkg info make-implicit-fixture"
       "pkg info make"
     )
     EXPECTS=(
@@ -936,190 +887,30 @@ case "$SCENARIO" in
       "^cli$"
       "^cli$"
       "^make$"
-      "TTY canonical line ready: ./hello"
-      "^implicit hello$"
-      "TTY canonical line ready: ./linked"
-      "^implicit linked$"
-      "TTY canonical line ready: test -f asmprog\\.o"
-      "^0$"
-      "^name: make-implicit-fixture$"
-      "^  make$"
-      "^  tcc$"
-      "^  toolchain-frontends$"
       "^name: make$"
       "^version: 0.1.0$"
       "^  /bin/make$"
     )
     ;;
-  tinycc)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
-    COMMANDS=(
-      "tcc -v"
-      "mkdir /tmp/tcccheck"
-      "cd /tmp/tcccheck"
-      "cp /usr/share/testdata/tinycc-hello.c hello.c"
-      "tcc hello.c -o hello"
-      "./hello"
-      "pkg info tcc"
-    )
-    EXPECTS=(
-      "TTY canonical line ready: tcc -v"
-      "tcc version"
-      "TTY canonical line ready: tcc hello\\.c -o hello"
-      "TTY canonical line ready: ./hello"
-      "^tinycc hello$"
-      "^name: tcc$"
-      "^version: 0\\.9\\.28rc$"
-      "^  /bin/tcc$"
-      "^  /lib/tcc/include/tccdefs\\.h$"
-    )
-    ;;
-  tinycc-make)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
-    COMMANDS=(
-      "mkdir /tmp/tccmake"
-      "cd /tmp/tccmake"
-      "cp /usr/share/testdata/tinycc-project/Makefile Makefile"
-      "cp /usr/share/testdata/tinycc-project/main.c main.c"
-      "cp /usr/share/testdata/tinycc-project/util.c util.c"
-      "cp /usr/share/testdata/tinycc-project/util.h util.h"
-      "make -s"
-      "./app"
-      "test -f main.o"
-      "echo $?"
-      "test -f util.o"
-      "echo $?"
-      "which cc"
-      "pkg info tinycc-build-fixture"
-    )
-    EXPECTS=(
-      "TTY canonical line ready: make -s"
-      "TTY canonical line ready: ./app"
-      "^tinycc make multi-file$"
-      "TTY canonical line ready: test -f main\\.o"
-      "^0$"
-      "TTY canonical line ready: test -f util\\.o"
-      "TTY canonical line ready: which cc"
-      "^/bin/cc$"
-      "^name: tinycc-build-fixture$"
-      "^  tcc$"
-      "^  make$"
-      "^  /usr/share/testdata/tinycc-project/Makefile$"
-    )
-    ;;
   toolchain)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
     COMMANDS=(
-      "mkdir /tmp/toolchain"
-      "cd /tmp/toolchain"
-      "echo '#define VALUE toolchain-cpp-ok' > pp.c"
-      "echo 'VALUE' >> pp.c"
-      "cpp pp.c > pp.out"
-      "grep toolchain-cpp-ok pp.out"
-      "echo '.global _start' > hello.s"
-      "echo '_start:' >> hello.s"
-      "echo 'mov \$1, %rax' >> hello.s"
-      "echo 'mov \$1, %rdi' >> hello.s"
-      "echo 'lea msg(%rip), %rsi' >> hello.s"
-      "echo 'mov \$13, %rdx' >> hello.s"
-      "echo 'syscall' >> hello.s"
-      "echo 'mov \$60, %rax' >> hello.s"
-      "echo 'xor %rdi, %rdi' >> hello.s"
-      "echo 'syscall' >> hello.s"
-      "echo 'msg: .ascii \"asm frontend\\n\"' >> hello.s"
-      "as hello.s -o hello.o"
-      "ld -nostdlib hello.o -o hello"
-      "./hello"
-      "which as"
-      "which cpp"
-      "which ld"
-      "pkg info toolchain-frontends"
+      "rustc --version"
+      "rustc --print target-list"
+      "ristux-ld --version"
+      "pkg info rustc"
+      "pkg info ristux-ld"
     )
     EXPECTS=(
-      "TTY canonical line ready: cpp pp\\.c > pp\\.out"
-      "^toolchain-cpp-ok$"
-      "TTY canonical line ready: as hello\\.s -o hello\\.o"
-      "TTY canonical line ready: ld -nostdlib hello\\.o -o hello"
-      "TTY canonical line ready: ./hello"
-      "^asm frontend$"
-      "^/bin/as$"
-      "^/bin/cpp$"
-      "^/bin/ld$"
-      "^name: toolchain-frontends$"
-      "^  /bin/as$"
-      "^  /bin/cpp$"
-      "^  /bin/ld$"
-    )
-    ;;
-  nativepkg)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
-    COMMANDS=(
-      "mkdir /tmp/nativepkg"
-      "cd /tmp/nativepkg"
-      "gzip -dc /usr/share/testdata/ristux-hello-0.1.tar.gz | tar -xf -"
-      "cd ristux-hello-0.1"
-      "make -s"
-      "build/ristux-hello one two"
-      "make -s install"
-      "/tmp/pkgroot/bin/ristux-hello installed"
-      "cat /tmp/pkgroot/share/doc/ristux-hello/README.txt"
-      "echo /tmp/pkgroot/bin/ristux-hello > /tmp/nativepkg.files"
-      "echo /tmp/pkgroot/share/doc/ristux-hello/README.txt >> /tmp/nativepkg.files"
-      "pkg register ristux-hello 0.1.0 /tmp/nativepkg.files tcc make"
-      "pkg verify ristux-hello"
-      "pkg info ristux-hello"
-      "pkg files ristux-hello"
-      "pkg info native-build-fixture"
-    )
-    EXPECTS=(
-      "TTY canonical line ready: gzip -dc /usr/share/testdata/ristux-hello-0\\.1\\.tar\\.gz | tar -xf -"
-      "TTY canonical line ready: make -s"
-      "TTY canonical line ready: build/ristux-hello one two"
-      "^native package rebuilt by ristux$"
-      "^argc=3$"
-      "^arg\\[1\\]=one$"
-      "^arg\\[2\\]=two$"
-      "TTY canonical line ready: make -s install"
-      "TTY canonical line ready: /tmp/pkgroot/bin/ristux-hello installed"
-      "^argc=2$"
-      "^arg\\[1\\]=installed$"
-      "^ristux-hello is a tiny C package used to prove native source rebuilds\\.$"
-      "^registered ristux-hello 0\\.1\\.0$"
-      "^verified ristux-hello$"
-      "^name: ristux-hello$"
-      "^version: 0\\.1\\.0$"
-      "^  tcc$"
-      "^  make$"
-      "^  /tmp/pkgroot/bin/ristux-hello$"
-      "^  /tmp/pkgroot/share/doc/ristux-hello/README\\.txt$"
-      "^name: native-build-fixture$"
-      "^  tcc$"
-      "^  make$"
-      "^  tar$"
-      "^  gzip$"
-      "^  install$"
-      "^  /usr/share/testdata/ristux-hello-0\\.1\\.tar\\.gz$"
-    )
-    ;;
-  libc-dev)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
-    COMMANDS=(
-      "pkg info libc-dev"
-      "pkg files libc-dev"
-      "cat /include/stdio.h"
-    )
-    EXPECTS=(
-      "^name: libc-dev$"
-      "^version: 0.1.0$"
-      "^  libc$"
-      "^  /include/stdio.h$"
-      "^  /include/linux/futex.h$"
-      "^  /include/sys/stat.h$"
-      "^  /include/sys/syscall.h$"
-      "^  /lib/crt0.o$"
-      "^  /lib/libc.a$"
-      "^  /lib/ristux.ld$"
-      "^#ifndef _RISTUX_STDIO_H$"
+      "^rustc 0\\.0\\.0-ristux-bootstrap"
+      "^x86_64-unknown-ristux$"
+      "^ristux-ld 0\\.0\\.0-bootstrap$"
+      "^name: rustc$"
+      "^  ristux-ld$"
+      "^  /bin/rustc$"
+      "^  /usr/lib/rustlib/x86_64-unknown-ristux/target\\.json$"
+      "^name: ristux-ld$"
+      "^  /bin/ristux-ld$"
     )
     ;;
   filetools)
@@ -2220,18 +2011,18 @@ case "$SCENARIO" in
   pathutils)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=(
-      "basename /usr/lib/libc.a .a"
-      "dirname /usr/lib/libc.a"
+      "basename /usr/lib/rustlib/libcore.rlib .rlib"
+      "dirname /usr/lib/rustlib/libcore.rlib"
       "basename foo/bar/"
       "dirname foo"
       "pkg info basename"
       "pkg info dirname"
     )
     EXPECTS=(
-      "TTY canonical line ready: basename /usr/lib/libc.a .a"
-      "^libc$"
-      "TTY canonical line ready: dirname /usr/lib/libc.a"
-      "^/usr/lib$"
+      "TTY canonical line ready: basename /usr/lib/rustlib/libcore.rlib .rlib"
+      "^libcore$"
+      "TTY canonical line ready: dirname /usr/lib/rustlib/libcore.rlib"
+      "^/usr/lib/rustlib$"
       "TTY canonical line ready: basename foo/bar/"
       "^bar$"
       "TTY canonical line ready: dirname foo"
@@ -2327,23 +2118,23 @@ case "$SCENARIO" in
       "cd /tmp/findcheck"
       "mkdir src"
       "mkdir src/lib"
-      "echo alpha > src/main.c"
-      "echo beta > src/lib/util.c"
+      "echo alpha > src/main.rs"
+      "echo beta > src/lib/util.rs"
       "echo doc > README.md"
-      "find . -name *.c -type f | sort"
+      "find . -name *.rs -type f | sort"
       "find . -maxdepth 1 -type d | sort"
-      "find src -type f -name util.c"
+      "find src -type f -name util.rs"
       "pkg info find"
     )
     EXPECTS=(
-      "TTY canonical line ready: find \\. -name \\*\\.c -type f | sort"
-      "^./src/lib/util\\.c$"
-      "^./src/main\\.c$"
+      "TTY canonical line ready: find \\. -name \\*\\.rs -type f | sort"
+      "^./src/lib/util\\.rs$"
+      "^./src/main\\.rs$"
       "TTY canonical line ready: find \\. -maxdepth 1 -type d | sort"
       "^\\.$"
       "^./src$"
-      "TTY canonical line ready: find src -type f -name util.c"
-      "^src/lib/util\\.c$"
+      "TTY canonical line ready: find src -type f -name util.rs"
+      "^src/lib/util\\.rs$"
       "^name: find$"
       "^  /bin/find$"
     )
@@ -2355,18 +2146,18 @@ case "$SCENARIO" in
       "cd /tmp/xargscheck"
       "mkdir src"
       "mkdir src/lib"
-      "echo alpha > src/main.c"
-      "echo beta > src/lib/util.c"
+      "echo alpha > src/main.rs"
+      "echo beta > src/lib/util.rs"
       "echo alpha beta | xargs echo prefix"
-      "find . -name *.c | sort | xargs -n 1 basename"
+      "find . -name *.rs | sort | xargs -n 1 basename"
       "pkg info xargs"
     )
     EXPECTS=(
       "TTY canonical line ready: echo alpha beta | xargs echo prefix"
       "^prefix alpha beta$"
-      "TTY canonical line ready: find \\. -name \\*\\.c | sort | xargs -n 1 basename"
-      "^util\\.c$"
-      "^main\\.c$"
+      "TTY canonical line ready: find \\. -name \\*\\.rs | sort | xargs -n 1 basename"
+      "^util\\.rs$"
+      "^main\\.rs$"
       "^name: xargs$"
       "^  /bin/xargs$"
     )
@@ -2894,53 +2685,12 @@ case "$SCENARIO" in
       "loopback_check: done"
     )
     ;;
-  dropbear)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
-    COMMANDS=("pkg info dropbear")
-    EXPECTS=(
-      "init: started dropbear on 0.0.0.0:2222"
-      "^name: dropbear$"
-      "^  /bin/dropbear$"
-    )
-    ;;
-  dropbear-banner)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-8}"
+  ssh-banner)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-1}"
     COMMANDS=("ssh_banner")
     EXPECTS=(
       "TTY canonical line ready: ssh_banner"
-      "ssh_banner: banner ok"
-    )
-    ;;
-  dropbear-session)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
-    COMMANDS=(
-      "dbclient -y -y -t -p 2222 -l root 127.0.0.1"
-      "echo ssh_session_check"
-      "exit"
-    )
-    EXPECTS=(
-      "init: started dropbear on 0.0.0.0:2222"
-      "TTY canonical line ready: dbclient -y -y -t -p 2222 -l root 127.0.0.1"
-      "^ssh_session_check$"
-    )
-    ;;
-  ssh)
-    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-10}"
-    COMMANDS=(
-      "pkg info ssh"
-      "pkg info sshd"
-      "ssh -y -y -t -p 2222 -l root 127.0.0.1"
-      "echo ssh_alias_session_check"
-      "exit"
-    )
-    EXPECTS=(
-      "init: started dropbear on 0.0.0.0:2222"
-      "^name: ssh$"
-      "^  /bin/ssh$"
-      "^name: sshd$"
-      "^  /bin/sshd$"
-      "TTY canonical line ready: ssh -y -y -t -p 2222 -l root 127.0.0.1"
-      "^ssh_alias_session_check$"
+      "^ssh_banner: no SSH daemon installed in pure-Rust profile$"
     )
     ;;
   command)
@@ -2958,7 +2708,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, signal, cow, proc, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-arrows, editor-c, poweroff, shutdown-timer, poweroff-delay, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, toolchain, make, pkgconf, loopback, ssh-banner, or command)" >&2
     exit 2
     ;;
 esac

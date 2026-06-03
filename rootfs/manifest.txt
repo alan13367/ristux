@@ -4,16 +4,13 @@ file /bin/init ../build/userland/init.elf
 file /bin/sh ../build/userland/sh.elf
 file /bin/ansi_demo ../build/userland/ansi_demo.elf
 file /bin/ar ../build/userland/ar.elf
-file /bin/as ../build/userland/toolchain.elf
 file /bin/awk ../build/userland/awk.elf
 file /bin/basename ../build/userland/basename.elf
 file /bin/cat ../build/userland/cat.elf
-file /bin/cc ../build/userland/tcc.elf
 file /bin/chmod ../build/userland/chmod.elf
 file /bin/chown ../build/userland/chown.elf
 file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
-file /bin/cpp ../build/userland/toolchain.elf
 file /bin/cut ../build/userland/cut.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
 file /bin/cc_cow ../build/userland/cc_cow.elf
@@ -30,8 +27,6 @@ file /bin/cc_links ../build/userland/cc_links.elf
 file /bin/cc_libc_compat ../build/userland/cc_libc_compat.elf
 file /bin/cc_libc_hosted ../build/userland/cc_libc_hosted.elf
 file /bin/cc_mmap ../build/userland/cc_mmap.elf
-file /bin/cc_newlib_hello ../build/userland/cc_newlib_hello.elf
-file /bin/cc_newlib_posix ../build/userland/cc_newlib_posix.elf
 file /bin/cc_passwd ../build/userland/cc_passwd.elf
 file /bin/cc_path ../build/userland/cc_path.elf
 file /bin/cc_poll ../build/userland/cc_poll.elf
@@ -51,12 +46,9 @@ file /bin/cc_uio ../build/userland/cc_uio.elf
 file /bin/curl_lite ../build/userland/curl_lite.elf
 file /bin/date ../build/userland/date.elf
 file /bin/dd ../build/userland/dd.elf
-file /bin/dbclient ../build/userland/dbclient.elf
 file /bin/df ../build/userland/df.elf
 file /bin/diff ../build/userland/diff.elf
 file /bin/dirname ../build/userland/dirname.elf
-file /bin/dropbear ../build/userland/dropbear.elf
-file /bin/sshd ../build/userland/dropbear.elf
 file /bin/edit ../build/userland/edit.elf
 file /bin/vi ../build/userland/edit.elf
 file /bin/echo ../build/userland/echo.elf
@@ -82,7 +74,6 @@ file /bin/ristux-install ../build/userland/ristux_install.elf
 file /bin/fdisk ../build/userland/fdisk.elf
 file /bin/mkfs.ext2 ../build/userland/mkfs_ext2.elf
 file /bin/ln ../build/userland/ln.elf
-file /bin/ld ../build/userland/toolchain.elf
 file /bin/loopback_check ../build/userland/loopback_check.elf
 file /bin/ls ../build/userland/ls.elf
 file /bin/make ../build/userland/make.elf
@@ -99,7 +90,9 @@ file /bin/ps ../build/userland/ps.elf
 file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
+file /bin/ristux-ld ../build/userland/ristux_ld.elf
 file /bin/rm ../build/userland/rm.elf
+file /bin/rustc ../build/userland/rustc.elf
 file /bin/sed ../build/userland/sed.elf
 file /bin/seq ../build/userland/seq.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
@@ -117,10 +110,8 @@ file /bin/tee ../build/userland/tee.elf
 file /bin/touch ../build/userland/touch.elf
 file /bin/su ../build/userland/su.elf
 file /bin/sleep ../build/userland/sleep.elf
-file /bin/ssh ../build/userland/dbclient.elf
 file /bin/ssh_banner ../build/userland/ssh_banner.elf
 file /bin/tar ../build/userland/tar.elf
-file /bin/tcc ../build/userland/tcc.elf
 file /bin/tr ../build/userland/tr.elf
 file /bin/true ../build/userland/true.elf
 file /bin/udp ../build/userland/udp.elf
@@ -133,35 +124,17 @@ file /bin/xargs ../build/userland/xargs.elf
 file /bin/yes ../build/userland/yes.elf
 file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
-file /usr/lib/pkgconfig/libc.pc usr/lib/pkgconfig/libc.pc
 file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
+file /usr/lib/rustlib/x86_64-unknown-ristux/target.json ../targets/x86_64-unknown-ristux.json
 file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
-file /usr/share/testdata/ristux-hello-0.1.tar.gz ../build/testdata/ristux-hello-0.1.tar.gz
 file /usr/share/testdata/ristuxpkg-0.1.tar.gz ../build/testdata/ristuxpkg-0.1.tar.gz
 file /usr/share/testdata/ristuxpkg.patch testdata/ristuxpkg.patch
-file /usr/share/testdata/tinycc-hello.c testdata/tinycc-hello.c
-file /lib/crt0.o ../build/userland/c/crt0.o
-file /lib/crt1.o ../build/userland/c/crt0.o
-file /lib/crti.o ../build/userland/c/crti.o
-file /lib/crtn.o ../build/userland/c/crtn.o
-file /lib/libc.a ../build/userland/c/libc.a
-file /lib/ristux.ld ../userland/c/linker.ld
-file /lib/libc.so ../build/userland/libc.so
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
-package-tree libc-dev 0.1.0 ../userland/c/include /include deps=libc
-package-tree tcc 0.9.28rc ../build/ports/tinycc/root/lib/tcc /lib/tcc deps=libc,libc-dev
-package-tree make-implicit-fixture 0.1.0 testdata/make-implicit /usr/share/testdata/make-implicit deps=make,tcc,toolchain-frontends
-package-tree tinycc-build-fixture 0.1.0 testdata/tinycc-project /usr/share/testdata/tinycc-project deps=tcc,make
-package native-build-fixture 0.1.0 /usr/share/testdata/ristux-hello-0.1.tar.gz deps=tcc,make,tar,gzip,install
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
-package toolchain-frontends 0.1.0 /bin/as deps=tcc,libc-dev
-package toolchain-frontends 0.1.0 /bin/cpp deps=tcc,libc-dev
-package toolchain-frontends 0.1.0 /bin/ld deps=tcc,libc-dev
 package awk 0.1.0 /bin/awk
 package basename 0.1.0 /bin/basename
 package cat 0.1.0 /bin/cat
-package tcc 0.9.28rc /bin/cc deps=libc,libc-dev
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow
 package cc_dev 0.1.0 /bin/cc_dev
@@ -177,8 +150,6 @@ package cc_links 0.1.0 /bin/cc_links
 package cc_libc_compat 0.1.0 /bin/cc_libc_compat
 package cc_libc_hosted 0.1.0 /bin/cc_libc_hosted
 package cc_mmap 0.1.0 /bin/cc_mmap
-package cc_newlib_hello 0.1.0 /bin/cc_newlib_hello
-package cc_newlib_posix 0.1.0 /bin/cc_newlib_posix
 package cc_passwd 0.1.0 /bin/cc_passwd
 package cc_path 0.1.0 /bin/cc_path
 package cc_poll 0.1.0 /bin/cc_poll
@@ -203,12 +174,9 @@ package cut 0.1.0 /bin/cut
 package curl_lite 0.1.0 /bin/curl_lite
 package date 0.1.0 /bin/date
 package dd 0.1.0 /bin/dd
-package dbclient 2026.91 /bin/dbclient
 package df 0.1.0 /bin/df
 package diff 0.1.0 /bin/diff
 package dirname 0.1.0 /bin/dirname
-package dropbear 2026.91 /bin/dropbear
-package sshd 2026.91 /bin/sshd deps=dropbear
 package edit 0.1.0 /bin/edit
 package vi 0.1.0 /bin/vi deps=edit
 package echo 0.1.0 /bin/echo
@@ -230,13 +198,6 @@ package id 0.1.0 /bin/id
 package init 0.1.0 /bin/init
 package install 0.1.0 /bin/install
 package kill 0.1.0 /bin/kill
-package libc 0.1.0 /lib/libc.so
-package libc-dev 0.1.0 /lib/crt0.o deps=libc
-package libc-dev 0.1.0 /lib/crt1.o deps=libc
-package libc-dev 0.1.0 /lib/crti.o deps=libc
-package libc-dev 0.1.0 /lib/crtn.o deps=libc
-package libc-dev 0.1.0 /lib/libc.a deps=libc
-package libc-dev 0.1.0 /lib/ristux.ld deps=libc
 package login 0.1.0 /bin/login
 package ristux-install 0.1.0 /bin/ristux-install
 package fdisk 0.1.0 /bin/fdisk
@@ -258,7 +219,10 @@ package ps 0.1.0 /bin/ps
 package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
 package readlink 0.1.0 /bin/readlink
+package ristux-ld 0.0.0-bootstrap /bin/ristux-ld
 package rm 0.1.0 /bin/rm
+package rustc 0.0.0-bootstrap /bin/rustc deps=ristux-ld
+package rustc 0.0.0-bootstrap /usr/lib/rustlib/x86_64-unknown-ristux/target.json deps=ristux-ld
 package sed 0.1.0 /bin/sed
 package seq 0.1.0 /bin/seq
 package sh 0.1.0 /bin/sh
@@ -275,10 +239,8 @@ package sleep 0.1.0 /bin/sleep
 package sort 0.1.0 /bin/sort
 package stat 0.1.0 /bin/stat
 package ssh_banner 0.1.0 /bin/ssh_banner
-package ssh 2026.91 /bin/ssh deps=dbclient
 package tail 0.1.0 /bin/tail
 package tar 0.1.0 /bin/tar
-package tcc 0.9.28rc /bin/tcc deps=libc,libc-dev
 package tee 0.1.0 /bin/tee
 package touch 0.1.0 /bin/touch
 package tr 0.1.0 /bin/tr
@@ -291,5 +253,4 @@ package wc 0.1.0 /bin/wc
 package which 0.1.0 /bin/which
 package xargs 0.1.0 /bin/xargs
 package yes 0.1.0 /bin/yes
-package libc-pc 0.1.0 /usr/lib/pkgconfig/libc.pc deps=libc
-package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc deps=libc post-install=/bin/uname
+package ristux-pc 0.1.0 /usr/lib/pkgconfig/ristux.pc post-install=/bin/uname
