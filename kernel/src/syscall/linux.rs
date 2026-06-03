@@ -2604,9 +2604,9 @@ fn linux_mmap(
         }
     }
     if protection != UserProtection::ReadWrite {
-        if process::mprotect(mapped, length, protection).is_err() {
+        if let Err(err) = process::mprotect(mapped, length, protection) {
             let _ = process::munmap(mapped, length);
-            return Err(EINVAL);
+            return Err(map_mmap_error(err));
         }
     }
     Ok(mapped as u64)
@@ -2690,7 +2690,8 @@ fn copy_mmap_file_from_vfs(
     len: usize,
     offset: usize,
 ) -> Result<(), i64> {
-    fs::lseek(vfs_fd, offset as isize, 0).map_err(map_vfs_error)?;
+    let offset = isize::try_from(offset).map_err(|_| EINVAL)?;
+    fs::lseek(vfs_fd, offset, 0).map_err(map_vfs_error)?;
     let mut buffer = [0u8; FRAME_SIZE];
     let mut read = 0usize;
     while read < len {
