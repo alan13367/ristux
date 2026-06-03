@@ -268,10 +268,10 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `strlen`, `strcmp`, `strcpy`, `strncpy`, `strchr`, `putchar`, `puts`,
   `printf`, `vprintf`.
 - Threading primitives: `gettid` and Linux-style futex constants are exposed;
-  the kernel implements `FUTEX_WAIT` mismatch/timeout behavior and
-  `FUTEX_WAKE` wakeups as a first pthread-portability layer. `clone` only
-  accepts the fork-equivalent `SIGCHLD` form; full clone-based thread groups are
-  not part of the ABI yet.
+  the kernel implements `FUTEX_WAIT` mismatch, timeout, and signal interruption
+  behavior plus `FUTEX_WAKE` wakeups as a first pthread-portability layer.
+  `clone` only accepts the fork-equivalent `SIGCHLD` form; full clone-based
+  thread groups are not part of the ABI yet.
 
 The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
 are reused and adjacent free blocks are coalesced, but heap pages are not yet

@@ -10,11 +10,11 @@
 #include <time.h>
 #include <unistd.h>
 
-static volatile int saw_sleep_signal;
+static volatile int saw_async_signal;
 
-static void on_sleep_signal(int signum) {
+static void on_async_signal(int signum) {
     if (signum == SIGUSR1) {
-        saw_sleep_signal = 1;
+        saw_async_signal = 1;
     }
 }
 
@@ -273,6 +273,102 @@ static int check_value_change_without_wake(void) {
     return 0;
 }
 
+static int check_wait_interrupted_by_signal(void) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_futex: signal wait pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        puts("cc_futex: signal wait fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        saw_async_signal = 0;
+        if (signal(SIGUSR1, on_async_signal) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(pipefd[1]);
+
+        int futex_word = 77;
+        struct timespec timeout = { 30, 0 };
+        errno = 0;
+        int rc = futex_call(&futex_word, FUTEX_WAIT, 77, &timeout);
+        if (rc != -1) {
+            _exit(10);
+        }
+        if (errno != EINTR) {
+            _exit(20);
+        }
+        if (!saw_async_signal) {
+            _exit(30);
+        }
+
+        timeout.tv_sec = 0;
+        timeout.tv_nsec = 1000000L;
+        errno = 0;
+        rc = futex_call(&futex_word, FUTEX_WAIT, 78, &timeout);
+        if (rc != -1 || errno != EAGAIN) {
+            _exit(40);
+        }
+        _exit(0);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: signal wait ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    for (int i = 0; i < 100; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: signal wait send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_futex: signal wait ok");
+                return 0;
+            }
+            printf("cc_futex: signal wait child status=%d\n", status);
+            return 1;
+        }
+        if (waited < 0) {
+            puts("cc_futex: signal wait wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    puts("cc_futex: signal wait timeout");
+    return 1;
+}
+
 static int check_nanosleep_invalid(void) {
     struct timespec req = { 0, 1000000000L };
     errno = 0;
@@ -369,8 +465,8 @@ static int check_nanosleep_interrupt_remaining(void) {
     }
     if (child == 0) {
         close(pipefd[0]);
-        saw_sleep_signal = 0;
-        if (signal(SIGUSR1, on_sleep_signal) == SIG_ERR) {
+        saw_async_signal = 0;
+        if (signal(SIGUSR1, on_async_signal) == SIG_ERR) {
             _exit(2);
         }
         char ready = 'r';
@@ -389,7 +485,7 @@ static int check_nanosleep_interrupt_remaining(void) {
         if (errno != EINTR) {
             _exit(20);
         }
-        if (!saw_sleep_signal) {
+        if (!saw_async_signal) {
             _exit(30);
         }
         if (rem.tv_sec < 0 || rem.tv_nsec < 0 || rem.tv_nsec >= 1000000000L) {
@@ -459,6 +555,7 @@ int main(void) {
         check_wake_empty() != 0 ||
         check_wake_waiter() != 0 ||
         check_value_change_without_wake() != 0 ||
+        check_wait_interrupted_by_signal() != 0 ||
         check_nanosleep_invalid() != 0 ||
         check_nanosleep_overflow() != 0 ||
         check_nanosleep_yields() != 0 ||
