@@ -796,6 +796,7 @@ fn linux_writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> Result<u64, i64> {
         return Err(EINVAL);
     }
     if iovcnt == 0 {
+        linux_write_bytes(fd, &[])?;
         return Ok(0);
     }
     let iov_bytes = iovcnt.checked_mul(iovec_size()).ok_or(EINVAL)?;
@@ -836,6 +837,7 @@ fn linux_readv(
         return Err(EINVAL);
     }
     if iovcnt == 0 {
+        validate_zero_length_read_fd(fd)?;
         return Ok(0);
     }
     let iov_bytes = iovcnt.checked_mul(iovec_size()).ok_or(EINVAL)?;

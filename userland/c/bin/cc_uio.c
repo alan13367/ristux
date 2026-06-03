@@ -120,6 +120,28 @@ static int check_iovec_faults(void) {
     one_byte.iov_base = &byte;
     one_byte.iov_len = 1;
     errno = 0;
+    if (readv(-1, NULL, 0) != -1 || errno != EBADF) {
+        printf("cc_uio: readv zero bad fd errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    errno = 0;
+    if (writev(-1, NULL, 0) != -1 || errno != EBADF) {
+        printf("cc_uio: writev zero bad fd errno=%d\n", errno);
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    if (readv(zero_fd, NULL, 0) != 0 || writev(null_fd, NULL, 0) != 0) {
+        puts("cc_uio: zero iov valid fd failed");
+        close(zero_fd);
+        close(null_fd);
+        return 1;
+    }
+    puts("cc_uio: zero iov fd validation ok");
+
+    errno = 0;
     if (readv(zero_fd, &one_byte, IOV_MAX + 1) != -1 || errno != EINVAL) {
         printf("cc_uio: iovcnt limit errno=%d\n", errno);
         close(zero_fd);

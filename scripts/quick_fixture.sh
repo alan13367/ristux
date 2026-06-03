@@ -760,6 +760,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_uio: file positioned io ok"
       "cc_uio: pipe readwritev ok"
+      "cc_uio: zero iov fd validation ok"
       "cc_uio: fault validation ok"
       "cc_uio: socket readwritev ok"
       "cc_uio: done"
