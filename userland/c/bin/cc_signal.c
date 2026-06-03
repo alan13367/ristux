@@ -11,6 +11,7 @@ static volatile int saw_signal;
 static volatile int saw_usr1;
 static volatile int saw_usr2;
 static volatile int saw_external_usr1;
+static volatile int saw_interrupt_usr1;
 static volatile int saw_sigchld;
 static volatile int saw_cont;
 
@@ -39,6 +40,12 @@ static void on_usr2(int signum) {
 static void on_external_usr1(int signum) {
     if (signum == SIGUSR1) {
         saw_external_usr1 = 1;
+    }
+}
+
+static void on_interrupt_usr1(int signum) {
+    if (signum == SIGUSR1) {
+        saw_interrupt_usr1 = 1;
     }
 }
 
@@ -615,8 +622,9 @@ static int check_signal_wakes_blocked_syscall(void) {
     }
     close(pipefd[0]);
 
-    struct timespec delay = { 0, 20000000L };
-    nanosleep(&delay, NULL);
+    for (int i = 0; i < 2000; i++) {
+        syscall(SYS_sched_yield);
+    }
 
     if (kill(child, SIGUSR1) < 0) {
         kill(child, SIGKILL);
@@ -646,6 +654,105 @@ static int check_signal_wakes_blocked_syscall(void) {
     kill(child, SIGKILL);
     waitpid(child, NULL, 0);
     puts("cc_signal: blocked wake timeout failed");
+    return 1;
+}
+
+static int check_signal_interrupts_blocked_read(void) {
+    int data_pipe[2];
+    int ready_pipe[2];
+    if (pipe(data_pipe) < 0 || pipe(ready_pipe) < 0) {
+        puts("cc_signal: blocked read pipe failed");
+        return 1;
+    }
+
+    saw_interrupt_usr1 = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        close(data_pipe[0]);
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        puts("cc_signal: blocked read fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        saw_interrupt_usr1 = 0;
+        if (signal(SIGUSR1, on_interrupt_usr1) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(ready_pipe[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(ready_pipe[1]);
+
+        char byte = 0;
+        errno = 0;
+        ssize_t n = read(data_pipe[0], &byte, 1);
+        close(data_pipe[0]);
+        if (n != -1) {
+            _exit(10);
+        }
+        if (errno != EINTR) {
+            _exit(20);
+        }
+        if (!saw_interrupt_usr1) {
+            _exit(30);
+        }
+        _exit(0);
+    }
+
+    close(data_pipe[0]);
+    close(ready_pipe[1]);
+    char ready = 0;
+    if (read(ready_pipe[0], &ready, 1) != 1) {
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: blocked read ready failed");
+        return 1;
+    }
+    close(ready_pipe[0]);
+
+    for (int i = 0; i < 2000; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    if (kill(child, SIGUSR1) < 0) {
+        close(data_pipe[1]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: blocked read send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            close(data_pipe[1]);
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_signal: blocked read interrupt ok");
+                return 0;
+            }
+            printf("cc_signal: blocked read child failed status=%d\n", status);
+            return 1;
+        }
+        if (waited < 0) {
+            close(data_pipe[1]);
+            puts("cc_signal: blocked read wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    close(data_pipe[1]);
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    puts("cc_signal: blocked read timeout failed");
     return 1;
 }
 
@@ -900,6 +1007,7 @@ int main(int argc, char **argv) {
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
         check_signal_wakes_blocked_syscall() != 0 ||
+        check_signal_interrupts_blocked_read() != 0 ||
         check_invalid_raw_handler() != 0 ||
         check_sigaction_fault_preserves_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||

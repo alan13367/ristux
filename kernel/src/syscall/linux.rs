@@ -143,6 +143,7 @@ pub const NR_getrandom: u64 = 318;
 
 const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
+const EINTR: i64 = -4;
 const EBADF: i64 = -9;
 const ECHILD: i64 = -10;
 const E2BIG: i64 = -7;
@@ -241,6 +242,13 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let a3 = frame.r10;
     let a4 = frame.r8;
     let a5 = frame.r9;
+
+    if process::take_interrupted_syscall_current() {
+        frame.rax = EINTR as u64;
+        let _ = deliver_pending_signal(frame);
+        process::restore_current_fpu();
+        return;
+    }
 
     if deliver_pending_signal(frame) {
         process::restore_current_fpu();
@@ -654,9 +662,7 @@ fn linux_write(
                         };
                     }
                     process::block_current(process::BlockReason::WaitIo);
-                    if !crate::syscall::yield_blocked(frame) {
-                        return Err(CONTEXT_SWITCHED);
-                    }
+                    yield_blocked_or_interrupted(frame)?;
                 }
                 Err(err) => {
                     return if total > 0 {
@@ -853,9 +859,7 @@ fn linux_read(
                         return Err(EAGAIN);
                     }
                     tty::park_current_until(Some(deadline_ms));
-                    if !crate::syscall::yield_blocked(frame) {
-                        return Err(CONTEXT_SWITCHED);
-                    }
+                    yield_blocked_or_interrupted(frame)?;
                     continue;
                 }
             }
@@ -863,9 +867,7 @@ fn linux_read(
                 return Err(EAGAIN);
             }
             tty::park_current();
-            if !crate::syscall::yield_blocked(frame) {
-                return Err(CONTEXT_SWITCHED);
-            }
+            yield_blocked_or_interrupted(frame)?;
         }
     }
 
@@ -878,9 +880,7 @@ fn linux_read(
                     return Err(EAGAIN);
                 }
                 process::block_current(process::BlockReason::WaitIo);
-                if !crate::syscall::yield_blocked(frame) {
-                    return Err(CONTEXT_SWITCHED);
-                }
+                yield_blocked_or_interrupted(frame)?;
             }
             Err(_) => return Err(EBADF),
         }
@@ -1185,8 +1185,27 @@ fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> 
             process::block_current(process::BlockReason::WaitIoUntil(poll_deadline));
         }
     }
+    yield_blocked_or_interrupted(frame)?;
+    Ok(())
+}
+
+fn yield_blocked_or_interrupted(frame: &mut SyscallInterruptFrame) -> Result<(), i64> {
+    if process::has_deliverable_signal_current() {
+        let _ = process::take_interrupted_syscall_current();
+        if let Some(pid) = process::current_pid() {
+            let _ = process::mark_ready(pid);
+        }
+        return Err(EINTR);
+    }
     if !crate::syscall::yield_blocked(frame) {
         return Err(CONTEXT_SWITCHED);
+    }
+    if process::has_deliverable_signal_current() {
+        let _ = process::take_interrupted_syscall_current();
+        if let Some(pid) = process::current_pid() {
+            let _ = process::mark_ready(pid);
+        }
+        return Err(EINTR);
     }
     Ok(())
 }
@@ -2223,9 +2242,7 @@ fn linux_wait4(
                     return Ok(0);
                 }
                 process::block_current(process::BlockReason::WaitChild(0));
-                if !crate::syscall::yield_blocked(frame) {
-                    return Err(CONTEXT_SWITCHED);
-                }
+                yield_blocked_or_interrupted(frame)?;
             }
         }
     }

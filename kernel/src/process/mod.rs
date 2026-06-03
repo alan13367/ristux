@@ -154,6 +154,7 @@ pub struct Process {
     waiters: Vec<Pid>,
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
+    interrupted_syscall: bool,
     fpu_state: fpu::FpuState,
 }
 
@@ -442,6 +443,7 @@ impl Process {
             waiters: Vec::new(),
             is_user: true,
             saved_syscall: None,
+            interrupted_syscall: false,
             fpu_state: fpu::initial_state(),
         }
     }
@@ -1432,6 +1434,7 @@ impl ProcessTable {
                 if next_deliverable_pending_signal(process).is_some()
                     && matches!(process.state, ProcessState::Blocked(_))
                 {
+                    process.interrupted_syscall = true;
                     process.state = ProcessState::Ready;
                     wake.push_unique(pid);
                 }
@@ -1596,6 +1599,7 @@ impl Process {
             waiters: Vec::new(),
             is_user: self.is_user,
             saved_syscall: None,
+            interrupted_syscall: false,
             fpu_state: self.fpu_state,
         })
     }
@@ -2033,6 +2037,19 @@ pub fn current_signal_mask() -> Option<u64> {
 
 pub fn current_pending_signals() -> Option<u64> {
     with_current_read(|p| p.pending_signals)
+}
+
+pub fn has_deliverable_signal_current() -> bool {
+    with_current_read(|p| next_deliverable_pending_signal(p).is_some()).unwrap_or(false)
+}
+
+pub fn take_interrupted_syscall_current() -> bool {
+    with_current(|p| {
+        let interrupted = p.interrupted_syscall;
+        p.interrupted_syscall = false;
+        interrupted
+    })
+    .unwrap_or(false)
 }
 
 pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
