@@ -34,6 +34,13 @@ static int check_fd_exhaustion(void) {
         return 1;
     }
 
+    errno = 0;
+    if (dup(fds[0]) != -1 || errno != EMFILE) {
+        puts("cc_fcntl: fd exhaustion dup failed");
+        close_fd_list(fds, count);
+        return 1;
+    }
+
     close(fds[--count]);
     int pipefd[2] = { -1, -1 };
     errno = 0;
