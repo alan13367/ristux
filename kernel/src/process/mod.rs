@@ -769,6 +769,15 @@ impl Process {
         self.argc = stack.argc;
         self.argv_ptr = stack.argv_ptr;
         self.envp_ptr = stack.envp_ptr;
+        self.reset_caught_signal_handlers_for_exec();
+    }
+
+    fn reset_caught_signal_handlers_for_exec(&mut self) {
+        for handler in &mut self.signal_handlers {
+            if *handler != crate::signal::IGNORE_HANDLER {
+                *handler = crate::signal::DEFAULT_HANDLER;
+            }
+        }
     }
 
     fn setup_stack_in_space(

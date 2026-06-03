@@ -196,6 +196,55 @@ static int check_multiple_pending_signals(void) {
     return 0;
 }
 
+static int check_exec_signal_dispositions(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: exec disposition fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        if (signal(SIGUSR1, on_usr1) == SIG_ERR) {
+            _exit(2);
+        }
+        char *argv[] = { "/bin/cc_signal", "exec-reset-probe", NULL };
+        char *envp[] = { NULL };
+        execve("/bin/cc_signal", argv, envp);
+        _exit(3);
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGUSR1) {
+        puts("cc_signal: exec disposition reset failed");
+        return 1;
+    }
+
+    child = fork();
+    if (child < 0) {
+        puts("cc_signal: exec ignore fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        if (signal(SIGUSR2, SIG_IGN) == SIG_ERR) {
+            _exit(4);
+        }
+        char *argv[] = { "/bin/cc_signal", "exec-ignore-probe", NULL };
+        char *envp[] = { NULL };
+        execve("/bin/cc_signal", argv, envp);
+        _exit(5);
+    }
+
+    status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_signal: exec ignore failed");
+        return 1;
+    }
+
+    puts("cc_signal: exec disposition ok");
+    return 0;
+}
+
 static int check_sigkill_uncatchable(void) {
     errno = 0;
     if (signal(SIGKILL, SIG_IGN) != SIG_ERR || errno != EINVAL) {
@@ -412,7 +461,16 @@ static int check_additional_signals(void) {
     return 0;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "exec-reset-probe") == 0) {
+        raise(SIGUSR1);
+        _exit(7);
+    }
+    if (argc > 1 && strcmp(argv[1], "exec-ignore-probe") == 0) {
+        raise(SIGUSR2);
+        _exit(0);
+    }
+
     if (signal(SIGINT, on_sigint) == SIG_ERR) {
         puts("cc_signal: signal failed");
         return 1;
@@ -475,6 +533,9 @@ int main(void) {
         return 1;
     }
     if (check_multiple_pending_signals() != 0) {
+        return 1;
+    }
+    if (check_exec_signal_dispositions() != 0) {
         return 1;
     }
     errno = 0;

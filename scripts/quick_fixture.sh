@@ -269,6 +269,7 @@ case "$SCENARIO" in
       "^cc_signal: mask ok$"
       "^cc_signal: sigprocmask fault ok$"
       "^cc_signal: pending multi ok$"
+      "^cc_signal: exec disposition ok$"
       "^cc_signal: extra signals ok$"
       "^cc_signal: sigchld ok$"
       "^cc_signal: external handler ok$"
