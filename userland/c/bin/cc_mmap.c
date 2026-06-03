@@ -113,6 +113,112 @@ static int check_high_user_pointer_rejected(void) {
     return 0;
 }
 
+static int check_mprotect_failure_atomic(void) {
+    char *addr = (char *)0x54000000UL;
+    (void)munmap(addr, 8192);
+
+    char *page = mmap(addr, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (page != addr) {
+        printf("cc_mmap: mprotect atomic setup errno=%d\n", errno);
+        return 1;
+    }
+    page[0] = 'm';
+
+    errno = 0;
+    if (mprotect(page, 8192, PROT_READ) != -1 || errno != EINVAL) {
+        printf("cc_mmap: mprotect atomic failure errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: mprotect atomic zero open failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, page, 1) != 1) {
+        printf("cc_mmap: mprotect atomic write lost errno=%d\n", errno);
+        close(zero_fd);
+        munmap(page, 4096);
+        return 1;
+    }
+    close(zero_fd);
+
+    if (munmap(page, 4096) < 0) {
+        puts("cc_mmap: mprotect atomic munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: mprotect failure atomic ok");
+    return 0;
+}
+
+static int check_fixed_failure_preserves_mapping(void) {
+    char *addr = (char *)0x54002000UL;
+    (void)munmap(addr, 8192);
+
+    char *page = mmap(addr, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (page != addr) {
+        printf("cc_mmap: fixed preserve setup errno=%d\n", errno);
+        return 1;
+    }
+    page[0] = 'k';
+
+    errno = 0;
+    void *bad = mmap(page + 1, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (bad != MAP_FAILED || errno != EINVAL) {
+        printf("cc_mmap: fixed preserve failure errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+
+    int null_fd = open("/dev/null", O_WRONLY, 0);
+    if (null_fd < 0) {
+        puts("cc_mmap: fixed preserve null open failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (write(null_fd, page, 1) != 1) {
+        printf("cc_mmap: fixed preserve mapping lost errno=%d\n", errno);
+        close(null_fd);
+        munmap(page, 4096);
+        return 1;
+    }
+    close(null_fd);
+    if (page[0] != 'k') {
+        puts("cc_mmap: fixed preserve contents lost");
+        munmap(page, 4096);
+        return 1;
+    }
+
+    int zero_fd = open("/dev/zero", O_RDONLY, 0);
+    if (zero_fd < 0) {
+        puts("cc_mmap: fixed preserve zero open failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (read(zero_fd, page, 1) != 1) {
+        printf("cc_mmap: fixed preserve write lost errno=%d\n", errno);
+        close(zero_fd);
+        munmap(page, 4096);
+        return 1;
+    }
+    close(zero_fd);
+
+    if (munmap(page, 4096) < 0) {
+        puts("cc_mmap: fixed preserve munmap failed");
+        return 1;
+    }
+    puts("cc_mmap: fixed failure preserves ok");
+    return 0;
+}
+
 int main(void) {
     if (check_brk_shrink() != 0) {
         return 1;
@@ -272,6 +378,12 @@ int main(void) {
         return 1;
     }
     puts("cc_mmap: fixed ok");
+    if (check_mprotect_failure_atomic() != 0) {
+        return 1;
+    }
+    if (check_fixed_failure_preserves_mapping() != 0) {
+        return 1;
+    }
 
     const char *payload = "file backed mmap ok";
     int fd = open("/tmp/cc_mmap.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
