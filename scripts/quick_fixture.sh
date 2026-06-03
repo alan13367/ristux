@@ -224,6 +224,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_cred: ids ok"
       "cc_cred: res id faults ok"
+      "cc_cred: id overflow ok"
       "cc_cred: setters ok"
       "cc_cred: ioctl ok"
       "cc_cred: done"

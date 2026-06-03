@@ -391,8 +391,8 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_fchmodat => linux_fchmodat(a0 as i32, a1 as usize, a2 as u16),
         NR_faccessat => linux_faccessat(a0 as i32, a1 as usize, a2 as i32, a3 as i32),
         NR_utimensat => linux_utimensat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
-        NR_setuid => linux_setuid(a0 as u32),
-        NR_setgid => linux_setgid(a0 as u32),
+        NR_setuid => linux_setuid(a0),
+        NR_setgid => linux_setgid(a0),
         NR_setresuid => linux_setresuid(a0, a1, a2),
         NR_getresuid => linux_getresuid(a0 as usize, a1 as usize, a2 as usize),
         NR_setresgid => linux_setresgid(a0, a1, a2),
@@ -2245,31 +2245,20 @@ fn linux_setsid() -> Result<u64, i64> {
     process::setsid_current().ok_or(EPERM)
 }
 
-fn linux_setuid(uid: u32) -> Result<u64, i64> {
+fn linux_setuid(uid: u64) -> Result<u64, i64> {
+    let uid = parse_id_arg(uid)?;
     process::set_current_uid(uid).map(|_| 0).map_err(|_| EACCES)
 }
 
-fn linux_setgid(gid: u32) -> Result<u64, i64> {
+fn linux_setgid(gid: u64) -> Result<u64, i64> {
+    let gid = parse_id_arg(gid)?;
     process::set_current_gid(gid).map(|_| 0).map_err(|_| EACCES)
 }
 
 fn linux_setresuid(ruid: u64, euid: u64, suid: u64) -> Result<u64, i64> {
-    let is_no_change = |id: u64| id == u64::MAX || id == u32::MAX as u64;
-    let ruid = if is_no_change(ruid) {
-        None
-    } else {
-        Some(ruid as u32)
-    };
-    let euid = if is_no_change(euid) {
-        None
-    } else {
-        Some(euid as u32)
-    };
-    let suid = if is_no_change(suid) {
-        None
-    } else {
-        Some(suid as u32)
-    };
+    let ruid = parse_res_id_arg(ruid)?;
+    let euid = parse_res_id_arg(euid)?;
+    let suid = parse_res_id_arg(suid)?;
     process::set_current_resuid(ruid, euid, suid)
         .map(|_| 0)
         .map_err(|_| EACCES)
@@ -2287,25 +2276,24 @@ fn linux_getresuid(ruid_ptr: usize, euid_ptr: usize, suid_ptr: usize) -> Result<
 }
 
 fn linux_setresgid(rgid: u64, egid: u64, sgid: u64) -> Result<u64, i64> {
-    let is_no_change = |id: u64| id == u64::MAX || id == u32::MAX as u64;
-    let rgid = if is_no_change(rgid) {
-        None
-    } else {
-        Some(rgid as u32)
-    };
-    let egid = if is_no_change(egid) {
-        None
-    } else {
-        Some(egid as u32)
-    };
-    let sgid = if is_no_change(sgid) {
-        None
-    } else {
-        Some(sgid as u32)
-    };
+    let rgid = parse_res_id_arg(rgid)?;
+    let egid = parse_res_id_arg(egid)?;
+    let sgid = parse_res_id_arg(sgid)?;
     process::set_current_resgid(rgid, egid, sgid)
         .map(|_| 0)
         .map_err(|_| EACCES)
+}
+
+fn parse_id_arg(id: u64) -> Result<u32, i64> {
+    u32::try_from(id).map_err(|_| EINVAL)
+}
+
+fn parse_res_id_arg(id: u64) -> Result<Option<u32>, i64> {
+    if id == u64::MAX || id == u32::MAX as u64 {
+        Ok(None)
+    } else {
+        parse_id_arg(id).map(Some)
+    }
 }
 
 fn linux_getresgid(rgid_ptr: usize, egid_ptr: usize, sgid_ptr: usize) -> Result<u64, i64> {

@@ -2,6 +2,7 @@
 #include <grp.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -25,6 +26,56 @@ static int check_res_id_faults(void) {
     }
 
     puts("cc_cred: res id faults ok");
+    return 0;
+}
+
+static int check_id_overflows(uid_t uid, gid_t gid) {
+    unsigned long too_large = 0x100000000UL;
+
+    errno = 0;
+    if (syscall(SYS_setuid, (long)too_large, 0, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL ||
+        getuid() != uid) {
+        puts("cc_cred: setuid overflow failed");
+        return 1;
+    }
+    errno = 0;
+    if (syscall(SYS_setgid, (long)too_large, 0, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL ||
+        getgid() != gid) {
+        puts("cc_cred: setgid overflow failed");
+        return 1;
+    }
+
+    uid_t ruid = 0;
+    uid_t euid = 0;
+    uid_t suid = 0;
+    errno = 0;
+    if (syscall(SYS_setresuid, (long)too_large, -1L, -1L, 0, 0, 0) != -1 ||
+        errno != EINVAL ||
+        getresuid(&ruid, &euid, &suid) < 0 ||
+        ruid != uid ||
+        euid != uid ||
+        suid != uid) {
+        puts("cc_cred: setresuid overflow failed");
+        return 1;
+    }
+
+    gid_t rgid = 0;
+    gid_t egid = 0;
+    gid_t sgid = 0;
+    errno = 0;
+    if (syscall(SYS_setresgid, (long)too_large, -1L, -1L, 0, 0, 0) != -1 ||
+        errno != EINVAL ||
+        getresgid(&rgid, &egid, &sgid) < 0 ||
+        rgid != gid ||
+        egid != gid ||
+        sgid != gid) {
+        puts("cc_cred: setresgid overflow failed");
+        return 1;
+    }
+
+    puts("cc_cred: id overflow ok");
     return 0;
 }
 
@@ -57,6 +108,9 @@ int main(void) {
     }
     puts("cc_cred: ids ok");
     if (check_res_id_faults() != 0) {
+        return 1;
+    }
+    if (check_id_overflows(uid, gid) != 0) {
         return 1;
     }
 
