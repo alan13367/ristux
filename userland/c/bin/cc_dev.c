@@ -1,5 +1,7 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/random.h>
 #include <unistd.h>
 
@@ -60,6 +62,55 @@ static int check_getrandom(void) {
     return 0;
 }
 
+static int check_getrandom_errors(void) {
+    unsigned char sink[8];
+
+    errno = 0;
+    if (getrandom((void *)1, sizeof(sink), 0x80000000u) != -1 ||
+        errno != EINVAL) {
+        printf("cc_dev: getrandom bad flags errno=%d\n", errno);
+        return 1;
+    }
+
+    char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("cc_dev: getrandom fault mmap failed errno=%d\n", errno);
+        return 1;
+    }
+
+    if (mprotect(page, 4096, PROT_READ) < 0) {
+        printf("cc_dev: getrandom readonly protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (getrandom(page, sizeof(sink), 0) != -1 || errno != EFAULT) {
+        printf("cc_dev: getrandom readonly target errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+
+    if (mprotect(page, 4096, PROT_NONE) < 0) {
+        printf("cc_dev: getrandom none protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (getrandom(page, sizeof(sink), 0) != -1 || errno != EFAULT) {
+        printf("cc_dev: getrandom none target errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+
+    if (munmap(page, 4096) < 0) {
+        printf("cc_dev: getrandom fault munmap failed errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_dev: getrandom errors ok");
+    return 0;
+}
+
 int main(void) {
     if (check_stream("/dev/random", "random") != 0) {
         return 1;
@@ -68,6 +119,9 @@ int main(void) {
         return 1;
     }
     if (check_getrandom() != 0) {
+        return 1;
+    }
+    if (check_getrandom_errors() != 0) {
         return 1;
     }
     puts("cc_dev: done");

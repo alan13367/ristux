@@ -110,6 +110,7 @@ case "$SCENARIO" in
       "cc_dev: random ok"
       "cc_dev: urandom ok"
       "cc_dev: getrandom ok"
+      "cc_dev: getrandom errors ok"
       "cc_dev: done"
     )
     ;;
