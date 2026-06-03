@@ -545,6 +545,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_session: leader rejection ok"
       "cc_session: child setsid ok"
+      "cc_session: setpgid errors ok"
       "cc_session: wait nohang ok"
       "cc_session: wait pgrp ok"
       "cc_session: done"

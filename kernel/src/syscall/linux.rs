@@ -326,7 +326,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_truncate => linux_truncate(a0 as usize, a1 as i64),
         NR_ftruncate => linux_ftruncate(a0 as usize, a1 as i64),
         NR_getdents | NR_getdents64 => linux_getdents64(a0 as usize, a1 as usize, a2 as usize),
-        NR_setpgid => linux_setpgid(a0 as u64, a1 as u64),
+        NR_setpgid => linux_setpgid(a0 as i64, a1 as i64),
         NR_getpgrp => Ok(process::current_pgrp().unwrap_or(0)),
         NR_setsid => linux_setsid(),
         NR_getgroups => linux_getgroups(a0 as usize, a1 as usize),
@@ -2197,11 +2197,20 @@ fn wait_selector(pid: i64) -> Result<process::WaitSelector, i64> {
     }
 }
 
-fn linux_setpgid(pid: u64, pgid: u64) -> Result<u64, i64> {
-    if process::set_pgid(pid, pgid) {
-        Ok(0)
-    } else {
-        Err(ESRCH)
+fn linux_setpgid(pid: i64, pgid: i64) -> Result<u64, i64> {
+    if pid < 0 || pgid < 0 {
+        return Err(EINVAL);
+    }
+    process::set_pgid(pid as u64, pgid as u64)
+        .map(|_| 0)
+        .map_err(map_setpgid_error)
+}
+
+fn map_setpgid_error(err: process::SetPgidError) -> i64 {
+    match err {
+        process::SetPgidError::Invalid => EINVAL,
+        process::SetPgidError::NoSuchProcess => ESRCH,
+        process::SetPgidError::PermissionDenied => EPERM,
     }
 }
 

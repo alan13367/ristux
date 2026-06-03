@@ -79,6 +79,129 @@ static void cleanup_wait_child(pid_t child) {
     waitpid(child, NULL, 0);
 }
 
+static int check_setpgid_errors(void) {
+    pid_t original = getpgrp();
+    errno = 0;
+    if (setpgid(-2, 0) != -1 || errno != EINVAL) {
+        puts("cc_session: setpgid negative pid failed");
+        return 1;
+    }
+    errno = 0;
+    if (setpgid(0, -1) != -1 || errno != EINVAL) {
+        puts("cc_session: setpgid negative pgid failed");
+        return 1;
+    }
+    if (getpgrp() != original) {
+        puts("cc_session: setpgid invalid changed group");
+        return 1;
+    }
+
+    int exit_pipe[2];
+    if (pipe(exit_pipe) < 0) {
+        puts("cc_session: setpgid child pipe failed");
+        return 1;
+    }
+    pid_t child = fork();
+    if (child < 0) {
+        close(exit_pipe[0]);
+        close(exit_pipe[1]);
+        puts("cc_session: setpgid child fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(exit_pipe[1]);
+        char done = 0;
+        (void)read(exit_pipe[0], &done, 1);
+        close(exit_pipe[0]);
+        _exit(0);
+    }
+    close(exit_pipe[0]);
+    errno = 0;
+    int missing_group_ok = setpgid(child, child + 10000) == -1 && errno == EPERM;
+    char done = 'x';
+    (void)write(exit_pipe[1], &done, 1);
+    close(exit_pipe[1]);
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_session: setpgid child cleanup failed");
+        return 1;
+    }
+    if (!missing_group_ok) {
+        puts("cc_session: setpgid missing group failed");
+        return 1;
+    }
+
+    int ready_pipe[2] = { -1, -1 };
+    exit_pipe[0] = -1;
+    exit_pipe[1] = -1;
+    if (pipe(ready_pipe) < 0 || pipe(exit_pipe) < 0) {
+        if (ready_pipe[0] >= 0) {
+            close(ready_pipe[0]);
+            close(ready_pipe[1]);
+        }
+        if (exit_pipe[0] >= 0) {
+            close(exit_pipe[0]);
+            close(exit_pipe[1]);
+        }
+        puts("cc_session: setpgid pipe failed");
+        return 1;
+    }
+    child = fork();
+    if (child < 0) {
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        close(exit_pipe[0]);
+        close(exit_pipe[1]);
+        puts("cc_session: setpgid session fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(ready_pipe[0]);
+        close(exit_pipe[1]);
+        if (setsid() < 0) {
+            _exit(2);
+        }
+        char ready = 'x';
+        if (write(ready_pipe[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(ready_pipe[1]);
+        (void)read(exit_pipe[0], &ready, 1);
+        close(exit_pipe[0]);
+        _exit(0);
+    }
+    close(ready_pipe[1]);
+    close(exit_pipe[0]);
+    char ready = 0;
+    if (read(ready_pipe[0], &ready, 1) != 1) {
+        close(ready_pipe[0]);
+        (void)write(exit_pipe[1], &done, 1);
+        close(exit_pipe[1]);
+        waitpid(child, NULL, 0);
+        puts("cc_session: setpgid session ready failed");
+        return 1;
+    }
+    close(ready_pipe[0]);
+    errno = 0;
+    int cross_session_ok = setpgid(child, child) == -1 && errno == EPERM;
+    (void)write(exit_pipe[1], &done, 1);
+    close(exit_pipe[1]);
+    status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        puts("cc_session: setpgid session cleanup failed");
+        return 1;
+    }
+    if (!cross_session_ok) {
+        puts("cc_session: setpgid cross-session failed");
+        return 1;
+    }
+
+    puts("cc_session: setpgid errors ok");
+    return 0;
+}
+
 static int check_wait_process_groups(void) {
     pid_t other_group = fork();
     if (other_group < 0) {
@@ -190,6 +313,9 @@ int main(void) {
         return 1;
     }
     if (check_child_setsid() != 0) {
+        return 1;
+    }
+    if (check_setpgid_errors() != 0) {
         return 1;
     }
     if (check_wait_nohang() != 0) {

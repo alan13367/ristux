@@ -220,6 +220,13 @@ impl WaitSelector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SetPgidError {
+    Invalid,
+    NoSuchProcess,
+    PermissionDenied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitReason {
     Exited(i32),
     Signaled(u8),
@@ -2020,19 +2027,38 @@ pub fn set_current_controlling_pty(pty: usize) -> bool {
     .unwrap_or(false)
 }
 
-pub fn set_pgid(pid: Pid, pgid: Pid) -> bool {
-    let caller = current_pid();
+pub fn set_pgid(pid: Pid, pgid: Pid) -> Result<(), SetPgidError> {
+    let caller = current_pid().ok_or(SetPgidError::NoSuchProcess)?;
     with_table(|table| {
-        let target_pid = if pid == 0 { caller.unwrap_or(0) } else { pid };
+        let target_pid = if pid == 0 { caller } else { pid };
         if target_pid == 0 {
-            return false;
+            return Err(SetPgidError::Invalid);
         }
         let target_pgid = if pgid == 0 { target_pid } else { pgid };
-        let Some(process) = table.get_mut(target_pid) else {
-            return false;
-        };
-        process.pgrp = target_pgid;
-        true
+        if target_pgid == 0 {
+            return Err(SetPgidError::Invalid);
+        }
+        let caller_sid = table.get(caller).ok_or(SetPgidError::NoSuchProcess)?.sid;
+        let target = table.get(target_pid).ok_or(SetPgidError::NoSuchProcess)?;
+        if target.pid != caller && target.parent != Some(caller) {
+            return Err(SetPgidError::PermissionDenied);
+        }
+        if target.sid != caller_sid || target.sid == target.pid {
+            return Err(SetPgidError::PermissionDenied);
+        }
+        if target_pgid != target_pid
+            && !table
+                .processes
+                .iter()
+                .any(|process| process.sid == caller_sid && process.pgrp == target_pgid)
+        {
+            return Err(SetPgidError::PermissionDenied);
+        }
+        table
+            .get_mut(target_pid)
+            .ok_or(SetPgidError::NoSuchProcess)?
+            .pgrp = target_pgid;
+        Ok(())
     })
 }
 
