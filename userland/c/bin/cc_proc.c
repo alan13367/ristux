@@ -39,6 +39,12 @@ static void write_le64(unsigned char *out, unsigned long value) {
     }
 }
 
+static void write_le32(unsigned char *out, unsigned long value) {
+    for (int i = 0; i < 4; i++) {
+        out[i] = (unsigned char)((value >> (i * 8)) & 0xff);
+    }
+}
+
 static unsigned long read_le16(const unsigned char *in) {
     return (unsigned long)in[0] | ((unsigned long)in[1] << 8);
 }
@@ -77,6 +83,29 @@ static int patch_first_load_vaddr(unsigned char *image, ssize_t len, unsigned lo
         if (read_le32(&image[off]) == 1) {
             write_le64(&image[off + 16], vaddr);
             write_le64(&image[off + 24], vaddr);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int patch_first_load_flags(unsigned char *image, ssize_t len, unsigned long flags) {
+    if (len < 64) {
+        return -1;
+    }
+    unsigned long phoff = read_le64(&image[32]);
+    unsigned long phentsize = read_le16(&image[54]);
+    unsigned long phnum = read_le16(&image[56]);
+    if (phentsize < 56) {
+        return -1;
+    }
+    for (unsigned long i = 0; i < phnum; i++) {
+        unsigned long off = phoff + i * phentsize;
+        if (off + 56 > (unsigned long)len) {
+            return -1;
+        }
+        if (read_le32(&image[off]) == 1) {
+            write_le32(&image[off + 4], flags);
             return 0;
         }
     }
@@ -442,6 +471,76 @@ static int check_exec_reserved_segment(void) {
     return 0;
 }
 
+static int check_exec_wx_segment(void) {
+    const char *source = "/bin/true";
+    const char *path = "/tmp/cc_proc_wx_segment";
+    static unsigned char image[65536];
+    ssize_t total = 0;
+
+    int in = open(source, O_RDONLY, 0);
+    if (in < 0) {
+        puts("cc_proc: exec wx segment source failed");
+        return 1;
+    }
+    for (;;) {
+        if ((size_t)total == sizeof(image)) {
+            close(in);
+            puts("cc_proc: exec wx segment too large");
+            return 1;
+        }
+        ssize_t n = read(in, image + total, sizeof(image) - (size_t)total);
+        if (n < 0) {
+            close(in);
+            puts("cc_proc: exec wx segment read failed");
+            return 1;
+        }
+        if (n == 0) {
+            break;
+        }
+        total += n;
+    }
+    close(in);
+    if (total < 64 || memcmp(image, "\177ELF", 4) != 0 ||
+        patch_first_load_flags(image, total, 0x7) != 0) {
+        puts("cc_proc: exec wx segment source invalid");
+        return 1;
+    }
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec wx segment create failed");
+        return 1;
+    }
+    if (write(fd, image, (size_t)total) != total) {
+        close(fd);
+        puts("cc_proc: exec wx segment write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(path, 0755) < 0) {
+        puts("cc_proc: exec wx segment chmod failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec wx segment fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == ENOEXEC ? 0 : 108);
+    }
+    if (wait_for_zero(child, "cc_proc: exec wx segment failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec wx segment ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -509,6 +608,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_reserved_segment() != 0) {
+        return 1;
+    }
+    if (check_exec_wx_segment() != 0) {
         return 1;
     }
     puts("cc_proc: done");
