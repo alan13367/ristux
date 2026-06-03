@@ -372,6 +372,76 @@ static int check_exec_high_segment(void) {
     return 0;
 }
 
+static int check_exec_reserved_segment(void) {
+    const char *source = "/bin/true";
+    const char *path = "/tmp/cc_proc_reserved_segment";
+    static unsigned char image[65536];
+    ssize_t total = 0;
+
+    int in = open(source, O_RDONLY, 0);
+    if (in < 0) {
+        puts("cc_proc: exec reserved segment source failed");
+        return 1;
+    }
+    for (;;) {
+        if ((size_t)total == sizeof(image)) {
+            close(in);
+            puts("cc_proc: exec reserved segment too large");
+            return 1;
+        }
+        ssize_t n = read(in, image + total, sizeof(image) - (size_t)total);
+        if (n < 0) {
+            close(in);
+            puts("cc_proc: exec reserved segment read failed");
+            return 1;
+        }
+        if (n == 0) {
+            break;
+        }
+        total += n;
+    }
+    close(in);
+    if (total < 64 || memcmp(image, "\177ELF", 4) != 0 ||
+        patch_first_load_vaddr(image, total, 0x60000000UL) != 0) {
+        puts("cc_proc: exec reserved segment source invalid");
+        return 1;
+    }
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    if (fd < 0) {
+        puts("cc_proc: exec reserved segment create failed");
+        return 1;
+    }
+    if (write(fd, image, (size_t)total) != total) {
+        close(fd);
+        puts("cc_proc: exec reserved segment write failed");
+        return 1;
+    }
+    close(fd);
+    if (chmod(path, 0755) < 0) {
+        puts("cc_proc: exec reserved segment chmod failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_proc: exec reserved segment fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = { NULL };
+        execve(path, argv, envp);
+        _exit(errno == ENOEXEC ? 0 : 107);
+    }
+    if (wait_for_zero(child, "cc_proc: exec reserved segment failed") != 0) {
+        return 1;
+    }
+
+    puts("cc_proc: exec reserved segment ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -436,6 +506,9 @@ int main(void) {
         return 1;
     }
     if (check_exec_high_segment() != 0) {
+        return 1;
+    }
+    if (check_exec_reserved_segment() != 0) {
         return 1;
     }
     puts("cc_proc: done");

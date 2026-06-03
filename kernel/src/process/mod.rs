@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, UserAccess, UserProtection},
+        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -2912,6 +2912,9 @@ fn map_elf_segment(
     let map_start = paging::align_down(segment_start, FRAME_SIZE);
     let map_end =
         paging::checked_align_up(segment_end, FRAME_SIZE).ok_or(ExecError::InvalidImage)?;
+    if map_end > USER_MMAP_START {
+        return Err(ExecError::InvalidImage);
+    }
     let writable = segment.flags & PF_W != 0;
     let executable = segment.flags & PF_X != 0;
     if writable && executable {
