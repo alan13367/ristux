@@ -132,6 +132,7 @@ case "$SCENARIO" in
       "cc_futex: timeout overflow ok"
       "cc_futex: wake empty ok"
       "cc_futex: wake waiter ok"
+      "cc_futex: no wake changed value ok"
       "cc_futex: nanosleep invalid ok"
       "cc_futex: nanosleep overflow ok"
       "cc_futex: nanosleep yield ok"

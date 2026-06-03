@@ -1227,12 +1227,17 @@ fn linux_futex_wait(
         if process::take_timed_wait_wake(key) {
             return Ok(0);
         }
-        let current = read_user_u32(uaddr)?;
-        if current != expected {
-            if process::has_timed_wait(key) {
-                process::clear_timed_wait(key);
-                return Ok(0);
+        let queued = process::has_timed_wait(key);
+        let current = match read_user_u32(uaddr) {
+            Ok(current) => current,
+            Err(err) => {
+                if queued {
+                    process::clear_timed_wait(key);
+                }
+                return Err(err);
             }
+        };
+        if current != expected && !queued {
             return Err(EAGAIN);
         }
 
@@ -1241,7 +1246,15 @@ fn linux_futex_wait(
             let _ = timed_wait_deadline_errno(key, u64::MAX / 4, now_ms)?;
             None
         } else {
-            let timeout_ms = read_timespec_millis(timeout)?;
+            let timeout_ms = match read_timespec_millis(timeout) {
+                Ok(timeout_ms) => timeout_ms,
+                Err(err) => {
+                    if queued {
+                        process::clear_timed_wait(key);
+                    }
+                    return Err(err);
+                }
+            };
             Some(timed_wait_deadline_errno(key, timeout_ms, now_ms)?)
         };
         if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {

@@ -176,6 +176,95 @@ static int check_wake_waiter(void) {
     return 0;
 }
 
+static int check_value_change_without_wake(void) {
+    const char *path = "/tmp/cc_futex_no_wake.bin";
+    unlink(path);
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0600);
+    if (fd < 0) {
+        puts("cc_futex: no wake open failed");
+        return 1;
+    }
+    int initial = 2;
+    if (write(fd, &initial, sizeof(initial)) != (ssize_t)sizeof(initial)) {
+        close(fd);
+        unlink(path);
+        puts("cc_futex: no wake seed failed");
+        return 1;
+    }
+
+    int *word = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (word == MAP_FAILED) {
+        unlink(path);
+        puts("cc_futex: no wake mmap failed");
+        return 1;
+    }
+    *word = 2;
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: no wake pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: no wake fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(2);
+        }
+        close(pipefd[1]);
+
+        struct timespec timeout = { 0, 100000000L };
+        errno = 0;
+        int rc = futex_call(word, FUTEX_WAIT, 2, &timeout);
+        _exit(rc == -1 && errno == ETIMEDOUT ? 0 : 3);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: no wake ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    struct timespec delay = { 0, 20000000L };
+    nanosleep(&delay, NULL);
+    *word = 3;
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: no wake changed value failed");
+        return 1;
+    }
+
+    munmap(word, 4096);
+    unlink(path);
+    puts("cc_futex: no wake changed value ok");
+    return 0;
+}
+
 static int check_nanosleep_invalid(void) {
     struct timespec req = { 0, 1000000000L };
     errno = 0;
@@ -263,6 +352,7 @@ int main(void) {
         check_wait_timeout_overflow() != 0 ||
         check_wake_empty() != 0 ||
         check_wake_waiter() != 0 ||
+        check_value_change_without_wake() != 0 ||
         check_nanosleep_invalid() != 0 ||
         check_nanosleep_overflow() != 0 ||
         check_nanosleep_yields() != 0) {
