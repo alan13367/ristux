@@ -245,7 +245,16 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     let a5 = frame.r9;
 
     if process::take_interrupted_syscall_current() {
-        frame.rax = EINTR as u64;
+        let mut interrupted_errno = EINTR;
+        let timed_wait_deadline = process::take_current_timed_wait_deadline();
+        if nr == NR_nanosleep {
+            if let Some(deadline_ms) = timed_wait_deadline {
+                if let Err(err) = write_nanosleep_remaining(a1 as usize, deadline_ms) {
+                    interrupted_errno = err;
+                }
+            }
+        }
+        frame.rax = interrupted_errno as u64;
         let _ = deliver_pending_signal(frame, SignalResume::Current);
         process::restore_current_fpu();
         return;
@@ -3056,16 +3065,7 @@ fn linux_getrandom(buf: usize, len: usize, flags: u32) -> Result<u64, i64> {
 }
 
 fn linux_nanosleep(frame: &mut SyscallInterruptFrame, req: usize, rem: usize) -> Result<u64, i64> {
-    let bytes = process::read_user(req, 16).ok_or(EFAULT)?;
-    let sec = i64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EFAULT)?);
-    let nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EFAULT)?);
-    if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
-        return Err(EINVAL);
-    }
-    let timeout_ms = (sec as u64)
-        .checked_mul(1000)
-        .and_then(|ms| ms.checked_add((nsec as u64).checked_add(999_999)? / 1_000_000))
-        .ok_or(EINVAL)?;
+    let timeout_ms = read_timespec_millis(req)?;
     if timeout_ms != 0 {
         let key = timed_wait_key(NR_nanosleep, req, rem, timeout_ms as usize);
         loop {
@@ -3075,14 +3075,36 @@ fn linux_nanosleep(frame: &mut SyscallInterruptFrame, req: usize, rem: usize) ->
                 process::clear_timed_wait(key);
                 break;
             }
-            block_for_io(frame, Some(deadline_ms))?;
+            if let Err(err) = block_for_io(frame, Some(deadline_ms)) {
+                if err == EINTR {
+                    process::clear_timed_wait(key);
+                    write_nanosleep_remaining(rem, deadline_ms)?;
+                }
+                return Err(err);
+            }
         }
     }
     if rem != 0 {
-        let out = process::write_user_buffer(rem, 16).ok_or(EFAULT)?;
-        out.fill(0);
+        write_timespec_millis(rem, 0)?;
     }
     Ok(0)
+}
+
+fn write_nanosleep_remaining(rem: usize, deadline_ms: u64) -> Result<(), i64> {
+    if rem == 0 {
+        return Ok(());
+    }
+    let remaining_ms = deadline_ms.saturating_sub(crate::time::uptime_millis());
+    write_timespec_millis(rem, remaining_ms)
+}
+
+fn write_timespec_millis(addr: usize, millis: u64) -> Result<(), i64> {
+    let sec = i64::try_from(millis / 1000).map_err(|_| EINVAL)?;
+    let nsec = i64::try_from((millis % 1000) * 1_000_000).map_err(|_| EINVAL)?;
+    let out = process::write_user_buffer(addr, 16).ok_or(EFAULT)?;
+    out[0..8].copy_from_slice(&sec.to_le_bytes());
+    out[8..16].copy_from_slice(&nsec.to_le_bytes());
+    Ok(())
 }
 
 fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {

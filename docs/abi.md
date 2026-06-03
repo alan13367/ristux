@@ -84,7 +84,7 @@ The current Linux-like syscall surface is:
 | 26 | `msync` | Writes dirty `MAP_SHARED` file-backed pages back to the mapped file. |
 | 32 | `dup` | Duplicates a descriptor to the next free slot. |
 | 33 | `dup2` | Duplicates a descriptor to a requested slot. |
-| 35 | `nanosleep` | Timer-backed sleep. |
+| 35 | `nanosleep` | Timer-backed sleep; signal interruption returns `EINTR` and fills `rem` when supplied. |
 | 39 | `getpid` | Current process id. |
 | 41 | `socket` | `AF_INET` stream/datagram sockets. |
 | 42 | `connect` | TCP/UDP connect path. |

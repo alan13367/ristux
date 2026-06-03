@@ -2733,6 +2733,10 @@ pub fn clear_timed_wait(key: u64) {
     });
 }
 
+pub fn take_current_timed_wait_deadline() -> Option<u64> {
+    with_current(|p| p.timed_wait.take().map(|wait| wait.deadline_ms)).flatten()
+}
+
 pub fn has_timed_wait(key: u64) -> bool {
     with_current_read(|p| matches!(p.timed_wait, Some(wait) if wait.key == key)).unwrap_or(false)
 }

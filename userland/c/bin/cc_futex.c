@@ -10,6 +10,14 @@
 #include <time.h>
 #include <unistd.h>
 
+static volatile int saw_sleep_signal;
+
+static void on_sleep_signal(int signum) {
+    if (signum == SIGUSR1) {
+        saw_sleep_signal = 1;
+    }
+}
+
 static int futex_call(int *uaddr, int op, int val, const struct timespec *timeout) {
     return (int)syscall(SYS_futex, uaddr, op, val, timeout, 0, 0);
 }
@@ -345,6 +353,104 @@ static int check_nanosleep_yields(void) {
     return 0;
 }
 
+static int check_nanosleep_interrupt_remaining(void) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        puts("cc_futex: nanosleep interrupt pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        puts("cc_futex: nanosleep interrupt fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        saw_sleep_signal = 0;
+        if (signal(SIGUSR1, on_sleep_signal) == SIG_ERR) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(pipefd[1]);
+
+        struct timespec req = { 30, 0 };
+        struct timespec rem = { 0, 0 };
+        errno = 0;
+        int rc = nanosleep(&req, &rem);
+        if (rc != -1) {
+            _exit(10);
+        }
+        if (errno != EINTR) {
+            _exit(20);
+        }
+        if (!saw_sleep_signal) {
+            _exit(30);
+        }
+        if (rem.tv_sec < 0 || rem.tv_nsec < 0 || rem.tv_nsec >= 1000000000L) {
+            _exit(40);
+        }
+        if (rem.tv_sec == 0 && rem.tv_nsec == 0) {
+            _exit(50);
+        }
+        if (rem.tv_sec > req.tv_sec ||
+            (rem.tv_sec == req.tv_sec && rem.tv_nsec > req.tv_nsec)) {
+            _exit(60);
+        }
+        _exit(0);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: nanosleep interrupt ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    for (int i = 0; i < 100; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_futex: nanosleep interrupt send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 200; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_futex: nanosleep interrupt ok");
+                return 0;
+            }
+            printf("cc_futex: nanosleep interrupt child status=%d\n", status);
+            return 1;
+        }
+        if (waited < 0) {
+            puts("cc_futex: nanosleep interrupt wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    puts("cc_futex: nanosleep interrupt timeout");
+    return 1;
+}
+
 int main(void) {
     if (check_gettid() != 0 ||
         check_wait_mismatch() != 0 ||
@@ -355,7 +461,8 @@ int main(void) {
         check_value_change_without_wake() != 0 ||
         check_nanosleep_invalid() != 0 ||
         check_nanosleep_overflow() != 0 ||
-        check_nanosleep_yields() != 0) {
+        check_nanosleep_yields() != 0 ||
+        check_nanosleep_interrupt_remaining() != 0) {
         return 1;
     }
     puts("cc_futex: done");
