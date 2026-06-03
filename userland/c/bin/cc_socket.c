@@ -74,11 +74,18 @@ int main(void) {
     }
     int bind_error = 0;
     socklen_t bind_error_len = sizeof(bind_error);
+    errno = 0;
+    if (getsockopt(duplicate, SOL_SOCKET, SO_ERROR, &bind_error, NULL) != -1 ||
+        errno != EFAULT) {
+        puts("cc_socket: so_error fault failed");
+        return 1;
+    }
     if (getsockopt(duplicate, SOL_SOCKET, SO_ERROR, &bind_error, &bind_error_len) < 0 ||
         bind_error != EADDRINUSE) {
         puts("cc_socket: duplicate bind error failed");
         return 1;
     }
+    puts("cc_socket: so_error fault ok");
 
     int flags = fcntl(server, F_GETFL);
     if (flags < 0 || fcntl(server, F_SETFL, flags | O_NONBLOCK) < 0) {

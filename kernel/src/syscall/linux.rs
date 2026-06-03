@@ -1809,26 +1809,31 @@ fn linux_getsockopt(
     let handle = socket_handle(fd)?;
     match (level, optname) {
         (SOL_SOCKET, SO_REUSEADDR) => {
+            validate_sockopt_out(optval, optlen_ptr, 4)?;
             let enabled = crate::net::socket::with_sockets(|table| table.reuse_addr(handle))
                 .map_err(map_socket_error)?;
             write_sockopt_int(optval, optlen_ptr, enabled as i32)?;
         }
         (SOL_SOCKET, SO_ERROR) => {
+            validate_sockopt_out(optval, optlen_ptr, 4)?;
             let error = crate::net::socket::with_sockets(|table| table.take_error(handle))
                 .map_err(map_socket_error)?;
             write_sockopt_int(optval, optlen_ptr, error)?;
         }
         (SOL_SOCKET, SO_RCVTIMEO) => {
+            validate_sockopt_out(optval, optlen_ptr, 16)?;
             let timeout = crate::net::socket::with_sockets(|table| table.recv_timeout_ms(handle))
                 .map_err(map_socket_error)?;
             write_sockopt_timeval(optval, optlen_ptr, timeout)?;
         }
         (SOL_SOCKET, SO_SNDTIMEO) => {
+            validate_sockopt_out(optval, optlen_ptr, 16)?;
             let timeout = crate::net::socket::with_sockets(|table| table.send_timeout_ms(handle))
                 .map_err(map_socket_error)?;
             write_sockopt_timeval(optval, optlen_ptr, timeout)?;
         }
         (IPPROTO_TCP, TCP_NODELAY) => {
+            validate_sockopt_out(optval, optlen_ptr, 4)?;
             let enabled = crate::net::socket::with_sockets(|table| table.tcp_nodelay(handle))
                 .map_err(map_socket_error)?;
             write_sockopt_int(optval, optlen_ptr, enabled as i32)?;
@@ -1870,21 +1875,25 @@ fn read_sockopt_timeval(ptr: usize, len: usize) -> Result<Option<u64>, i64> {
     Ok(Some(millis))
 }
 
-fn write_sockopt_int(ptr: usize, len_ptr: usize, value: i32) -> Result<(), i64> {
+fn validate_sockopt_out(ptr: usize, len_ptr: usize, required_len: u32) -> Result<(), i64> {
     let len = read_socklen(len_ptr)?;
-    if ptr == 0 || len < 4 {
+    if ptr == 0 || len < required_len {
         return Err(EINVAL);
     }
+    process::write_user_buffer(ptr, required_len as usize).ok_or(EFAULT)?;
+    process::write_user_buffer(len_ptr, 4).ok_or(EFAULT)?;
+    Ok(())
+}
+
+fn write_sockopt_int(ptr: usize, len_ptr: usize, value: i32) -> Result<(), i64> {
+    validate_sockopt_out(ptr, len_ptr, 4)?;
     let out = process::write_user_buffer(ptr, 4).ok_or(EFAULT)?;
     out.copy_from_slice(&value.to_le_bytes());
     write_socklen(len_ptr, 4)
 }
 
 fn write_sockopt_timeval(ptr: usize, len_ptr: usize, timeout_ms: Option<u64>) -> Result<(), i64> {
-    let len = read_socklen(len_ptr)?;
-    if ptr == 0 || len < 16 {
-        return Err(EINVAL);
-    }
+    validate_sockopt_out(ptr, len_ptr, 16)?;
     let millis = timeout_ms.unwrap_or(0);
     let sec = (millis / 1000) as i64;
     let usec = ((millis % 1000) * 1000) as i64;
