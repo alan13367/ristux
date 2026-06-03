@@ -375,7 +375,12 @@ extern "x86-interrupt" fn stack_segment_fault_handler(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn divide_error_dispatch(frame: &mut CpuExceptionInterruptFrame) {
-    if terminate_user_exception(frame, crate::signal::Signal::Fpe.number(), "SIGFPE", frame.rip) {
+    if terminate_user_exception(
+        frame,
+        crate::signal::Signal::Fpe.number(),
+        "SIGFPE",
+        frame.rip,
+    ) {
         return;
     }
     panic!("divide error exception at rip {:#x}", frame.rip);
@@ -383,7 +388,12 @@ pub extern "C" fn divide_error_dispatch(frame: &mut CpuExceptionInterruptFrame) 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn invalid_opcode_dispatch(frame: &mut CpuExceptionInterruptFrame) {
-    if terminate_user_exception(frame, crate::signal::Signal::Ill.number(), "SIGILL", frame.rip) {
+    if terminate_user_exception(
+        frame,
+        crate::signal::Signal::Ill.number(),
+        "SIGILL",
+        frame.rip,
+    ) {
         return;
     }
     panic!("invalid opcode exception at rip {:#x}", frame.rip);

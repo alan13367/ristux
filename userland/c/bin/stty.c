@@ -10,7 +10,7 @@ static void reset_sane(struct termios *term) {
     term->c_cflag |= CREAD | CS8;
     term->c_lflag |= ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
     term->c_cc[VINTR] = 0x03;
-    term->c_cc[VERASE] = 0x7f;
+    term->c_cc[VERASE] = '\b';
     term->c_cc[VEOF] = 0x04;
     term->c_cc[VMIN] = 1;
     term->c_cc[VTIME] = 0;

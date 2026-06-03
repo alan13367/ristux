@@ -73,6 +73,7 @@ int getgroups(int size, gid_t list[]);
 int setgroups(size_t size, const gid_t *list);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
+char *getpass(const char *prompt);
 int access(const char *path, int mode);
 int faccessat(int dirfd, const char *path, int mode, int flags);
 int isatty(int fd);

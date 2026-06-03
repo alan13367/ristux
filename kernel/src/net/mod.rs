@@ -12,6 +12,7 @@ const ARP_REPLY: u16 = 2;
 const IP_PROTO_ICMP: u8 = 1;
 const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
+const UDP_HEADER_LEN: usize = 8;
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 pub(crate) const LOCAL_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
@@ -29,6 +30,14 @@ pub struct Ipv4Addr(pub [u8; 4]);
 impl Ipv4Addr {
     pub const fn is_loopback(self) -> bool {
         self.0[0] == 127
+    }
+
+    pub const fn is_unspecified(self) -> bool {
+        self.0[0] == 0 && self.0[1] == 0 && self.0[2] == 0 && self.0[3] == 0
+    }
+
+    pub const fn is_broadcast(self) -> bool {
+        self.0[0] == 255 && self.0[1] == 255 && self.0[2] == 255 && self.0[3] == 255
     }
 }
 
@@ -96,6 +105,9 @@ pub(crate) struct IcmpDatagram {
 struct NetworkStack {
     mac: MacAddr,
     ip: Ipv4Addr,
+    subnet_mask: Option<Ipv4Addr>,
+    gateway: Option<Ipv4Addr>,
+    dns_server: Option<Ipv4Addr>,
     device: VirtioNetDriver,
     arp_cache: Vec<ArpEntry>,
     udp_sockets: Vec<UdpSocket>,
@@ -103,6 +115,7 @@ struct NetworkStack {
     tcp_inbox: Vec<tcp::TcpPacket>,
     rx_frames: usize,
     tx_frames: usize,
+    dhcp_status: &'static str,
 }
 
 impl NetworkStack {
@@ -111,6 +124,9 @@ impl NetworkStack {
         Self {
             mac,
             ip,
+            subnet_mask: None,
+            gateway: None,
+            dns_server: None,
             device,
             arp_cache: Vec::new(),
             udp_sockets: Vec::new(),
@@ -118,6 +134,7 @@ impl NetworkStack {
             tcp_inbox: Vec::new(),
             rx_frames: 0,
             tx_frames: 0,
+            dhcp_status: "not_attempted",
         }
     }
 
@@ -204,16 +221,20 @@ impl NetworkStack {
         else {
             return false;
         };
-        let mut body = Vec::new();
-        body.extend_from_slice(&local_port.to_be_bytes());
-        body.extend_from_slice(&dst_port.to_be_bytes());
-        body.extend_from_slice(payload);
+        let src_ip = if dst_ip.is_loopback() {
+            LOOPBACK_IP
+        } else {
+            self.ip
+        };
+        let Some(body) = build_udp(src_ip, dst_ip, local_port, dst_port, payload) else {
+            return false;
+        };
         if dst_ip.is_loopback() {
             self.transmit_loopback_ipv4(dst_ip, IP_PROTO_UDP, &body);
             return true;
         }
 
-        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
+        let Some(dst_mac) = self.resolve_route_mac(dst_ip) else {
             return false;
         };
         self.transmit_ipv4(dst_mac, dst_ip, IP_PROTO_UDP, &body);
@@ -229,7 +250,7 @@ impl NetworkStack {
             return true;
         }
 
-        let Some(dst_mac) = self.resolve_mac(dst_ip) else {
+        let Some(dst_mac) = self.resolve_route_mac(dst_ip) else {
             return false;
         };
         self.transmit_ipv4(dst_mac, dst_ip, IP_PROTO_ICMP, payload);
@@ -273,7 +294,7 @@ impl NetworkStack {
             return true;
         }
 
-        let Some(dst_mac) = self.resolve_mac(outbound.dst_ip) else {
+        let Some(dst_mac) = self.resolve_route_mac(outbound.dst_ip) else {
             return false;
         };
         self.transmit_ipv4(dst_mac, outbound.dst_ip, IP_PROTO_TCP, &outbound.segment);
@@ -326,7 +347,11 @@ impl NetworkStack {
             return;
         };
         self.cache_arp(packet.src, frame.src);
-        if packet.dst != self.ip && !packet.dst.is_loopback() {
+        let accepts_dst = packet.dst == self.ip
+            || packet.dst.is_loopback()
+            || packet.dst.is_broadcast()
+            || (self.ip.is_unspecified() && packet.protocol == IP_PROTO_UDP);
+        if !accepts_dst {
             return;
         }
 
@@ -369,22 +394,20 @@ impl NetworkStack {
     }
 
     fn handle_udp(&mut self, packet: Ipv4Packet) {
-        if packet.payload.len() < 4 {
+        let Some(datagram) = parse_udp(packet.src, packet.dst, &packet.payload) else {
             return;
-        }
-        let src_port = u16::from_be_bytes([packet.payload[0], packet.payload[1]]);
-        let dst_port = u16::from_be_bytes([packet.payload[2], packet.payload[3]]);
+        };
         let Some(socket) = self
             .udp_sockets
             .iter_mut()
-            .find(|socket| socket.local_port == dst_port)
+            .find(|socket| socket.local_port == datagram.dst_port)
         else {
             return;
         };
         socket.inbox.push(UdpDatagram {
             src: packet.src,
-            src_port,
-            payload: Vec::from(&packet.payload[4..]),
+            src_port: datagram.src_port,
+            payload: datagram.payload,
         });
         crate::process::wake_io_waiters();
     }
@@ -438,10 +461,61 @@ impl NetworkStack {
     }
 
     fn resolve_mac(&self, ip: Ipv4Addr) -> Option<MacAddr> {
+        if ip.is_broadcast() {
+            return Some(MacAddr([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+        }
         self.arp_cache
             .iter()
             .find(|entry| entry.ip == ip)
             .map(|entry| entry.mac)
+    }
+
+    fn resolve_route_mac(&mut self, dst_ip: Ipv4Addr) -> Option<MacAddr> {
+        let next_hop = self.next_hop_ip(dst_ip);
+        if let Some(mac) = self.resolve_mac(next_hop) {
+            return Some(mac);
+        }
+
+        self.send_arp_request(next_hop);
+        self.resolve_mac(next_hop)
+    }
+
+    fn next_hop_ip(&self, dst_ip: Ipv4Addr) -> Ipv4Addr {
+        if dst_ip.is_broadcast() || self.is_same_subnet(dst_ip) {
+            return dst_ip;
+        }
+        self.gateway.unwrap_or(dst_ip)
+    }
+
+    fn is_same_subnet(&self, ip: Ipv4Addr) -> bool {
+        let Some(mask) = self.subnet_mask else {
+            return true;
+        };
+        if self.ip.is_unspecified() {
+            return false;
+        }
+        (u32::from_be_bytes(self.ip.0) & u32::from_be_bytes(mask.0))
+            == (u32::from_be_bytes(ip.0) & u32::from_be_bytes(mask.0))
+    }
+
+    fn send_arp_request(&mut self, target_ip: Ipv4Addr) {
+        let payload = build_arp(ARP_REQUEST, self.mac, self.ip, MacAddr([0; 6]), target_ip);
+        self.transmit(EthernetFrame {
+            dst: MacAddr([0xff; 6]),
+            src: self.mac,
+            ethertype: ETHERTYPE_ARP,
+            payload,
+        });
+    }
+
+    fn begin_ipv4_conflict_probe(&mut self, ip: Ipv4Addr) {
+        self.arp_cache.retain(|entry| entry.ip != ip);
+        self.send_arp_request(ip);
+    }
+
+    fn ipv4_conflict_probe_result(&mut self, ip: Ipv4Addr) -> Option<MacAddr> {
+        self.poll();
+        self.resolve_mac(ip).filter(|mac| *mac != self.mac)
     }
 
     fn stats(&self) -> NetStats {
@@ -468,12 +542,172 @@ struct Ipv4Packet {
     payload: Vec<u8>,
 }
 
+struct UdpPacket {
+    src_port: u16,
+    dst_port: u16,
+    payload: Vec<u8>,
+}
+
 pub fn init() {
     socket::init();
     *NET_STACK.lock() = Some(runtime_stack());
+
+    let use_dhcp = {
+        let has_hw = NET_STACK
+            .lock()
+            .as_ref()
+            .map(|stack| stack.device.is_hardware())
+            .unwrap_or(false);
+        if has_hw {
+            !crate::boot_config::contains("ip=static")
+                && crate::boot_config::value("ip")
+                    .map(|val| val != "static")
+                    .unwrap_or(true)
+        } else {
+            crate::boot_config::value("ip")
+                .map(|val| val == "dhcp")
+                .unwrap_or(false)
+                || crate::boot_config::contains("ip=dhcp")
+        }
+    };
+
+    if use_dhcp {
+        crate::println!("DHCP: Initializing dynamic IP configuration...");
+        if let Some(stack) = NET_STACK.lock().as_mut() {
+            stack.dhcp_status = "in_progress";
+        }
+        if let Some(reply) = run_dhcp_client() {
+            set_local_ip(reply.yiaddr);
+            if let Some(stack) = NET_STACK.lock().as_mut() {
+                stack.subnet_mask = reply.subnet_mask;
+                stack.gateway = reply.router;
+                stack.dns_server = reply.dns_server;
+                stack.dhcp_status = "success";
+            }
+            if let Some(mask) = reply.subnet_mask {
+                crate::println!(
+                    "DHCP: Subnet mask {}.{}.{}.{}",
+                    mask.0[0],
+                    mask.0[1],
+                    mask.0[2],
+                    mask.0[3]
+                );
+            }
+            if let Some(router) = reply.router {
+                if let Some(gateway_mac) = resolve_gateway_mac(router) {
+                    crate::println!(
+                        "DHCP: Configured default gateway {}.{}.{}.{} at {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        router.0[0],
+                        router.0[1],
+                        router.0[2],
+                        router.0[3],
+                        gateway_mac.0[0],
+                        gateway_mac.0[1],
+                        gateway_mac.0[2],
+                        gateway_mac.0[3],
+                        gateway_mac.0[4],
+                        gateway_mac.0[5]
+                    );
+                } else {
+                    crate::println!(
+                        "DHCP: Configured default gateway {}.{}.{}.{} (MAC unresolved)",
+                        router.0[0],
+                        router.0[1],
+                        router.0[2],
+                        router.0[3]
+                    );
+                }
+            }
+            if let Some(dns) = reply.dns_server {
+                crate::println!(
+                    "DHCP: Configured DNS server {}.{}.{}.{}",
+                    dns.0[0],
+                    dns.0[1],
+                    dns.0[2],
+                    dns.0[3]
+                );
+            }
+        } else {
+            crate::println!(
+                "DHCP: Dynamic configuration failed. Falling back to static IP {}.{}.{}.{}",
+                LOCAL_IP.0[0],
+                LOCAL_IP.0[1],
+                LOCAL_IP.0[2],
+                LOCAL_IP.0[3]
+            );
+            if let Some(stack) = NET_STACK.lock().as_mut() {
+                stack.dhcp_status = "failed";
+            }
+            set_local_ip(LOCAL_IP);
+        }
+    } else {
+        if let Some(stack) = NET_STACK.lock().as_mut() {
+            stack.dhcp_status = "static";
+        }
+        crate::println!(
+            "Network: Using static configuration IP {}.{}.{}.{}",
+            LOCAL_IP.0[0],
+            LOCAL_IP.0[1],
+            LOCAL_IP.0[2],
+            LOCAL_IP.0[3]
+        );
+    }
+
     socket::self_test();
     self_test();
     tcp::self_test();
+}
+
+pub fn local_ip() -> Ipv4Addr {
+    NET_STACK
+        .lock()
+        .as_ref()
+        .map(|stack| stack.ip)
+        .unwrap_or(LOCAL_IP)
+}
+
+pub fn set_local_ip(ip: Ipv4Addr) {
+    if let Some(stack) = NET_STACK.lock().as_mut() {
+        stack.ip = ip;
+        crate::println!(
+            "Network IP set to {}.{}.{}.{}",
+            ip.0[0],
+            ip.0[1],
+            ip.0[2],
+            ip.0[3]
+        );
+    }
+}
+
+pub fn local_mac() -> MacAddr {
+    NET_STACK
+        .lock()
+        .as_ref()
+        .map(|stack| stack.mac)
+        .unwrap_or(MacAddr([0, 0, 0, 0, 0, 0]))
+}
+
+pub fn subnet_mask() -> Option<Ipv4Addr> {
+    NET_STACK
+        .lock()
+        .as_ref()
+        .and_then(|stack| stack.subnet_mask)
+}
+
+pub fn gateway() -> Option<Ipv4Addr> {
+    NET_STACK.lock().as_ref().and_then(|stack| stack.gateway)
+}
+
+pub fn dns_server() -> Option<Ipv4Addr> {
+    NET_STACK.lock().as_ref().and_then(|stack| stack.dns_server)
+}
+
+pub fn dhcp_status() -> &'static str {
+    NET_STACK
+        .lock()
+        .as_ref()
+        .map(|stack| stack.dhcp_status)
+        .unwrap_or("unknown")
 }
 
 pub fn stats() -> NetStats {
@@ -703,6 +937,9 @@ fn runtime_stack() -> NetworkStack {
     let peer_ip = Ipv4Addr([10, 0, 2, 2]);
     let peer_mac = MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
     let mut stack = NetworkStack::new(device, LOCAL_IP);
+    stack.subnet_mask = Some(Ipv4Addr([255, 255, 255, 0]));
+    stack.gateway = Some(peer_ip);
+    stack.dns_server = Some(peer_ip);
     stack.cache_arp(peer_ip, peer_mac);
     stack
 }
@@ -784,6 +1021,61 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
     internet_checksum(header)
 }
 
+fn build_udp(
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+    src_port: u16,
+    dst_port: u16,
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    let udp_len = UDP_HEADER_LEN.checked_add(payload.len())?;
+    let udp_len = u16::try_from(udp_len).ok()?;
+    let mut packet = Vec::with_capacity(usize::from(udp_len));
+    packet.extend_from_slice(&src_port.to_be_bytes());
+    packet.extend_from_slice(&dst_port.to_be_bytes());
+    packet.extend_from_slice(&udp_len.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(payload);
+
+    let checksum = udp_checksum(src_ip, dst_ip, &packet);
+    let checksum = if checksum == 0 { 0xffff } else { checksum };
+    packet[6] = (checksum >> 8) as u8;
+    packet[7] = (checksum & 0xff) as u8;
+    Some(packet)
+}
+
+fn parse_udp(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, payload: &[u8]) -> Option<UdpPacket> {
+    if payload.len() < UDP_HEADER_LEN {
+        return None;
+    }
+    let udp_len = u16::from_be_bytes([payload[4], payload[5]]) as usize;
+    if udp_len < UDP_HEADER_LEN || udp_len > payload.len() {
+        return None;
+    }
+    let datagram = &payload[..udp_len];
+    let checksum = u16::from_be_bytes([datagram[6], datagram[7]]);
+    if checksum != 0 && udp_checksum(src_ip, dst_ip, datagram) != 0 {
+        return None;
+    }
+
+    Some(UdpPacket {
+        src_port: u16::from_be_bytes([datagram[0], datagram[1]]),
+        dst_port: u16::from_be_bytes([datagram[2], datagram[3]]),
+        payload: Vec::from(&datagram[UDP_HEADER_LEN..]),
+    })
+}
+
+fn udp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, udp_packet: &[u8]) -> u16 {
+    let mut checksum_input = Vec::with_capacity(12 + udp_packet.len() + (udp_packet.len() & 1));
+    checksum_input.extend_from_slice(&src_ip.0);
+    checksum_input.extend_from_slice(&dst_ip.0);
+    checksum_input.push(0);
+    checksum_input.push(IP_PROTO_UDP);
+    checksum_input.extend_from_slice(&(udp_packet.len() as u16).to_be_bytes());
+    checksum_input.extend_from_slice(udp_packet);
+    internet_checksum(&checksum_input)
+}
+
 fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
     if payload.len() < 20 || payload[0] >> 4 != 4 {
         return None;
@@ -799,6 +1091,404 @@ fn parse_ipv4(payload: &[u8]) -> Option<Ipv4Packet> {
         dst: Ipv4Addr(payload[16..20].try_into().ok()?),
         payload: Vec::from(&payload[ihl..total_len]),
     })
+}
+
+pub(crate) struct DhcpReply {
+    message_type: u8,
+    yiaddr: Ipv4Addr,
+    subnet_mask: Option<Ipv4Addr>,
+    router: Option<Ipv4Addr>,
+    dns_server: Option<Ipv4Addr>,
+    server_id: Option<Ipv4Addr>,
+}
+
+fn parse_dhcp_reply(payload: &[u8], expected_xid: u32) -> Option<DhcpReply> {
+    if payload.len() < 240 {
+        return None;
+    }
+    if payload[0] != 2 {
+        // Boot Reply
+        return None;
+    }
+    let xid = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    if xid != expected_xid {
+        return None;
+    }
+    if payload[236..240] != [99, 130, 83, 99] {
+        return None;
+    }
+
+    let yiaddr = Ipv4Addr([payload[16], payload[17], payload[18], payload[19]]);
+    let mut message_type = 0;
+    let mut subnet_mask = None;
+    let mut router = None;
+    let mut dns_server = None;
+    let mut server_id = None;
+
+    let mut offset = 240;
+    while offset < payload.len() {
+        let opt_type = payload[offset];
+        if opt_type == 255 {
+            break;
+        }
+        if opt_type == 0 {
+            // Pad
+            offset += 1;
+            continue;
+        }
+        if offset + 1 >= payload.len() {
+            break;
+        }
+        let opt_len = payload[offset + 1] as usize;
+        if offset + 2 + opt_len > payload.len() {
+            break;
+        }
+        let opt_val = &payload[offset + 2..offset + 2 + opt_len];
+        match opt_type {
+            53 => {
+                if opt_len == 1 {
+                    message_type = opt_val[0];
+                }
+            }
+            1 => {
+                if opt_len == 4 {
+                    subnet_mask = Some(Ipv4Addr([opt_val[0], opt_val[1], opt_val[2], opt_val[3]]));
+                }
+            }
+            3 => {
+                if opt_len >= 4 {
+                    router = Some(Ipv4Addr([opt_val[0], opt_val[1], opt_val[2], opt_val[3]]));
+                }
+            }
+            6 => {
+                if opt_len >= 4 {
+                    dns_server = Some(Ipv4Addr([opt_val[0], opt_val[1], opt_val[2], opt_val[3]]));
+                }
+            }
+            54 => {
+                if opt_len == 4 {
+                    server_id = Some(Ipv4Addr([opt_val[0], opt_val[1], opt_val[2], opt_val[3]]));
+                }
+            }
+            _ => {}
+        }
+        offset += 2 + opt_len;
+    }
+
+    Some(DhcpReply {
+        message_type,
+        yiaddr,
+        subnet_mask,
+        router,
+        dns_server,
+        server_id,
+    })
+}
+
+fn build_dhcp_discover(xid: u32, mac: MacAddr) -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.resize(240, 0);
+    packet[0] = 1; // Boot Request
+    packet[1] = 1; // Ethernet
+    packet[2] = 6; // Hardware address length
+    packet[4..8].copy_from_slice(&xid.to_be_bytes());
+    packet[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // Broadcast flag
+    packet[28..34].copy_from_slice(&mac.0); // Client MAC
+
+    // Magic cookie
+    packet[236..240].copy_from_slice(&[99, 130, 83, 99]);
+
+    // Option 53: DHCP Message Type (DHCPDISCOVER)
+    packet.extend_from_slice(&[53, 1, 1]);
+
+    append_dhcp_client_identity(&mut packet, mac);
+
+    // Option 55: Parameter Request List (Subnet Mask, Router, DNS)
+    packet.extend_from_slice(&[55, 3, 1, 3, 6]);
+
+    // Option 255: End
+    packet.push(255);
+
+    packet
+}
+
+fn build_dhcp_request(
+    xid: u32,
+    mac: MacAddr,
+    requested_ip: Ipv4Addr,
+    server_ip: Ipv4Addr,
+) -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.resize(240, 0);
+    packet[0] = 1; // Boot Request
+    packet[1] = 1; // Ethernet
+    packet[2] = 6; // Hardware address length
+    packet[4..8].copy_from_slice(&xid.to_be_bytes());
+    packet[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // Broadcast flag
+    packet[28..34].copy_from_slice(&mac.0); // Client MAC
+
+    // Magic cookie
+    packet[236..240].copy_from_slice(&[99, 130, 83, 99]);
+
+    // Option 53: DHCP Message Type (DHCPREQUEST)
+    packet.extend_from_slice(&[53, 1, 3]);
+
+    append_dhcp_client_identity(&mut packet, mac);
+
+    // Option 50: Requested IP
+    packet.extend_from_slice(&[50, 4]);
+    packet.extend_from_slice(&requested_ip.0);
+
+    // Option 54: Server Identifier
+    packet.extend_from_slice(&[54, 4]);
+    packet.extend_from_slice(&server_ip.0);
+
+    // Option 255: End
+    packet.push(255);
+
+    packet
+}
+
+fn build_dhcp_decline(
+    xid: u32,
+    mac: MacAddr,
+    declined_ip: Ipv4Addr,
+    server_ip: Ipv4Addr,
+) -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.resize(240, 0);
+    packet[0] = 1; // Boot Request
+    packet[1] = 1; // Ethernet
+    packet[2] = 6; // Hardware address length
+    packet[4..8].copy_from_slice(&xid.to_be_bytes());
+    packet[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // Broadcast flag
+    packet[28..34].copy_from_slice(&mac.0); // Client MAC
+
+    packet[236..240].copy_from_slice(&[99, 130, 83, 99]);
+    packet.extend_from_slice(&[53, 1, 4]); // DHCPDECLINE
+    append_dhcp_client_identity(&mut packet, mac);
+    packet.extend_from_slice(&[50, 4]);
+    packet.extend_from_slice(&declined_ip.0);
+    packet.extend_from_slice(&[54, 4]);
+    packet.extend_from_slice(&server_ip.0);
+    packet.push(255);
+    packet
+}
+
+fn append_dhcp_client_identity(packet: &mut Vec<u8>, mac: MacAddr) {
+    // Option 61: client identifier. Use Ethernet hardware type plus the VM MAC,
+    // so DHCP servers do not accidentally bucket us with the host client.
+    packet.extend_from_slice(&[61, 7, 1]);
+    packet.extend_from_slice(&mac.0);
+
+    // Option 12: host name.
+    packet.extend_from_slice(&[12, 6]);
+    packet.extend_from_slice(b"ristux");
+}
+
+fn dhcp_xid(mac: MacAddr) -> u32 {
+    let tsc = rdtsc() as u32;
+    let mac_mix = ((mac.0[2] as u32) << 24)
+        | ((mac.0[3] as u32) << 16)
+        | ((mac.0[4] as u32) << 8)
+        | mac.0[5] as u32;
+    0x3903_f39f ^ tsc ^ mac_mix
+}
+
+fn rdtsc() -> u64 {
+    let low: u32;
+    let high: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdtsc",
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    ((high as u64) << 32) | low as u64
+}
+
+pub(crate) fn run_dhcp_client() -> Option<DhcpReply> {
+    let mac = {
+        let guard = NET_STACK.lock();
+        let Some(stack) = guard.as_ref() else {
+            return None;
+        };
+        stack.mac
+    };
+
+    let socket = udp_socket_open(68)?;
+    let xid = dhcp_xid(mac);
+    let discover = build_dhcp_discover(xid, mac);
+
+    crate::println!("DHCP: Sending DHCPDISCOVER...");
+    set_local_ip(Ipv4Addr([0, 0, 0, 0]));
+
+    if !udp_socket_send(socket, Ipv4Addr([255, 255, 255, 255]), 67, &discover) {
+        crate::println!("DHCP: Failed to send DHCPDISCOVER");
+        udp_socket_close(socket);
+        return None;
+    }
+
+    let start_tick = crate::time::monotonic_ticks();
+    let timeout_ticks = 150; // 1.5 seconds at 100Hz
+    let start_tsc = rdtsc();
+    let timeout_tsc = 6_000_000_000; // ~2.0 seconds at 3GHz
+    let mut offer = None;
+
+    loop {
+        let ticks_elapsed = crate::time::monotonic_ticks() - start_tick;
+        if ticks_elapsed > timeout_ticks
+            || (ticks_elapsed == 0 && rdtsc() - start_tsc > timeout_tsc)
+        {
+            break;
+        }
+        if let Some(datagram) = udp_socket_recv(socket) {
+            if let Some(mut reply) = parse_dhcp_reply(&datagram.payload, xid) {
+                if reply.message_type == 2 {
+                    // DHCPOFFER
+                    if reply.server_id.is_none() {
+                        reply.server_id = Some(datagram.src);
+                    }
+                    crate::println!(
+                        "DHCP: Received DHCPOFFER for IP {}.{}.{}.{}",
+                        reply.yiaddr.0[0],
+                        reply.yiaddr.0[1],
+                        reply.yiaddr.0[2],
+                        reply.yiaddr.0[3]
+                    );
+                    offer = Some(reply);
+                    break;
+                }
+            }
+        }
+        core::hint::spin_loop();
+    }
+
+    let Some(offer) = offer else {
+        crate::println!("DHCP: Timeout waiting for DHCPOFFER");
+        udp_socket_close(socket);
+        return None;
+    };
+
+    let Some(server_id) = offer.server_id else {
+        crate::println!("DHCP: DHCPOFFER did not identify a server");
+        udp_socket_close(socket);
+        return None;
+    };
+    let request = build_dhcp_request(xid, mac, offer.yiaddr, server_id);
+
+    crate::println!("DHCP: Sending DHCPREQUEST...");
+    if !udp_socket_send(socket, Ipv4Addr([255, 255, 255, 255]), 67, &request) {
+        crate::println!("DHCP: Failed to send DHCPREQUEST");
+        udp_socket_close(socket);
+        return None;
+    }
+
+    let start_tick = crate::time::monotonic_ticks();
+    let start_tsc = rdtsc();
+    let mut ack = None;
+
+    loop {
+        let ticks_elapsed = crate::time::monotonic_ticks() - start_tick;
+        if ticks_elapsed > timeout_ticks
+            || (ticks_elapsed == 0 && rdtsc() - start_tsc > timeout_tsc)
+        {
+            break;
+        }
+        if let Some(datagram) = udp_socket_recv(socket) {
+            if let Some(reply) = parse_dhcp_reply(&datagram.payload, xid) {
+                if reply.message_type == 5 {
+                    // DHCPACK
+                    crate::println!("DHCP: Received DHCPACK");
+                    ack = Some(reply);
+                    break;
+                }
+            }
+        }
+        core::hint::spin_loop();
+    }
+
+    if let Some(reply) = ack.as_ref() {
+        let conflict = probe_ipv4_conflict(reply.yiaddr);
+        if let Some(conflict_mac) = conflict {
+            crate::println!(
+                "DHCP: Offered IP {}.{}.{}.{} is already in use by {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; declining lease",
+                reply.yiaddr.0[0],
+                reply.yiaddr.0[1],
+                reply.yiaddr.0[2],
+                reply.yiaddr.0[3],
+                conflict_mac.0[0],
+                conflict_mac.0[1],
+                conflict_mac.0[2],
+                conflict_mac.0[3],
+                conflict_mac.0[4],
+                conflict_mac.0[5]
+            );
+            let decline = build_dhcp_decline(xid, mac, reply.yiaddr, server_id);
+            let _ = udp_socket_send(socket, Ipv4Addr([255, 255, 255, 255]), 67, &decline);
+            udp_socket_close(socket);
+            return None;
+        }
+    }
+
+    udp_socket_close(socket);
+    ack
+}
+
+pub fn resolve_gateway_mac(gateway_ip: Ipv4Addr) -> Option<MacAddr> {
+    let start_tick = crate::time::monotonic_ticks();
+    let start_tsc = rdtsc();
+    let mut requested = false;
+    loop {
+        {
+            let mut guard = NET_STACK.lock();
+            let stack = guard.as_mut()?;
+            let next_hop = stack.next_hop_ip(gateway_ip);
+            if let Some(mac) = stack.resolve_mac(next_hop) {
+                return Some(mac);
+            }
+            if !requested {
+                stack.send_arp_request(next_hop);
+                requested = true;
+            }
+            stack.poll();
+            if let Some(mac) = stack.resolve_mac(next_hop) {
+                return Some(mac);
+            }
+        }
+
+        let ticks_elapsed = crate::time::monotonic_ticks() - start_tick;
+        if ticks_elapsed > 20 || (ticks_elapsed == 0 && rdtsc() - start_tsc > 600_000_000) {
+            return None;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn probe_ipv4_conflict(ip: Ipv4Addr) -> Option<MacAddr> {
+    {
+        let mut guard = NET_STACK.lock();
+        guard.as_mut()?.begin_ipv4_conflict_probe(ip);
+    }
+
+    let start_tick = crate::time::monotonic_ticks();
+    let start_tsc = rdtsc();
+    loop {
+        {
+            let mut guard = NET_STACK.lock();
+            if let Some(conflict) = guard.as_mut()?.ipv4_conflict_probe_result(ip) {
+                return Some(conflict);
+            }
+        }
+
+        let ticks_elapsed = crate::time::monotonic_ticks() - start_tick;
+        if ticks_elapsed > 50 || (ticks_elapsed == 0 && rdtsc() - start_tsc > 1_500_000_000) {
+            return None;
+        }
+        core::hint::spin_loop();
+    }
 }
 
 fn self_test() {
@@ -850,10 +1540,13 @@ fn self_test() {
     }
     let udp_tx = stack.pop_tx().expect("UDP send did not transmit a frame");
     let udp_packet = parse_ipv4(&udp_tx.payload).expect("UDP transmit was not IPv4");
+    let udp_segment =
+        parse_udp(LOCAL_IP, peer_ip, &udp_packet.payload).expect("UDP transmit was malformed");
     if udp_tx.dst != peer_mac
         || udp_packet.protocol != IP_PROTO_UDP
-        || udp_packet.payload[0..4] != [0x23, 0x28, 0x23, 0x29]
-        || &udp_packet.payload[4..] != b"ristux"
+        || udp_segment.src_port != 9000
+        || udp_segment.dst_port != 9001
+        || udp_segment.payload != b"ristux"
     {
         panic!("UDP send self-test failed");
     }

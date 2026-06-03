@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{
-    IcmpSocketId, Ipv4Addr, LOCAL_IP, LOOPBACK_IP, SocketId,
+    IcmpSocketId, Ipv4Addr, LOOPBACK_IP, SocketId, local_ip,
     tcp::{TcpError, TcpStack},
 };
 use crate::sync::spinlock::SpinLock;
@@ -413,7 +413,7 @@ impl SocketTable {
         let port = self.local_port(handle)?;
         let ip = match self.peer_addr(handle)? {
             Some(peer) if peer.ip.is_loopback() => LOOPBACK_IP,
-            _ => LOCAL_IP,
+            _ => local_ip(),
         };
         Ok(SocketAddress { ip, port })
     }

@@ -8,6 +8,20 @@ use alloc::vec;
 use core::ptr;
 use ristux_userland::{installer_support as inst, sys};
 
+const O_RDWR: i32 = 2;
+
+fn redirect_dropbear_stdio() {
+    let null_fd = sys::open(b"/dev/null\0".as_ptr(), O_RDWR, 0);
+    if null_fd >= 0 {
+        let _ = sys::dup2(null_fd as i32, 0);
+        let _ = sys::dup2(null_fd as i32, 1);
+        let _ = sys::dup2(null_fd as i32, 2);
+        if null_fd > 2 {
+            let _ = sys::close(null_fd as i32);
+        }
+    }
+}
+
 fn spawn_dropbear() -> isize {
     let pid = sys::fork();
     if pid < 0 {
@@ -16,6 +30,7 @@ fn spawn_dropbear() -> isize {
     }
 
     if pid == 0 {
+        redirect_dropbear_stdio();
         let path = b"/bin/dropbear\0";
         let argv0 = b"dropbear\0";
         let arg_f = b"-F\0";

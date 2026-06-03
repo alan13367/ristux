@@ -687,9 +687,75 @@ static int parse_resolv_nameserver_line(char *line, in_addr_t *out) {
     return parse_ipv4_literal(token, out);
 }
 
+static int parse_proc_netinfo_dns_line(char *line, in_addr_t *out) {
+    const char prefix[] = "DNS Server:";
+    char *p = line;
+
+    while (resolver_space(*p)) {
+        p++;
+    }
+    for (size_t i = 0; prefix[i] != '\0'; i++) {
+        if (p[i] != prefix[i]) {
+            return 0;
+        }
+    }
+    p += sizeof(prefix) - 1;
+    while (resolver_space(*p)) {
+        p++;
+    }
+
+    char token[32];
+    size_t len = 0;
+    while (*p != '\0' && *p != '#' && !resolver_space(*p)) {
+        if (len + 1 >= sizeof(token)) {
+            return 0;
+        }
+        token[len++] = *p++;
+    }
+    token[len] = '\0';
+    return parse_ipv4_literal(token, out);
+}
+
+static int resolver_proc_netinfo_nameserver(in_addr_t *out) {
+    char buf[512];
+    int fd = open("/proc/netinfo", O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = '\0';
+
+    char *line = buf;
+    while (*line != '\0') {
+        char *next = line;
+        while (*next != '\0' && *next != '\n') {
+            next++;
+        }
+        if (*next == '\n') {
+            *next++ = '\0';
+        }
+        if (parse_proc_netinfo_dns_line(line, out)) {
+            return 1;
+        }
+        line = next;
+    }
+
+    return 0;
+}
+
 static in_addr_t resolver_nameserver(void) {
     in_addr_t out = htonl((10u << 24) | (0u << 16) | (2u << 8) | 2u);
     char buf[256];
+
+    if (resolver_proc_netinfo_nameserver(&out)) {
+        return out;
+    }
+
     int fd = open("/etc/resolv.conf", O_RDONLY, 0);
     if (fd < 0) {
         return out;
@@ -1862,6 +1928,50 @@ int fchownat(int dirfd, const char *path, uid_t owner, gid_t group, int flags) {
 char *getcwd(char *buf, size_t size) {
     long ret = syscall_ret(syscall2(SYS_GETCWD, (long)buf, (long)size));
     return ret < 0 ? NULL : (char *)ret;
+}
+
+char *getpass(const char *prompt) {
+    static char password[128];
+    struct termios original;
+    struct termios noecho;
+    int fd = open("/dev/tty", O_RDWR, 0);
+    int input_fd = fd >= 0 ? fd : STDIN_FILENO;
+    int prompt_fd = fd >= 0 ? fd : STDERR_FILENO;
+    int have_term = 0;
+    size_t used = 0;
+
+    if (prompt != NULL) {
+        write(prompt_fd, prompt, strlen(prompt));
+    }
+
+    if (tcgetattr(input_fd, &original) == 0) {
+        noecho = original;
+        noecho.c_lflag &= ~ECHO;
+        if (tcsetattr(input_fd, TCSANOW, &noecho) == 0) {
+            have_term = 1;
+        }
+    }
+
+    for (;;) {
+        char ch;
+        ssize_t n = read(input_fd, &ch, 1);
+        if (n <= 0 || ch == '\n' || ch == '\r') {
+            break;
+        }
+        if (used + 1 < sizeof(password)) {
+            password[used++] = ch;
+        }
+    }
+    password[used] = '\0';
+
+    if (have_term) {
+        tcsetattr(input_fd, TCSANOW, &original);
+    }
+    write(prompt_fd, "\n", 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    return password;
 }
 
 char *realpath(const char *path, char *resolved_path) {

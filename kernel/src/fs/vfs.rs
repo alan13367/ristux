@@ -413,7 +413,9 @@ impl PtyState {
             }
 
             if canonical {
-                if Some(byte) == control_char(&self.termios, VERASE) || byte == 0x08 {
+                let erase = Some(byte) == control_char(&self.termios, VERASE)
+                    || matches!(byte, 0x08 | 0x7f);
+                if erase {
                     if !self.input_line.is_empty() {
                         self.input_line.pop();
                         if echo {
@@ -486,11 +488,7 @@ fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
     const TERMIOS_CC: usize = 17;
     let byte = *termios.get(TERMIOS_CC + index)?;
-    if byte == 0 {
-        None
-    } else {
-        Some(byte)
-    }
+    if byte == 0 { None } else { Some(byte) }
 }
 
 fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {
@@ -2683,6 +2681,7 @@ impl Vfs {
         if path == "/proc" {
             push_unique_entry(&mut entries, "meminfo", NodeKind::File)?;
             push_unique_entry(&mut entries, "mounts", NodeKind::File)?;
+            push_unique_entry(&mut entries, "netinfo", NodeKind::File)?;
             push_unique_entry(&mut entries, "self", NodeKind::Directory)?;
             push_unique_entry(&mut entries, "stat", NodeKind::File)?;
             push_unique_entry(&mut entries, "uptime", NodeKind::File)?;
@@ -3280,7 +3279,12 @@ fn proc_existing_process_dir_pid(path: &str) -> Option<u64> {
 fn proc_virtual_kind(path: &str) -> Option<NodeKind> {
     if matches!(
         path,
-        "/proc/cmdline" | "/proc/meminfo" | "/proc/mounts" | "/proc/stat" | "/proc/uptime"
+        "/proc/cmdline"
+            | "/proc/meminfo"
+            | "/proc/mounts"
+            | "/proc/stat"
+            | "/proc/uptime"
+            | "/proc/netinfo"
     ) || proc_status_pid(path).is_some()
     {
         return Some(NodeKind::File);
@@ -3329,6 +3333,54 @@ fn format_proc_virtual(path: &str) -> Option<String> {
                 "{}.{:02} 0.00\n",
                 millis / 1000,
                 (millis % 1000) / 10
+            ))
+        }
+        "/proc/netinfo" => {
+            let ip = crate::net::local_ip();
+            let mac = crate::net::local_mac();
+            let stats = crate::net::stats();
+            let dhcp = crate::net::dhcp_status();
+
+            let subnet = crate::net::subnet_mask()
+                .map(|m| format!("{}.{}.{}.{}", m.0[0], m.0[1], m.0[2], m.0[3]))
+                .unwrap_or_else(|| String::from("none"));
+
+            let gateway = crate::net::gateway()
+                .map(|g| format!("{}.{}.{}.{}", g.0[0], g.0[1], g.0[2], g.0[3]))
+                .unwrap_or_else(|| String::from("none"));
+
+            let dns = crate::net::dns_server()
+                .map(|d| format!("{}.{}.{}.{}", d.0[0], d.0[1], d.0[2], d.0[3]))
+                .unwrap_or_else(|| String::from("none"));
+
+            Some(format!(
+                "Interface: eth0\n\
+                 MAC Address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n\
+                 IP Address: {}.{}.{}.{}\n\
+                 Subnet Mask: {}\n\
+                 Default Gateway: {}\n\
+                 DNS Server: {}\n\
+                 DHCP Status: {}\n\
+                 Rx Frames: {}\n\
+                 Tx Frames: {}\n\
+                 Arp Cache Entries: {}\n",
+                mac.0[0],
+                mac.0[1],
+                mac.0[2],
+                mac.0[3],
+                mac.0[4],
+                mac.0[5],
+                ip.0[0],
+                ip.0[1],
+                ip.0[2],
+                ip.0[3],
+                subnet,
+                gateway,
+                dns,
+                dhcp,
+                stats.rx_frames,
+                stats.tx_frames,
+                stats.arp_entries
             ))
         }
         _ => proc_status_pid(path).map(format_proc_status),

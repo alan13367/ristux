@@ -2426,7 +2426,9 @@ pub fn set_current(pid: Pid) {
                 process.state = ProcessState::Ready;
             }
         }
-        table.get(pid).map(|p| (p.address_space.p4_phys(), p.user_fs_base))
+        table
+            .get(pid)
+            .map(|p| (p.address_space.p4_phys(), p.user_fs_base))
     });
     if let Some((p4, user_fs_base)) = context {
         unsafe {

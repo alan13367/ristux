@@ -11,9 +11,14 @@ static CTRL: AtomicBool = AtomicBool::new(false);
 static ALT: AtomicBool = AtomicBool::new(false);
 static EXTENDED_SCANCODE: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_LAYOUT: AtomicU8 = AtomicU8::new(KEYBOARD_LAYOUT_SPANISH_MAC);
+static ARROW_REPEAT: SpinLock<ArrowRepeat> = SpinLock::new(ArrowRepeat::new());
 
 const KEYBOARD_LAYOUT_US: u8 = 0;
 const KEYBOARD_LAYOUT_SPANISH_MAC: u8 = 1;
+const EXTENDED_LEFT_ARROW: u8 = 0x4b;
+const EXTENDED_RIGHT_ARROW: u8 = 0x4d;
+const ARROW_REPEAT_INITIAL_DELAY_MS: u64 = 180;
+const ARROW_REPEAT_INTERVAL_MS: u64 = 45;
 
 pub const TERMIOS_SIZE: usize = 60;
 const NCCS: usize = 32;
@@ -23,6 +28,8 @@ const VEOF: usize = 4;
 const VTIME: usize = 5;
 const VMIN: usize = 6;
 const VSUSP: usize = 10;
+const ASCII_BS: u8 = 0x08;
+const ASCII_DEL: u8 = 0x7f;
 
 const IFLAG_ICRNL: u32 = 0x100;
 const OFLAG_OPOST: u32 = 0x1;
@@ -57,12 +64,33 @@ enum TtyEcho {
 enum KeyInput {
     Byte(u8),
     Bytes(&'static [u8]),
+    RepeatedBytes { bytes: &'static [u8], repeat: usize },
 }
 
 #[derive(Clone, Copy)]
 struct TtyWaiter {
     pid: Pid,
     deadline_ms: Option<u64>,
+}
+
+struct ArrowRepeat {
+    scancode: u8,
+    bytes: &'static [u8],
+    held: bool,
+    repeats: u8,
+    next_ms: u64,
+}
+
+impl ArrowRepeat {
+    const fn new() -> Self {
+        Self {
+            scancode: 0,
+            bytes: b"",
+            held: false,
+            repeats: 0,
+            next_ms: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -81,7 +109,7 @@ impl Termios {
     const fn default() -> Self {
         let mut cc = [0u8; NCCS];
         cc[VINTR] = 0x03;
-        cc[VERASE] = 0x7f;
+        cc[VERASE] = ASCII_BS;
         cc[VEOF] = 0x04;
         cc[VMIN] = 1;
         cc[VTIME] = 0;
@@ -198,7 +226,7 @@ impl Tty {
                 self.eof = true;
                 None
             }
-            byte if self.control_char(VERASE) == Some(byte) || byte == 0x08 => {
+            byte if self.is_erase_byte(byte) => {
                 self.line.pop();
                 None
             }
@@ -220,10 +248,22 @@ impl Tty {
     }
 
     pub fn read_available(&mut self) -> Option<Vec<u8>> {
-        self.read_available_at(crate::time::uptime_millis(), false)
+        self.read_available_limited(usize::MAX)
     }
 
-    fn read_available_at(&mut self, now_ms: u64, timeout_expired: bool) -> Option<Vec<u8>> {
+    fn read_available_limited(&mut self, max_len: usize) -> Option<Vec<u8>> {
+        self.read_available_at(crate::time::uptime_millis(), false, max_len)
+    }
+
+    fn read_available_at(
+        &mut self,
+        now_ms: u64,
+        timeout_expired: bool,
+        max_len: usize,
+    ) -> Option<Vec<u8>> {
+        if max_len == 0 {
+            return Some(Vec::new());
+        }
         if !self.canonical_enabled() {
             let min = self.termios.cc[VMIN] as usize;
             let time_ds = self.termios.cc[VTIME] as u64;
@@ -242,12 +282,18 @@ impl Tty {
             if min != 0 && self.line.len() < min && !interbyte_expired {
                 return None;
             }
-            self.raw_first_byte_ms = None;
-            return Some(self.line.drain(..).collect());
+            let out = drain_prefix(&mut self.line, max_len);
+            if self.line.is_empty() {
+                self.raw_first_byte_ms = None;
+            }
+            return Some(out);
         }
-        if let Some(line) = self.ready.first().cloned() {
-            self.ready.remove(0);
-            return Some(line);
+        if !self.ready.is_empty() {
+            let out = drain_prefix(&mut self.ready[0], max_len);
+            if self.ready[0].is_empty() {
+                self.ready.remove(0);
+            }
+            return Some(out);
         }
         if self.eof {
             self.eof = false;
@@ -255,7 +301,8 @@ impl Tty {
         }
         // Legacy single-line buffer fallback (canonical text without newline).
         if let Some(newline) = self.line.iter().position(|byte| *byte == b'\n') {
-            let mut line: Vec<u8> = self.line.drain(..=newline).collect();
+            let count = (newline + 1).min(max_len);
+            let mut line: Vec<u8> = self.line.drain(..count).collect();
             if line.last() == Some(&b'\n') {
                 line.pop();
             }
@@ -283,6 +330,10 @@ impl Tty {
     fn control_char(&self, index: usize) -> Option<u8> {
         let byte = self.termios.cc.get(index).copied().unwrap_or(0);
         if byte == 0 { None } else { Some(byte) }
+    }
+
+    fn is_erase_byte(&self, byte: u8) -> bool {
+        self.control_char(VERASE) == Some(byte) || byte == ASCII_BS || byte == ASCII_DEL
     }
 
     fn termios(&self) -> Termios {
@@ -371,6 +422,11 @@ impl Tty {
     }
 }
 
+fn drain_prefix(bytes: &mut Vec<u8>, max_len: usize) -> Vec<u8> {
+    let count = bytes.len().min(max_len);
+    bytes.drain(..count).collect()
+}
+
 pub fn init() {
     *TTY.lock() = Some(Tty::new());
     self_test();
@@ -381,13 +437,38 @@ pub fn input_scancode(scancode: u8) {
         return;
     };
 
+    dispatch_key_input(input);
+}
+
+pub fn poll_key_repeats() {
+    let raw_mode = {
+        let guard = TTY.lock();
+        guard
+            .as_ref()
+            .map(|tty| !tty.canonical_enabled())
+            .unwrap_or(false)
+    };
+    let Some(input) = arrow_repeat_due(crate::time::uptime_millis(), raw_mode) else {
+        return;
+    };
+    dispatch_key_input(input);
+}
+
+fn dispatch_key_input(input: KeyInput) {
     match input {
         KeyInput::Byte(byte) => input_byte(byte),
-        KeyInput::Bytes(bytes) => {
-            for &byte in bytes {
-                input_byte(byte);
+        KeyInput::Bytes(bytes) => input_bytes(bytes),
+        KeyInput::RepeatedBytes { bytes, repeat } => {
+            for _ in 0..repeat {
+                input_bytes(bytes);
             }
         }
+    }
+}
+
+fn input_bytes(bytes: &[u8]) {
+    for &byte in bytes {
+        input_byte(byte);
     }
 }
 
@@ -456,7 +537,7 @@ fn tty_echo_for_input(tty: &Tty, byte: u8) -> Option<TtyEcho> {
         if tty.control_char(VEOF) == Some(byte) {
             return None;
         }
-        if tty.control_char(VERASE) == Some(byte) || byte == 0x08 {
+        if tty.is_erase_byte(byte) {
             return (tty.erase_echo_enabled() && !tty.line.is_empty())
                 .then_some(TtyEcho::Text("\x08 \x08"));
         }
@@ -476,17 +557,16 @@ pub fn read(output: &mut [u8]) -> usize {
     let line = {
         let mut guard = TTY.lock();
         let tty = guard.as_mut().expect("TTY used before initialization");
-        tty.read_available()
+        tty.read_available_limited(output.len())
     };
     let Some(line) = line else {
         return 0;
     };
-    let count = line.len().min(output.len());
-    output[..count].copy_from_slice(&line[..count]);
-    count
+    output[..line.len()].copy_from_slice(&line);
+    line.len()
 }
 
-pub fn try_read_for_current() -> ReadOutcome {
+pub fn try_read_for_current(max_len: usize) -> ReadOutcome {
     let now_ms = crate::time::uptime_millis();
     let pid = crate::process::current_pid();
     let mut guard = TTY.lock();
@@ -494,12 +574,9 @@ pub fn try_read_for_current() -> ReadOutcome {
     let timeout_expired = pid
         .map(|pid| tty.expired_waiter(pid, now_ms))
         .unwrap_or(false);
-    if let Some(mut line) = tty.read_available_at(now_ms, timeout_expired) {
+    if let Some(line) = tty.read_available_at(now_ms, timeout_expired, max_len) {
         if let Some(pid) = pid {
             tty.clear_waiter(pid);
-        }
-        if tty.canonical_enabled() && !line.ends_with(b"\n") {
-            line.push(b'\n');
         }
         return ReadOutcome::Ready(line);
     }
@@ -638,6 +715,12 @@ fn translate_set1(scancode: u8) -> Option<KeyInput> {
     }
 
     if scancode & 0x80 != 0 {
+        if extended {
+            match scancode & 0x7f {
+                EXTENDED_LEFT_ARROW | EXTENDED_RIGHT_ARROW => reset_arrow_repeat(scancode & 0x7f),
+                _ => {}
+            }
+        }
         return None;
     }
 
@@ -645,14 +728,16 @@ fn translate_set1(scancode: u8) -> Option<KeyInput> {
         return match scancode {
             0x47 => Some(KeyInput::Bytes(b"\x1b[H")),
             0x48 => Some(KeyInput::Bytes(b"\x1b[A")),
-            0x4b => Some(KeyInput::Bytes(b"\x1b[D")),
-            0x4d => Some(KeyInput::Bytes(b"\x1b[C")),
+            EXTENDED_LEFT_ARROW => begin_arrow_repeat(scancode, b"\x1b[D"),
+            EXTENDED_RIGHT_ARROW => begin_arrow_repeat(scancode, b"\x1b[C"),
             0x4f => Some(KeyInput::Bytes(b"\x1b[F")),
             0x50 => Some(KeyInput::Bytes(b"\x1b[B")),
             0x53 => Some(KeyInput::Bytes(b"\x1b[3~")),
             _ => None,
         };
     }
+
+    reset_arrow_repeat(0);
 
     let shifted = LEFT_SHIFT.load(Ordering::Relaxed) || RIGHT_SHIFT.load(Ordering::Relaxed);
     let alt = ALT.load(Ordering::Relaxed);
@@ -666,10 +751,53 @@ fn translate_set1(scancode: u8) -> Option<KeyInput> {
     Some(KeyInput::Byte(byte))
 }
 
+fn begin_arrow_repeat(scancode: u8, bytes: &'static [u8]) -> Option<KeyInput> {
+    let now_ms = crate::time::uptime_millis();
+    let mut state = ARROW_REPEAT.lock();
+    if state.held && state.scancode == scancode {
+        return None;
+    }
+    state.scancode = scancode;
+    state.bytes = bytes;
+    state.held = true;
+    state.repeats = 0;
+    state.next_ms = now_ms.saturating_add(ARROW_REPEAT_INITIAL_DELAY_MS);
+    Some(KeyInput::Bytes(bytes))
+}
+
+fn arrow_repeat_due(now_ms: u64, raw_mode: bool) -> Option<KeyInput> {
+    if !raw_mode {
+        return None;
+    }
+    let mut state = ARROW_REPEAT.lock();
+    if !state.held || now_ms < state.next_ms {
+        return None;
+    }
+    state.repeats = state.repeats.saturating_add(1).min(20);
+    state.next_ms = now_ms.saturating_add(ARROW_REPEAT_INTERVAL_MS);
+    let repeat = match state.repeats {
+        0..=2 => 1,
+        3..=5 => 2,
+        6..=9 => 3,
+        _ => 4,
+    };
+    Some(KeyInput::RepeatedBytes {
+        bytes: state.bytes,
+        repeat,
+    })
+}
+
+fn reset_arrow_repeat(scancode: u8) {
+    let mut state = ARROW_REPEAT.lock();
+    if scancode == 0 || state.scancode == scancode {
+        *state = ArrowRepeat::new();
+    }
+}
+
 fn translated_byte(scancode: u8) -> Option<u8> {
     match translate_set1(scancode)? {
         KeyInput::Byte(byte) => Some(byte),
-        KeyInput::Bytes(_) => None,
+        KeyInput::Bytes(_) | KeyInput::RepeatedBytes { .. } => None,
     }
 }
 
@@ -688,7 +816,7 @@ fn translate_us(scancode: u8, shifted: bool) -> Option<u8> {
         0x0b => Some(if shifted { b')' } else { b'0' }),
         0x0c => Some(if shifted { b'_' } else { b'-' }),
         0x0d => Some(if shifted { b'+' } else { b'=' }),
-        0x0e => Some(0x08),
+        0x0e => Some(ASCII_BS),
         0x0f => Some(b'\t'),
         0x10 => Some(if shifted { b'Q' } else { b'q' }),
         0x11 => Some(if shifted { b'W' } else { b'w' }),
@@ -770,7 +898,7 @@ fn translate_spanish_mac(scancode: u8, shifted: bool, alt: bool) -> Option<u8> {
         0x0b => Some(if shifted { b'=' } else { b'0' }),
         0x0c => Some(if shifted { b'?' } else { b'\'' }),
         0x0d => Some(if shifted { b'+' } else { b'=' }),
-        0x0e => Some(0x08),
+        0x0e => Some(ASCII_BS),
         0x0f => Some(b'\t'),
         0x10 => Some(if shifted { b'Q' } else { b'q' }),
         0x11 => Some(if shifted { b'W' } else { b'w' }),
@@ -816,14 +944,30 @@ fn translate_spanish_mac(scancode: u8, shifted: bool, alt: bool) -> Option<u8> {
 
 fn self_test() {
     let mut tty = Tty::new();
+    if tty.termios.cc[VERASE] != ASCII_BS {
+        panic!("tty erase default self-test failed");
+    }
     tty.input(b'a');
     tty.input(b'b');
-    tty.input(0x08);
+    tty.input(ASCII_BS);
     tty.input(b'c');
+    tty.input(ASCII_DEL);
+    tty.input(b'd');
     tty.input(b'\n');
     let line = tty.read_available().expect("tty canonical read failed");
-    if line != b"ac\n" && line != b"ac" {
+    if line != b"ad\n" && line != b"ad" {
         panic!("tty backspace self-test failed");
+    }
+    tty.input(b'p');
+    tty.input(b'a');
+    tty.input(b's');
+    tty.input(b's');
+    tty.input(b'\n');
+    if tty.read_available_limited(1) != Some(alloc::vec![b'p'])
+        || tty.read_available_limited(2) != Some(alloc::vec![b'a', b's'])
+        || tty.read_available_limited(8) != Some(alloc::vec![b's', b'\n'])
+    {
+        panic!("tty partial canonical read self-test failed");
     }
     if tty.input(0x03) != Some(Signal::Int) {
         panic!("tty ctrl-c self-test failed");
@@ -868,10 +1012,31 @@ fn self_test() {
         }
         translate_set1(0xb8);
     }
+    reset_arrow_repeat(0);
     translate_set1(0xe0);
-    if translate_set1(0x4b) != Some(KeyInput::Bytes(b"\x1b[D")) {
+    if translate_set1(EXTENDED_LEFT_ARROW) != Some(KeyInput::Bytes(b"\x1b[D")) {
         panic!("tty left arrow translation self-test failed");
     }
+    let due_ms = crate::time::uptime_millis().saturating_add(ARROW_REPEAT_INITIAL_DELAY_MS);
+    if arrow_repeat_due(due_ms.saturating_sub(1), true).is_some() {
+        panic!("tty left arrow repeated too early");
+    }
+    match arrow_repeat_due(due_ms, true) {
+        Some(KeyInput::RepeatedBytes { bytes, repeat }) if bytes == b"\x1b[D" && repeat == 1 => {}
+        _ => panic!("tty left arrow repeat self-test failed"),
+    }
+    let mut repeat_ms = due_ms;
+    for _ in 0..3 {
+        repeat_ms = repeat_ms.saturating_add(ARROW_REPEAT_INTERVAL_MS);
+        let _ = arrow_repeat_due(repeat_ms, true);
+    }
+    repeat_ms = repeat_ms.saturating_add(ARROW_REPEAT_INTERVAL_MS);
+    match arrow_repeat_due(repeat_ms, true) {
+        Some(KeyInput::RepeatedBytes { bytes, repeat }) if bytes == b"\x1b[D" && repeat >= 2 => {}
+        _ => panic!("tty left arrow acceleration self-test failed"),
+    }
+    translate_set1(0xe0);
+    let _ = translate_set1(EXTENDED_LEFT_ARROW | 0x80);
     tty.input(0x04);
     if tty.read_available() != Some(Vec::new()) {
         panic!("tty ctrl-d self-test failed");

@@ -91,6 +91,7 @@ file /bin/mkdir ../build/userland/mkdir.elf
 file /bin/mv ../build/userland/mv.elf
 file /bin/patch ../build/userland/patch.elf
 file /bin/ping ../build/userland/ping.elf
+file /bin/ip ../build/userland/ip.elf
 file /bin/pkg ../build/userland/pkg.elf
 file /bin/pkgconf ../build/userland/pkgconf.elf
 file /bin/printf ../build/userland/printf.elf
@@ -249,6 +250,7 @@ package mkdir 0.1.0 /bin/mkdir
 package mv 0.1.0 /bin/mv
 package patch 0.1.0 /bin/patch
 package ping 0.1.0 /bin/ping
+package ip 0.1.0 /bin/ip
 package pkg 0.1.0 /bin/pkg
 package pkgconf 0.1.0 /bin/pkgconf
 package printf 0.1.0 /bin/printf

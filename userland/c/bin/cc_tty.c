@@ -12,7 +12,8 @@ int main(void) {
         puts("cc_tty: default flags mismatch");
         return 1;
     }
-    if (original.c_cc[VMIN] != 1 || original.c_cc[VTIME] != 0) {
+    if (original.c_cc[VERASE] != '\b' || original.c_cc[VMIN] != 1 ||
+        original.c_cc[VTIME] != 0) {
         puts("cc_tty: default cc mismatch");
         return 1;
     }

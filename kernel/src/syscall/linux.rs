@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
+        address_space::{USER_MMAP_END, USER_MMAP_START, UserProtection},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -947,12 +947,11 @@ fn linux_read(
 
     if fs::is_kernel_tty_fd(vfs_fd) {
         loop {
-            match tty::try_read_for_current() {
+            match tty::try_read_for_current(len) {
                 tty::ReadOutcome::Ready(data) => {
                     let out = process::write_user_buffer(buf, len).ok_or(EFAULT)?;
-                    let n = data.len().min(len);
-                    out[..n].copy_from_slice(&data[..n]);
-                    return Ok(n as u64);
+                    out[..data.len()].copy_from_slice(&data);
+                    return Ok(data.len() as u64);
                 }
                 tty::ReadOutcome::WouldBlock => {}
                 tty::ReadOutcome::WaitUntil(deadline_ms) => {
@@ -1737,8 +1736,8 @@ fn linux_access_path(path: &str, mode: i32) -> Result<u64, i64> {
         mode & ACCESS_W_OK != 0,
         mode & ACCESS_X_OK != 0,
     )
-        .map(|_| 0)
-        .map_err(map_vfs_error)
+    .map(|_| 0)
+    .map_err(map_vfs_error)
 }
 
 fn linux_pipe(pipefd: usize) -> Result<u64, i64> {
@@ -2997,11 +2996,7 @@ fn linux_readlinkat(dirfd: i32, path_ptr: usize, buf: usize, len: usize) -> Resu
 }
 
 fn validate_readlink_len(len: usize) -> Result<(), i64> {
-    if len == 0 {
-        Err(EINVAL)
-    } else {
-        Ok(())
-    }
+    if len == 0 { Err(EINVAL) } else { Ok(()) }
 }
 
 fn linux_readlink_path(path: &str, buf: usize, len: usize) -> Result<u64, i64> {

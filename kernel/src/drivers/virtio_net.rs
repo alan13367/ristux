@@ -36,6 +36,7 @@ const GUEST_IP: Ipv4Addr = Ipv4Addr([10, 0, 2, 15]);
 const IP_PROTO_ICMP: u8 = 1;
 const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
+const UDP_HEADER_LEN: usize = 8;
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 const DNS_PORT: u16 = 53;
@@ -194,6 +195,10 @@ impl VirtioNetDriver {
 
     pub fn mac(&self) -> MacAddr {
         self.mac
+    }
+
+    pub fn is_hardware(&self) -> bool {
+        self.hardware
     }
 
     pub fn inject_rx(&mut self, frame: EthernetFrame) {
@@ -415,15 +420,22 @@ impl VirtioNetDriver {
         ihl: usize,
         src_ip: Ipv4Addr,
     ) -> bool {
+        if frame.payload.len() < ihl + UDP_HEADER_LEN {
+            return false;
+        }
         let dst_port = u16::from_be_bytes([frame.payload[ihl + 2], frame.payload[ihl + 3]]);
         let src_port = u16::from_be_bytes([frame.payload[ihl], frame.payload[ihl + 1]]);
+        let udp_len = u16::from_be_bytes([frame.payload[ihl + 4], frame.payload[ihl + 5]]) as usize;
+        if udp_len < UDP_HEADER_LEN || frame.payload.len() < ihl + udp_len {
+            return false;
+        }
         if dst_port == 9001 {
             self.inject_udp_reply(frame, src_ip, 9001, src_port, b"udp-reply");
             return true;
         }
 
         if dst_port == DNS_PORT {
-            let query = &frame.payload[ihl + 4..];
+            let query = &frame.payload[ihl + UDP_HEADER_LEN..ihl + udp_len];
             if let Some(reply) = build_dns_response(query) {
                 self.inject_udp_reply(frame, src_ip, DNS_PORT, src_port, &reply);
                 return true;
@@ -440,10 +452,9 @@ impl VirtioNetDriver {
         dst_port: u16,
         payload: &[u8],
     ) {
-        let mut reply_body = Vec::new();
-        reply_body.extend_from_slice(&src_port.to_be_bytes());
-        reply_body.extend_from_slice(&dst_port.to_be_bytes());
-        reply_body.extend_from_slice(payload);
+        let Some(reply_body) = build_udp(GATEWAY_IP, dst_ip, src_port, dst_port, payload) else {
+            return;
+        };
         let reply_ip = build_ipv4(IP_PROTO_UDP, GATEWAY_IP, dst_ip, &reply_body);
         self.rx_queue.push(EthernetFrame {
             dst: frame.src,
@@ -650,6 +661,40 @@ fn internet_checksum(bytes: &[u8]) -> u16 {
 
 fn ipv4_checksum(header: &[u8]) -> u16 {
     internet_checksum(header)
+}
+
+fn build_udp(
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+    src_port: u16,
+    dst_port: u16,
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    let udp_len = UDP_HEADER_LEN.checked_add(payload.len())?;
+    let udp_len = u16::try_from(udp_len).ok()?;
+    let mut packet = Vec::with_capacity(usize::from(udp_len));
+    packet.extend_from_slice(&src_port.to_be_bytes());
+    packet.extend_from_slice(&dst_port.to_be_bytes());
+    packet.extend_from_slice(&udp_len.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(payload);
+
+    let checksum = udp_checksum(src_ip, dst_ip, &packet);
+    let checksum = if checksum == 0 { 0xffff } else { checksum };
+    packet[6] = (checksum >> 8) as u8;
+    packet[7] = (checksum & 0xff) as u8;
+    Some(packet)
+}
+
+fn udp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, udp_packet: &[u8]) -> u16 {
+    let mut checksum_input = Vec::with_capacity(12 + udp_packet.len() + (udp_packet.len() & 1));
+    checksum_input.extend_from_slice(&src_ip.0);
+    checksum_input.extend_from_slice(&dst_ip.0);
+    checksum_input.push(0);
+    checksum_input.push(IP_PROTO_UDP);
+    checksum_input.extend_from_slice(&(udp_packet.len() as u16).to_be_bytes());
+    checksum_input.extend_from_slice(udp_packet);
+    internet_checksum(&checksum_input)
 }
 
 fn read_mac(mmio: *mut u8) -> MacAddr {

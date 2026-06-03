@@ -486,7 +486,7 @@ case "$SCENARIO" in
       "isig icanon echo iexten"
       "min 1 time 0"
       "intr = \\^C;"
-      "erase = \\^[?];"
+      "erase = \\^H;"
       "eof = \\^D;"
       "susp = \\^Z;"
     )
@@ -2899,7 +2899,6 @@ case "$SCENARIO" in
     COMMANDS=("pkg info dropbear")
     EXPECTS=(
       "init: started dropbear on 0.0.0.0:2222"
-      "Not backgrounding"
       "^name: dropbear$"
       "^  /bin/dropbear$"
     )
