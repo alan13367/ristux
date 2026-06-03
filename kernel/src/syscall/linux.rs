@@ -2262,8 +2262,8 @@ fn linux_execve(
     let env = read_user_envp(envp_ptr).map_err(map_user_vector_error)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
     let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let env_refs: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
+    let arg_refs = string_refs(&args)?;
+    let env_refs = string_refs(&env)?;
     let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).map_err(map_exec_error)?;
     // Patch the syscall frame so the imminent iretq lands at the new entry
     // point with the freshly built user stack. argc → rdi, argv → rsi (SysV
@@ -2279,6 +2279,15 @@ fn linux_execve(
     // rax (return value) will be overwritten by the iretq epilogue; set it
     // so user code that mistakenly inspects rax after execve sees 0.
     Ok(0)
+}
+
+fn string_refs(strings: &[alloc::string::String]) -> Result<Vec<&str>, i64> {
+    let mut refs = Vec::new();
+    refs.try_reserve_exact(strings.len()).map_err(|_| ENOMEM)?;
+    for string in strings {
+        refs.push(string.as_str());
+    }
+    Ok(refs)
 }
 
 fn map_exec_error(err: process::ExecError) -> i64 {
