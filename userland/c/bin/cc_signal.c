@@ -11,9 +11,11 @@ static volatile int saw_signal;
 static volatile int saw_usr1;
 static volatile int saw_usr2;
 static volatile int saw_external_usr1;
+static volatile int saw_entry_usr1;
 static volatile int saw_interrupt_usr1;
 static volatile int saw_sigchld;
 static volatile int saw_cont;
+static volatile unsigned long entry_spin_sink;
 
 static void on_sigint(int signum) {
     if (signum == SIGINT) {
@@ -40,6 +42,12 @@ static void on_usr2(int signum) {
 static void on_external_usr1(int signum) {
     if (signum == SIGUSR1) {
         saw_external_usr1 = 1;
+    }
+}
+
+static void on_entry_usr1(int signum) {
+    if (signum == SIGUSR1) {
+        saw_entry_usr1 = 1;
     }
 }
 
@@ -657,6 +665,88 @@ static int check_signal_wakes_blocked_syscall(void) {
     return 1;
 }
 
+static int check_signal_restarts_syscall_entry(void) {
+    int ready_pipe[2];
+    if (pipe(ready_pipe) < 0) {
+        puts("cc_signal: syscall entry pipe failed");
+        return 1;
+    }
+
+    saw_entry_usr1 = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        puts("cc_signal: syscall entry fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(ready_pipe[0]);
+        saw_entry_usr1 = 0;
+        if (signal(SIGUSR1, on_entry_usr1) == SIG_ERR) {
+            _exit(2);
+        }
+        pid_t self = getpid();
+        char ready = 'r';
+        if (write(ready_pipe[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(ready_pipe[1]);
+        syscall(SYS_sched_yield);
+
+        for (unsigned long i = 0; i < 5000000UL; i++) {
+            entry_spin_sink += i;
+        }
+
+        pid_t after = getpid();
+        if (!saw_entry_usr1) {
+            _exit(10);
+        }
+        _exit(after == self ? 0 : 11);
+    }
+
+    close(ready_pipe[1]);
+    char ready = 0;
+    if (read(ready_pipe[0], &ready, 1) != 1) {
+        close(ready_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: syscall entry ready failed");
+        return 1;
+    }
+    close(ready_pipe[0]);
+
+    if (kill(child, SIGUSR1) < 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: syscall entry send failed");
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < 500; i++) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                puts("cc_signal: syscall entry restart ok");
+                return 0;
+            }
+            printf("cc_signal: syscall entry child failed status=%d\n", status);
+            return 1;
+        }
+        if (waited < 0) {
+            puts("cc_signal: syscall entry wait failed");
+            return 1;
+        }
+        syscall(SYS_sched_yield);
+    }
+
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    puts("cc_signal: syscall entry timeout failed");
+    return 1;
+}
+
 static int check_signal_interrupts_blocked_read(void) {
     int data_pipe[2];
     int ready_pipe[2];
@@ -1007,6 +1097,7 @@ int main(int argc, char **argv) {
         check_sigchld_disposition() != 0 ||
         check_external_signal_handler() != 0 ||
         check_signal_wakes_blocked_syscall() != 0 ||
+        check_signal_restarts_syscall_entry() != 0 ||
         check_signal_interrupts_blocked_read() != 0 ||
         check_invalid_raw_handler() != 0 ||
         check_sigaction_fault_preserves_handler() != 0 ||

@@ -245,12 +245,12 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
 
     if process::take_interrupted_syscall_current() {
         frame.rax = EINTR as u64;
-        let _ = deliver_pending_signal(frame);
+        let _ = deliver_pending_signal(frame, SignalResume::Current);
         process::restore_current_fpu();
         return;
     }
 
-    if deliver_pending_signal(frame) {
+    if deliver_pending_signal(frame, SignalResume::RestartSyscall) {
         process::restore_current_fpu();
         return;
     }
@@ -431,11 +431,17 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         Err(e) => e as u64,
     };
 
-    let _ = deliver_pending_signal(frame);
+    let _ = deliver_pending_signal(frame, SignalResume::Current);
     process::restore_current_fpu();
 }
 
-fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
+#[derive(Clone, Copy)]
+enum SignalResume {
+    Current,
+    RestartSyscall,
+}
+
+fn deliver_pending_signal(frame: &mut SyscallInterruptFrame, resume: SignalResume) -> bool {
     let Some((pid, signum, status)) = process::take_pending_signal_current() else {
         return false;
     };
@@ -449,7 +455,7 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
                 return false;
             }
             if handler != crate::signal::DEFAULT_HANDLER
-                && deliver_signal_handler(frame, signum, handler).is_ok()
+                && deliver_signal_handler(frame, signum, handler, resume).is_ok()
             {
                 return true;
             }
@@ -459,7 +465,7 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame) -> bool {
             .and_then(crate::signal::Signal::from_number)
             .is_some_and(|signal| signal.has_stop_default())
         {
-            let saved = saved_from_linux_frame(frame);
+            let saved = saved_from_linux_frame_for_resume(frame, resume);
             process::save_syscall_frame(pid, &saved);
             process::stop_current_signal(pid, signum as u8);
             let _ = crate::syscall::yield_until_runnable(frame);
@@ -479,11 +485,12 @@ fn deliver_signal_handler(
     frame: &mut SyscallInterruptFrame,
     signum: usize,
     handler: usize,
+    resume: SignalResume,
 ) -> Result<(), i64> {
     if !process::is_user_executable(handler, 1) {
         return Err(EFAULT);
     }
-    let saved = saved_from_linux_frame(frame);
+    let saved = saved_from_linux_frame_for_resume(frame, resume);
     let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
     let rsp = usize::try_from(frame.rsp).map_err(|_| EFAULT)?;
     let new_rsp = rsp.checked_sub(frame_size).ok_or(EFAULT)? & !0xfusize;
@@ -607,6 +614,17 @@ fn saved_from_linux_frame(frame: &SyscallInterruptFrame) -> process::SavedSyscal
         rsp: frame.rsp,
         ss: frame.ss,
     }
+}
+
+fn saved_from_linux_frame_for_resume(
+    frame: &SyscallInterruptFrame,
+    resume: SignalResume,
+) -> process::SavedSyscallFrame {
+    let mut saved = saved_from_linux_frame(frame);
+    if matches!(resume, SignalResume::RestartSyscall) {
+        saved.rip = saved.rip.saturating_sub(2);
+    }
+    saved
 }
 
 fn apply_linux_saved_frame(frame: &mut SyscallInterruptFrame, saved: &process::SavedSyscallFrame) {

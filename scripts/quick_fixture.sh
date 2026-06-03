@@ -332,6 +332,7 @@ case "$SCENARIO" in
       "^cc_signal: sigchld ok$"
       "^cc_signal: external handler ok$"
       "^cc_signal: blocked wake ok$"
+      "^cc_signal: syscall entry restart ok$"
       "^cc_signal: blocked read interrupt ok$"
       "^cc_signal: invalid handler ok$"
       "^cc_signal: sigaction fault ok$"
