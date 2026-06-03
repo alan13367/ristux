@@ -1,6 +1,8 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -308,6 +310,57 @@ static int check_wait_bad_status_pointer(void) {
     return 0;
 }
 
+static int check_wait_rusage(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_session: wait rusage fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        _exit(8);
+    }
+
+    int status = 0;
+    struct rusage usage;
+    memset(&usage, 0x5a, sizeof(usage));
+    if (wait4(child, &status, 0, &usage) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 8 ||
+        usage.ru_utime.tv_sec != 0 ||
+        usage.ru_utime.tv_usec != 0 ||
+        usage.ru_stime.tv_sec != 0 ||
+        usage.ru_stime.tv_usec != 0) {
+        puts("cc_session: wait rusage failed");
+        return 1;
+    }
+
+    child = fork();
+    if (child < 0) {
+        puts("cc_session: wait bad rusage fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        _exit(9);
+    }
+
+    status = 0x12345678;
+    errno = 0;
+    if (wait4(child, &status, 0, (void *)1) != -1 || errno != EFAULT ||
+        status != 0x12345678) {
+        puts("cc_session: wait bad rusage failed");
+        return 1;
+    }
+
+    status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 9) {
+        puts("cc_session: wait bad rusage retry failed");
+        return 1;
+    }
+
+    puts("cc_session: wait rusage ok");
+    return 0;
+}
+
 int main(void) {
     if (check_group_leader_rejected() != 0) {
         return 1;
@@ -328,6 +381,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_bad_status_pointer() != 0) {
+        return 1;
+    }
+    if (check_wait_rusage() != 0) {
         return 1;
     }
     puts("cc_session: done");

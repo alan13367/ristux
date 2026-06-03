@@ -218,6 +218,7 @@ const FUTEX_WAKE: i32 = 1;
 const FUTEX_CMD_MASK: i32 = 0x7f;
 const FUTEX_PRIVATE_FLAG: i32 = 0x80;
 const HOSTNAME_MAX: usize = 64;
+const RUSAGE_SIZE: usize = 144;
 
 struct HostnameState {
     bytes: [u8; HOSTNAME_MAX],
@@ -320,7 +321,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             }
             Ok(0)
         }
-        NR_wait4 => linux_wait4(frame, a0 as i64, a1 as usize, a2 as i32),
+        NR_wait4 => linux_wait4(frame, a0 as i64, a1 as usize, a2 as i32, a3 as usize),
         NR_uname => linux_uname(a0 as usize),
         NR_fcntl => linux_fcntl(a0 as usize, a1 as i32, a2 as u64),
         NR_fsync => linux_fsync(a0 as usize),
@@ -2144,6 +2145,7 @@ fn linux_wait4(
     pid: i64,
     status_ptr: usize,
     options: i32,
+    rusage_ptr: usize,
 ) -> Result<u64, i64> {
     const WNOHANG: i32 = 1;
     const WUNTRACED: i32 = 2;
@@ -2163,8 +2165,18 @@ fn linux_wait4(
                     process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
                 };
                 if status_ptr != 0 {
+                    process::write_user_buffer(status_ptr, 4).ok_or(EFAULT)?;
+                }
+                if rusage_ptr != 0 {
+                    process::write_user_buffer(rusage_ptr, RUSAGE_SIZE).ok_or(EFAULT)?;
+                }
+                if status_ptr != 0 {
                     let out = process::write_user_buffer(status_ptr, 4).ok_or(EFAULT)?;
                     out.copy_from_slice(&(encoded as u32).to_le_bytes());
+                }
+                if rusage_ptr != 0 {
+                    let out = process::write_user_buffer(rusage_ptr, RUSAGE_SIZE).ok_or(EFAULT)?;
+                    out.fill(0);
                 }
                 match status {
                     process::WaitStatus::Stopped(_) => {
@@ -2362,7 +2374,6 @@ fn linux_getrusage(who: i32, usage_ptr: usize) -> Result<u64, i64> {
     const RUSAGE_SELF: i32 = 0;
     const RUSAGE_CHILDREN: i32 = -1;
     const RUSAGE_THREAD: i32 = 1;
-    const RUSAGE_SIZE: usize = 144;
 
     if !matches!(who, RUSAGE_SELF | RUSAGE_CHILDREN | RUSAGE_THREAD) {
         return Err(EINVAL);
