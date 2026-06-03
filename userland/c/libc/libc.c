@@ -166,6 +166,7 @@ int optopt;
 static char *empty_environment[] = { NULL };
 char **environ = empty_environment;
 static sighandler_t signal_handlers[32];
+static sigset_t signal_action_masks[32];
 static int signal_action_flags[32];
 #define LIBC_ENV_MAX 64
 static char *managed_environment[LIBC_ENV_MAX + 1];
@@ -2081,6 +2082,7 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
         return -1;
     }
     sighandler_t old = signal_handlers[signum];
+    sigset_t old_mask = signal_action_masks[signum];
     int old_flags = signal_action_flags[signum];
     if (act != NULL && (act->sa_flags & ~SA_NOCLDSTOP) != 0) {
         errno = EINVAL;
@@ -2088,7 +2090,7 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     }
     if (oldact != NULL) {
         oldact->sa_handler = old;
-        oldact->sa_mask = 0;
+        oldact->sa_mask = old_mask;
         oldact->sa_flags = old_flags;
     }
     if (act == NULL) {
@@ -2105,12 +2107,12 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     }
     struct sigaction kernel_act = *act;
     memcpy(&kernel_act.sa_handler, &kernel_handler, sizeof(kernel_handler));
-    kernel_act.sa_mask = 0;
     long ret = syscall3(SYS_RT_SIGACTION, signum, (long)&kernel_act, 0);
     if (syscall_ret(ret) < 0) {
         return -1;
     }
     signal_handlers[signum] = act->sa_handler;
+    signal_action_masks[signum] = act->sa_mask;
     signal_action_flags[signum] = act->sa_flags;
     return 0;
 }

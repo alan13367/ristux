@@ -142,6 +142,7 @@ pub struct Process {
     pending_signal_status: Option<i32>,
     pub signal_mask: u64,
     pub signal_handlers: [usize; 32],
+    signal_action_masks: [u64; 32],
     signal_flags: [u32; 32],
     pub state: ProcessState,
     pub address_space: AddressSpace,
@@ -276,6 +277,12 @@ fn signal_from_legacy_status(status: i32) -> Option<u8> {
 
 fn is_uncatchable_signal(signal: u8) -> bool {
     signal == crate::signal::Signal::Kill.number() || signal == crate::signal::Signal::Stop.number()
+}
+
+fn sanitized_signal_mask(mask: u64) -> u64 {
+    const UNBLOCKABLE: u64 =
+        (1 << crate::signal::Signal::Kill.number()) | (1 << crate::signal::Signal::Stop.number());
+    mask & !UNBLOCKABLE
 }
 
 fn stop_signal_from_status(status: i32) -> Option<u8> {
@@ -438,6 +445,7 @@ impl Process {
             pending_signal_status: None,
             signal_mask: 0,
             signal_handlers: [0; 32],
+            signal_action_masks: [0; 32],
             signal_flags: [0; 32],
             state: ProcessState::Ready,
             address_space,
@@ -1680,6 +1688,7 @@ impl Process {
             pending_signal_status: None,
             signal_mask: self.signal_mask,
             signal_handlers: self.signal_handlers,
+            signal_action_masks: self.signal_action_masks,
             signal_flags: self.signal_flags,
             state: ProcessState::Ready,
             address_space,
@@ -2157,11 +2166,9 @@ pub fn take_interrupted_syscall_current() -> bool {
 }
 
 pub fn set_current_signal_mask(mask: u64) -> Option<u64> {
-    const UNBLOCKABLE: u64 =
-        (1 << crate::signal::Signal::Kill.number()) | (1 << crate::signal::Signal::Stop.number());
     with_current(|p| {
         let old = p.signal_mask;
-        p.signal_mask = mask & !UNBLOCKABLE;
+        p.signal_mask = sanitized_signal_mask(mask);
         old
     })
 }
@@ -2304,38 +2311,39 @@ pub fn set_signal_action(
     pid: Pid,
     signal: usize,
     handler: usize,
+    mask: u64,
     flags: u32,
-) -> Option<(usize, u32)> {
+) -> Option<(usize, u64, u32)> {
     with_table(|table| {
         let process = table.get_mut(pid)?;
         if signal >= process.signal_handlers.len() {
             return None;
         }
         let old = process.signal_handlers[signal];
+        let old_mask = process.signal_action_masks[signal];
         let old_flags = process.signal_flags[signal];
         process.signal_handlers[signal] = handler;
+        process.signal_action_masks[signal] = sanitized_signal_mask(mask);
         process.signal_flags[signal] = flags;
         if handler == crate::signal::IGNORE_HANDLER {
             clear_pending_signal(process, signal);
         }
-        Some((old, old_flags))
+        Some((old, old_mask, old_flags))
     })
 }
 
-pub fn get_signal_action(pid: Pid, signal: usize) -> Option<(usize, u32)> {
+pub fn get_signal_action(pid: Pid, signal: usize) -> Option<(usize, u64, u32)> {
     with_table(|table| {
         let process = table.get(pid)?;
         let handler = process.signal_handlers.get(signal).copied()?;
+        let mask = process.signal_action_masks.get(signal).copied()?;
         let flags = process.signal_flags.get(signal).copied()?;
-        Some((handler, flags))
+        Some((handler, mask, flags))
     })
 }
 
-pub fn signal_handler(pid: Pid, signal: usize) -> Option<usize> {
-    with_table(|table| {
-        let process = table.get(pid)?;
-        process.signal_handlers.get(signal).copied()
-    })
+pub fn signal_action(pid: Pid, signal: usize) -> Option<(usize, u64, u32)> {
+    get_signal_action(pid, signal)
 }
 
 pub fn set_current(pid: Pid) {

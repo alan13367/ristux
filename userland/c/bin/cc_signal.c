@@ -16,6 +16,9 @@ static volatile int saw_entry_usr1;
 static volatile int saw_interrupt_usr1;
 static volatile int saw_sigchld;
 static volatile int saw_cont;
+static volatile int handler_mask_in_usr1;
+static volatile int handler_mask_nested_usr2;
+static volatile int handler_mask_after_usr2;
 static volatile unsigned long entry_spin_sink;
 
 static void on_sigint(int signum) {
@@ -72,6 +75,71 @@ static void on_cont(int signum) {
 
 static void on_blocked_usr1(int signum) {
     _exit(signum == SIGUSR1 ? 0 : 5);
+}
+
+static void on_handler_mask_usr2(int signum) {
+    if (signum == SIGUSR2) {
+        if (handler_mask_in_usr1) {
+            handler_mask_nested_usr2 = 1;
+        } else {
+            handler_mask_after_usr2 = 1;
+        }
+    }
+}
+
+static void on_handler_mask_usr1(int signum) {
+    if (signum != SIGUSR1) {
+        return;
+    }
+    handler_mask_in_usr1 = 1;
+    raise(SIGUSR2);
+    handler_mask_in_usr1 = 0;
+}
+
+static int check_handler_signal_mask(void) {
+    struct sigaction usr1;
+    struct sigaction usr2;
+    struct sigaction old_usr1;
+    struct sigaction old_usr2;
+    struct sigaction queried;
+
+    sigemptyset(&usr1.sa_mask);
+    sigaddset(&usr1.sa_mask, SIGUSR2);
+    usr1.sa_handler = on_handler_mask_usr1;
+    usr1.sa_flags = 0;
+    sigemptyset(&usr2.sa_mask);
+    usr2.sa_handler = on_handler_mask_usr2;
+    usr2.sa_flags = 0;
+
+    handler_mask_in_usr1 = 0;
+    handler_mask_nested_usr2 = 0;
+    handler_mask_after_usr2 = 0;
+    if (sigaction(SIGUSR2, &usr2, &old_usr2) < 0 ||
+        sigaction(SIGUSR1, &usr1, &old_usr1) < 0 ||
+        sigaction(SIGUSR1, NULL, &queried) < 0 ||
+        sigismember(&queried.sa_mask, SIGUSR2) != 1) {
+        puts("cc_signal: handler mask setup failed");
+        return 1;
+    }
+
+    if (raise(SIGUSR1) != 0) {
+        puts("cc_signal: handler mask raise failed");
+        return 1;
+    }
+    for (int i = 0; i < 16 && !handler_mask_after_usr2; i++) {
+        syscall(SYS_sched_yield);
+    }
+    if (handler_mask_nested_usr2 || !handler_mask_after_usr2) {
+        puts("cc_signal: handler mask delivery failed");
+        return 1;
+    }
+    if (sigaction(SIGUSR1, &old_usr1, NULL) < 0 ||
+        sigaction(SIGUSR2, &old_usr2, NULL) < 0) {
+        puts("cc_signal: handler mask restore failed");
+        return 1;
+    }
+    puts("cc_signal: handler mask ok");
+    return 0;
 }
 
 static int check_stop_wait_once(void) {
@@ -1187,6 +1255,7 @@ int main(int argc, char **argv) {
         check_signal_wakes_blocked_syscall() != 0 ||
         check_signal_restarts_syscall_entry() != 0 ||
         check_signal_interrupts_blocked_read() != 0 ||
+        check_handler_signal_mask() != 0 ||
         check_invalid_raw_handler() != 0 ||
         check_sigaction_fault_preserves_handler() != 0 ||
         check_sigkill_uncatchable() != 0 ||

@@ -467,13 +467,16 @@ fn deliver_pending_signal(frame: &mut SyscallInterruptFrame, resume: SignalResum
         let uncatchable = signum == crate::signal::Signal::Kill.number() as usize
             || signum == crate::signal::Signal::Stop.number() as usize;
         if !uncatchable {
-            let handler =
-                process::signal_handler(pid, signum).unwrap_or(crate::signal::DEFAULT_HANDLER);
+            let (handler, action_mask, _) = process::signal_action(pid, signum).unwrap_or((
+                crate::signal::DEFAULT_HANDLER,
+                0,
+                0,
+            ));
             if handler == crate::signal::IGNORE_HANDLER {
                 return false;
             }
             if handler != crate::signal::DEFAULT_HANDLER
-                && deliver_signal_handler(frame, signum, handler, resume).is_ok()
+                && deliver_signal_handler(frame, signum, handler, action_mask, resume).is_ok()
             {
                 return true;
             }
@@ -503,23 +506,30 @@ fn deliver_signal_handler(
     frame: &mut SyscallInterruptFrame,
     signum: usize,
     handler: usize,
+    action_mask: u64,
     resume: SignalResume,
 ) -> Result<(), i64> {
     if !process::is_user_executable(handler, 1) {
         return Err(EFAULT);
     }
     let saved = saved_from_linux_frame_for_resume(frame, resume);
-    let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
+    let saved_size = core::mem::size_of::<process::SavedSyscallFrame>();
+    let frame_size = saved_size + core::mem::size_of::<u64>();
     let rsp = usize::try_from(frame.rsp).map_err(|_| EFAULT)?;
     let new_rsp = rsp.checked_sub(frame_size).ok_or(EFAULT)? & !0xfusize;
     let out = process::write_user_buffer(new_rsp, frame_size).ok_or(EFAULT)?;
     let bytes = unsafe {
         core::slice::from_raw_parts(
             &saved as *const process::SavedSyscallFrame as *const u8,
-            frame_size,
+            saved_size,
         )
     };
-    out.copy_from_slice(bytes);
+    out[0..saved_size].copy_from_slice(bytes);
+    let old_mask = process::current_signal_mask().ok_or(ESRCH)?;
+    out[saved_size..saved_size + core::mem::size_of::<u64>()]
+        .copy_from_slice(&old_mask.to_le_bytes());
+    let delivered_bit = if signum < 64 { 1u64 << signum } else { 0 };
+    process::set_current_signal_mask(old_mask | action_mask | delivered_bit).ok_or(ESRCH)?;
     frame.rip = handler as u64;
     frame.rsp = new_rsp as u64;
     frame.rdi = signum as u64;
@@ -530,6 +540,8 @@ fn deliver_signal_handler(
 fn linux_rt_sigreturn(frame: &mut SyscallInterruptFrame, saved_ptr: usize) -> Result<u64, i64> {
     let frame_size = core::mem::size_of::<process::SavedSyscallFrame>();
     let bytes = process::read_user(saved_ptr, frame_size).ok_or(EFAULT)?;
+    let mask_ptr = saved_ptr.checked_add(frame_size).ok_or(EFAULT)?;
+    let mask_bytes = process::read_user(mask_ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
     let mut saved = process::SavedSyscallFrame {
         rax: 0,
         rbx: 0,
@@ -560,6 +572,9 @@ fn linux_rt_sigreturn(frame: &mut SyscallInterruptFrame, saved_ptr: usize) -> Re
     };
     out.copy_from_slice(bytes);
     sanitize_linux_saved_frame(&mut saved)?;
+    let mut raw_mask = [0u8; core::mem::size_of::<u64>()];
+    raw_mask.copy_from_slice(mask_bytes);
+    process::set_current_signal_mask(u64::from_le_bytes(raw_mask)).ok_or(ESRCH)?;
     apply_linux_saved_frame(frame, &saved);
     Err(CONTEXT_SWITCHED)
 }
@@ -3549,6 +3564,7 @@ fn deliver_kill_all(
 
 fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i64> {
     const SIGACTION_SIZE: usize = 24;
+    const SIGACTION_MASK_OFFSET: usize = 8;
     const SIGACTION_FLAGS_OFFSET: usize = 16;
     const SUPPORTED_FLAGS: u32 = process::SIGNAL_FLAG_NOCLDSTOP;
 
@@ -3568,6 +3584,10 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         let bytes = process::read_user(act, SIGACTION_SIZE).ok_or(EFAULT)?;
         let mut raw_handler = [0u8; core::mem::size_of::<usize>()];
         raw_handler.copy_from_slice(&bytes[0..core::mem::size_of::<usize>()]);
+        let mut raw_mask = [0u8; core::mem::size_of::<u64>()];
+        raw_mask.copy_from_slice(
+            &bytes[SIGACTION_MASK_OFFSET..SIGACTION_MASK_OFFSET + core::mem::size_of::<u64>()],
+        );
         let mut raw_flags = [0u8; core::mem::size_of::<u32>()];
         raw_flags.copy_from_slice(
             &bytes[SIGACTION_FLAGS_OFFSET..SIGACTION_FLAGS_OFFSET + core::mem::size_of::<u32>()],
@@ -3576,13 +3596,17 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         if flags & !SUPPORTED_FLAGS != 0 {
             return Err(EINVAL);
         }
-        Some((usize::from_le_bytes(raw_handler), flags))
+        Some((
+            usize::from_le_bytes(raw_handler),
+            u64::from_le_bytes(raw_mask),
+            flags,
+        ))
     };
     if oldact != 0 {
         process::write_user_buffer(oldact, SIGACTION_SIZE).ok_or(EFAULT)?;
     }
-    let (old_handler, old_flags) = if let Some((handler, flags)) = new_action {
-        process::set_signal_action(pid, signum, handler, flags).ok_or(EINVAL)?
+    let (old_handler, old_mask, old_flags) = if let Some((handler, mask, flags)) = new_action {
+        process::set_signal_action(pid, signum, handler, mask, flags).ok_or(EINVAL)?
     } else {
         process::get_signal_action(pid, signum).ok_or(EINVAL)?
     };
@@ -3590,6 +3614,8 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
         let out = process::write_user_buffer(oldact, SIGACTION_SIZE).ok_or(EFAULT)?;
         out.fill(0);
         out[0..core::mem::size_of::<usize>()].copy_from_slice(&old_handler.to_le_bytes());
+        out[SIGACTION_MASK_OFFSET..SIGACTION_MASK_OFFSET + core::mem::size_of::<u64>()]
+            .copy_from_slice(&old_mask.to_le_bytes());
         out[SIGACTION_FLAGS_OFFSET..SIGACTION_FLAGS_OFFSET + core::mem::size_of::<u32>()]
             .copy_from_slice(&old_flags.to_le_bytes());
     }
