@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#define BAD_OPEN_ACCESS 3
+
 static int check_protected_path_fault(const char *path) {
     char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -89,6 +91,22 @@ static int check_getcwd_too_small(void) {
     return 0;
 }
 
+static int check_open_access_mode_errors(void) {
+    errno = 0;
+    if (open((const char *)~0UL, BAD_OPEN_ACCESS, 0) != -1 || errno != EINVAL) {
+        printf("cc_path: open access mode errno=%d\n", errno);
+        return 1;
+    }
+    errno = 0;
+    if (openat(AT_FDCWD, (const char *)~0UL, BAD_OPEN_ACCESS, 0) != -1 ||
+        errno != EINVAL) {
+        printf("cc_path: openat access mode errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_path: open access mode ok");
+    return 0;
+}
+
 int main(void) {
     const char *dir = "/tmp//cc_path/./";
     const char *write_path = "/tmp//cc_path/./file";
@@ -152,6 +170,9 @@ int main(void) {
         return 1;
     }
     if (check_getcwd_too_small() != 0) {
+        return 1;
+    }
+    if (check_open_access_mode_errors() != 0) {
         return 1;
     }
 

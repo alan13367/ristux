@@ -199,6 +199,9 @@ const SO_SNDTIMEO: i32 = 21;
 const IPPROTO_TCP: i32 = 6;
 const TCP_NODELAY: i32 = 1;
 const O_ACCMODE: u32 = 0o3;
+const O_RDONLY_ACCESS: i32 = 0;
+const O_WRONLY_ACCESS: i32 = 1;
+const O_RDWR_ACCESS: i32 = 2;
 const O_APPEND: u32 = 0o2000;
 const O_NONBLOCK: u32 = 0o4000;
 const O_CLOEXEC: u32 = 0o2000000;
@@ -1000,25 +1003,26 @@ fn linux_pread64(
 }
 
 fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    validate_open_access_mode(flags)?;
     let path = read_user_cstr_errno(path_ptr)?;
     linux_open_path(&path, flags, mode)
 }
 
 fn linux_openat(dirfd: i32, path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    validate_open_access_mode(flags)?;
     let path = resolve_at_path(dirfd, path_ptr, 0)?;
     linux_open_path(&path, flags, mode)
 }
 
 fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
-    const O_WRONLY: i32 = 1;
-    const O_RDWR: i32 = 2;
     const O_CREAT: i32 = 0o100;
     const O_EXCL: i32 = 0o200;
     const O_TRUNC: i32 = 0o1000;
 
-    let access = flags & 0b11;
-    let write = access == O_WRONLY || access == O_RDWR;
-    let read = access != O_WRONLY;
+    validate_open_access_mode(flags)?;
+    let access = flags & (O_ACCMODE as i32);
+    let write = access == O_WRONLY_ACCESS || access == O_RDWR_ACCESS;
+    let read = access != O_WRONLY_ACCESS;
     let create = flags & O_CREAT != 0;
     let exclusive = flags & O_EXCL != 0;
     let truncate = flags & O_TRUNC != 0;
@@ -1037,6 +1041,13 @@ fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
     )
     .map(|fd| fd as u64)
     .map_err(map_open_vfs_error)
+}
+
+fn validate_open_access_mode(flags: i32) -> Result<(), i64> {
+    match flags & (O_ACCMODE as i32) {
+        O_RDONLY_ACCESS | O_WRONLY_ACCESS | O_RDWR_ACCESS => Ok(()),
+        _ => Err(EINVAL),
+    }
 }
 
 fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
