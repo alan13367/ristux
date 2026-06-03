@@ -258,6 +258,16 @@ fn is_uncatchable_signal(signal: u8) -> bool {
     signal == crate::signal::Signal::Kill.number() || signal == crate::signal::Signal::Stop.number()
 }
 
+fn stop_signal_from_status(status: i32) -> Option<u8> {
+    if status == crate::signal::Signal::Tstp.default_status() {
+        Some(crate::signal::Signal::Tstp.number())
+    } else if status == crate::signal::Signal::Stop.default_status() {
+        Some(crate::signal::Signal::Stop.number())
+    } else {
+        None
+    }
+}
+
 fn is_ignored_signal(process: &Process, status: i32) -> bool {
     let Some(signal) = signal_from_legacy_status(status) else {
         return false;
@@ -1379,8 +1389,8 @@ impl ProcessTable {
             queue_signal(process, status);
             Some(WakeList::new())
         } else {
-            if status == crate::signal::Signal::Tstp.default_status() {
-                return self.stop(pid, crate::signal::Signal::Tstp.number());
+            if let Some(signal) = stop_signal_from_status(status) {
+                return self.stop(pid, signal);
             }
             if let Some(signal) = signal_from_legacy_status(status) {
                 Some(self.exit_signaled(pid, signal))
