@@ -77,6 +77,25 @@ static int check_wake_empty(void) {
     return 0;
 }
 
+static int check_unsupported_flags(void) {
+    int futex_word = 1;
+    struct timespec timeout = { 0, 1000000L };
+    errno = 0;
+    if (futex_call(&futex_word, FUTEX_WAIT | FUTEX_CLOCK_REALTIME, 1, &timeout) != -1 ||
+        errno != EINVAL) {
+        puts("cc_futex: unsupported wait flags failed");
+        return 1;
+    }
+    errno = 0;
+    if (futex_call(&futex_word, FUTEX_WAKE | FUTEX_CLOCK_REALTIME, 1, NULL) != -1 ||
+        errno != EINVAL) {
+        puts("cc_futex: unsupported wake flags failed");
+        return 1;
+    }
+    puts("cc_futex: unsupported flags ok");
+    return 0;
+}
+
 static int check_pointer_validation(void) {
     int futex_word = 1;
     errno = 0;
@@ -628,6 +647,7 @@ int main(void) {
         check_wait_timeout() != 0 ||
         check_wait_timeout_overflow() != 0 ||
         check_wake_empty() != 0 ||
+        check_unsupported_flags() != 0 ||
         check_pointer_validation() != 0 ||
         check_wake_waiter() != 0 ||
         check_value_change_without_wake() != 0 ||

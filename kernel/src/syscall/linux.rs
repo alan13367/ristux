@@ -1322,6 +1322,9 @@ fn linux_futex(
     if uaddr & 0x3 != 0 {
         return Err(EINVAL);
     }
+    if op & !(FUTEX_CMD_MASK | FUTEX_PRIVATE_FLAG) != 0 {
+        return Err(EINVAL);
+    }
     let private = op & FUTEX_PRIVATE_FLAG != 0;
     match op & FUTEX_CMD_MASK {
         FUTEX_WAIT => linux_futex_wait(frame, uaddr, val as u32, timeout, private),
