@@ -55,6 +55,7 @@ struct FdEntry {
 struct TimedWait {
     key: u64,
     deadline_ms: u64,
+    woken: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -623,7 +624,11 @@ impl Process {
         let deadline_ms = now_ms
             .checked_add(timeout_ms)
             .ok_or(TimedWaitError::DeadlineOverflow)?;
-        self.timed_wait = Some(TimedWait { key, deadline_ms });
+        self.timed_wait = Some(TimedWait {
+            key,
+            deadline_ms,
+            woken: false,
+        });
         Ok(deadline_ms)
     }
 
@@ -631,6 +636,14 @@ impl Process {
         if matches!(self.timed_wait, Some(wait) if wait.key == key) {
             self.timed_wait = None;
         }
+    }
+
+    fn take_timed_wait_wake(&mut self, key: u64) -> bool {
+        if matches!(self.timed_wait, Some(wait) if wait.key == key && wait.woken) {
+            self.timed_wait = None;
+            return true;
+        }
+        false
     }
 
     fn allows_user_read(&self, addr: usize, len: usize) -> bool {
@@ -2490,6 +2503,10 @@ pub fn has_timed_wait(key: u64) -> bool {
     with_current_read(|p| matches!(p.timed_wait, Some(wait) if wait.key == key)).unwrap_or(false)
 }
 
+pub fn take_timed_wait_wake(key: u64) -> bool {
+    with_current(|p| p.take_timed_wait_wake(key)).unwrap_or(false)
+}
+
 pub fn user_dup(user_fd: usize) -> Result<usize, fs::vfs::VfsError> {
     with_current(|p| {
         let status_flags = p.status_flags(user_fd).ok_or(fs::vfs::VfsError::BadFd)?;
@@ -2735,6 +2752,38 @@ pub fn wake_io_waiters() {
     while let Some(pid) = wake_next_io_waiter(None) {
         crate::sched::wake_blocked(pid);
     }
+}
+
+pub fn wake_timed_waiters(key: u64, limit: usize) -> usize {
+    let mut woken = 0;
+    while woken < limit {
+        let Some(pid) = wake_next_timed_waiter(key) else {
+            break;
+        };
+        crate::sched::wake_blocked(pid);
+        woken += 1;
+    }
+    woken
+}
+
+fn wake_next_timed_waiter(key: u64) -> Option<Pid> {
+    let mut guard = PROCESS_TABLE.lock();
+    let table = guard.as_mut()?;
+    for process in &mut table.processes {
+        let waiting_for_key = matches!(process.timed_wait, Some(wait) if wait.key == key);
+        let blocked_for_io = matches!(
+            process.state,
+            ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
+        );
+        if waiting_for_key && blocked_for_io {
+            if let Some(wait) = process.timed_wait.as_mut() {
+                wait.woken = true;
+            }
+            process.state = ProcessState::Ready;
+            return Some(process.pid);
+        }
+    }
+    None
 }
 
 pub fn wake_expired_io_waiters(now_ms: u64) {

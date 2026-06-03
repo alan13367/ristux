@@ -1,8 +1,12 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/futex.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -54,14 +58,121 @@ static int check_wait_timeout_overflow(void) {
     return 0;
 }
 
-static int check_wake(void) {
+static int check_wake_empty(void) {
     int futex_word = 1;
     errno = 0;
-    if (futex_call(&futex_word, FUTEX_WAKE_PRIVATE, 3, NULL) != 3) {
-        puts("cc_futex: wake failed");
+    if (futex_call(&futex_word, FUTEX_WAKE_PRIVATE, 3, NULL) != 0) {
+        puts("cc_futex: wake empty failed");
         return 1;
     }
-    puts("cc_futex: wake ok");
+    puts("cc_futex: wake empty ok");
+    return 0;
+}
+
+static int check_wake_waiter(void) {
+    const char *path = "/tmp/cc_futex_waiter.bin";
+    unlink(path);
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0600);
+    if (fd < 0) {
+        puts("cc_futex: wake open failed");
+        return 1;
+    }
+    int initial = 1;
+    if (write(fd, &initial, sizeof(initial)) != (ssize_t)sizeof(initial)) {
+        close(fd);
+        unlink(path);
+        puts("cc_futex: wake seed failed");
+        return 1;
+    }
+
+    int *word = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (word == MAP_FAILED) {
+        unlink(path);
+        puts("cc_futex: wake mmap failed");
+        return 1;
+    }
+    *word = 1;
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: wake pipe failed");
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: wake fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(pipefd[0]);
+        char ready = 'r';
+        if (write(pipefd[1], &ready, 1) != 1) {
+            _exit(2);
+        }
+        close(pipefd[1]);
+
+        struct timespec timeout = { 5, 0 };
+        errno = 0;
+        int rc = futex_call(word, FUTEX_WAIT, 1, &timeout);
+        _exit(rc == 0 ? 0 : 3);
+    }
+
+    close(pipefd[1]);
+    char ready = 0;
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: wake ready failed");
+        return 1;
+    }
+    close(pipefd[0]);
+
+    int woke = 0;
+    for (int i = 0; i < 200; i++) {
+        errno = 0;
+        int rc = futex_call(word, FUTEX_WAKE, 1, NULL);
+        if (rc == 1) {
+            woke = 1;
+            break;
+        }
+        if (rc < 0) {
+            break;
+        }
+        syscall(SYS_sched_yield);
+    }
+    if (!woke) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: wake waiter failed");
+        return 1;
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        munmap(word, 4096);
+        unlink(path);
+        puts("cc_futex: wake waiter failed");
+        return 1;
+    }
+
+    munmap(word, 4096);
+    unlink(path);
+    puts("cc_futex: wake waiter ok");
     return 0;
 }
 
@@ -92,7 +203,8 @@ int main(void) {
         check_wait_mismatch() != 0 ||
         check_wait_timeout() != 0 ||
         check_wait_timeout_overflow() != 0 ||
-        check_wake() != 0 ||
+        check_wake_empty() != 0 ||
+        check_wake_waiter() != 0 ||
         check_nanosleep_invalid() != 0 ||
         check_nanosleep_overflow() != 0) {
         return 1;

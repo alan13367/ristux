@@ -216,6 +216,7 @@ const IOV_MAX: usize = 1024;
 const FUTEX_WAIT: i32 = 0;
 const FUTEX_WAKE: i32 = 1;
 const FUTEX_CMD_MASK: i32 = 0x7f;
+const FUTEX_PRIVATE_FLAG: i32 = 0x80;
 const HOSTNAME_MAX: usize = 64;
 
 struct HostnameState {
@@ -1157,6 +1158,15 @@ fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
     nr.rotate_left(48) ^ (a0 as u64).rotate_left(17) ^ (a1 as u64).rotate_left(7) ^ a2 as u64
 }
 
+fn futex_wait_key(uaddr: usize, private: bool) -> u64 {
+    let owner = if private {
+        process::current_pid().unwrap_or(0) as usize
+    } else {
+        0
+    };
+    timed_wait_key(NR_futex, uaddr, owner, 0)
+}
+
 fn timed_wait_deadline_errno(key: u64, timeout_ms: u64, now_ms: u64) -> Result<u64, i64> {
     process::timed_wait_deadline(key, timeout_ms, now_ms).map_err(|err| match err {
         process::TimedWaitError::NoCurrentProcess => ESRCH,
@@ -1188,16 +1198,15 @@ fn linux_futex(
     if uaddr & 0x3 != 0 {
         return Err(EINVAL);
     }
+    let private = op & FUTEX_PRIVATE_FLAG != 0;
     match op & FUTEX_CMD_MASK {
-        FUTEX_WAIT => linux_futex_wait(frame, uaddr, val as u32, timeout),
+        FUTEX_WAIT => linux_futex_wait(frame, uaddr, val as u32, timeout, private),
         FUTEX_WAKE => {
             if val < 0 {
                 return Err(EINVAL);
             }
-            if val > 0 {
-                process::wake_io_waiters();
-            }
-            Ok(val as u64)
+            let key = futex_wait_key(uaddr, private);
+            Ok(process::wake_timed_waiters(key, val as usize) as u64)
         }
         _ => Err(ENOSYS),
     }
@@ -1208,9 +1217,13 @@ fn linux_futex_wait(
     uaddr: usize,
     expected: u32,
     timeout: usize,
+    private: bool,
 ) -> Result<u64, i64> {
-    let key = timed_wait_key(NR_futex, uaddr, expected as usize, 0);
+    let key = futex_wait_key(uaddr, private);
     loop {
+        if process::take_timed_wait_wake(key) {
+            return Ok(0);
+        }
         let current = read_user_u32(uaddr)?;
         if current != expected {
             if process::has_timed_wait(key) {
