@@ -327,6 +327,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_select"
       "^cc_select: pipe ok$"
       "^cc_select: invalid ok$"
+      "^cc_select: signal interrupt ok$"
       "^cc_select: done$"
       "TTY canonical line ready: cc_stack"
       "^cc_stack: growth ok$"
