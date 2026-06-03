@@ -627,6 +627,7 @@ case "$SCENARIO" in
       "cc_session: setpgid errors ok"
       "cc_session: wait nohang ok"
       "cc_session: wait pgrp ok"
+      "cc_session: wait continued ok"
       "cc_session: wait rusage ok"
       "cc_session: done"
     )

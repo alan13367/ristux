@@ -2164,20 +2164,23 @@ fn linux_wait4(
 ) -> Result<u64, i64> {
     const WNOHANG: i32 = 1;
     const WUNTRACED: i32 = 2;
-    if options & !(WNOHANG | WUNTRACED) != 0 {
+    const WCONTINUED: i32 = 8;
+    if options & !(WNOHANG | WUNTRACED | WCONTINUED) != 0 {
         return Err(EINVAL);
     }
     let parent = process::current_pid().ok_or(ESRCH)?;
     let selector = wait_selector(pid)?;
     let include_stopped = options & WUNTRACED != 0;
+    let include_continued = options & WCONTINUED != 0;
 
     loop {
-        match process::peek_wait_any(parent, selector, include_stopped) {
+        match process::peek_wait_any(parent, selector, include_stopped, include_continued) {
             Some((waited_pid, status)) => {
                 let encoded = match status {
                     process::WaitStatus::Exited(status) => (status & 0xff) << 8,
                     process::WaitStatus::Signaled(signal) => signal as i32,
                     process::WaitStatus::Stopped(signal) => ((signal as i32) << 8) | 0x7f,
+                    process::WaitStatus::Continued => 0xffff,
                 };
                 if status_ptr != 0 {
                     process::write_user_buffer(status_ptr, 4).ok_or(EFAULT)?;
@@ -2196,6 +2199,11 @@ fn linux_wait4(
                 match status {
                     process::WaitStatus::Stopped(_) => {
                         if !process::mark_waited_stopped(parent, waited_pid) {
+                            return Err(ECHILD);
+                        }
+                    }
+                    process::WaitStatus::Continued => {
+                        if !process::mark_waited_continued(parent, waited_pid) {
                             return Err(ECHILD);
                         }
                     }

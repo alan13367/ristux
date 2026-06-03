@@ -150,6 +150,7 @@ pub struct Process {
     pub envp_ptr: usize,
     exit_status: Option<i32>,
     stop_reported: bool,
+    continued_report_pending: bool,
     waiters: Vec<Pid>,
     is_user: bool,
     saved_syscall: Option<SavedSyscallFrame>,
@@ -198,6 +199,7 @@ pub enum WaitStatus {
     Exited(i32),
     Signaled(u8),
     Stopped(u8),
+    Continued,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -436,6 +438,7 @@ impl Process {
             envp_ptr: 0,
             exit_status: None,
             stop_reported: false,
+            continued_report_pending: false,
             waiters: Vec::new(),
             is_user: true,
             saved_syscall: None,
@@ -1179,6 +1182,7 @@ impl ProcessTable {
         child.waiters.clear();
         child.exit_status = None;
         child.stop_reported = false;
+        child.continued_report_pending = false;
         child.pending_signals = 0;
         child.pending_signal_status = None;
         self.processes.push(child);
@@ -1351,6 +1355,7 @@ impl ProcessTable {
             process.state = ProcessState::Stopped(signal);
             process.exit_status = None;
             process.stop_reported = false;
+            process.continued_report_pending = false;
             process.parent
         };
         if current_pid() == Some(pid) {
@@ -1362,16 +1367,27 @@ impl ProcessTable {
         Some(self.wake_waiters_for(pid))
     }
 
-    fn continue_process(&mut self, pid: Pid) -> bool {
-        let Some(process) = self.get_mut(pid) else {
-            return false;
+    fn continue_process(&mut self, pid: Pid) -> Option<WakeList> {
+        let parent = {
+            let process = self.get_mut(pid)?;
+            if matches!(process.state, ProcessState::Stopped(_)) {
+                process.state = ProcessState::Ready;
+                process.stop_reported = false;
+                process.continued_report_pending = true;
+                process.parent
+            } else if matches!(process.state, ProcessState::Zombie(_)) {
+                return None;
+            } else {
+                return Some(WakeList::new());
+            }
         };
-        if matches!(process.state, ProcessState::Stopped(_)) {
-            process.state = ProcessState::Ready;
-            process.stop_reported = false;
-            return true;
+        let mut wake = WakeList::new();
+        wake.push_unique(pid);
+        if let Some(parent) = parent {
+            self.queue_sigchld(parent);
+            self.wake_waiter_for_child(parent, pid, &mut wake);
         }
-        !matches!(process.state, ProcessState::Zombie(_))
+        Some(wake)
     }
 
     fn wait(&mut self, parent: Pid, child: Pid) -> Option<i32> {
@@ -1576,6 +1592,7 @@ impl Process {
             envp_ptr: self.envp_ptr,
             exit_status: None,
             stop_reported: false,
+            continued_report_pending: false,
             waiters: Vec::new(),
             is_user: self.is_user,
             saved_syscall: None,
@@ -1952,11 +1969,13 @@ pub fn stop_current_signal(pid: Pid, signal: u8) -> bool {
 }
 
 pub fn continue_process(pid: Pid) -> bool {
-    let continued = with_table(|table| table.continue_process(pid));
-    if continued {
-        scheduler::wake_blocked(pid);
+    let wake = with_table(|table| table.continue_process(pid));
+    if let Some(wake) = wake {
+        wake_processes(wake);
+        true
+    } else {
+        false
     }
-    continued
 }
 
 fn wake_processes(wake: WakeList) {
@@ -3367,6 +3386,7 @@ pub fn peek_wait_any(
     parent: Pid,
     selector: WaitSelector,
     include_stopped: bool,
+    include_continued: bool,
 ) -> Option<(Pid, WaitStatus)> {
     with_table(|table| {
         if include_stopped {
@@ -3386,6 +3406,16 @@ pub fn peek_wait_any(
                 });
             if let Some((pid, signal)) = stopped {
                 return Some((pid, WaitStatus::Stopped(signal)));
+            }
+        }
+
+        if include_continued {
+            if let Some(process) = table
+                .processes
+                .iter()
+                .find(|p| selector.matches(parent, p) && p.continued_report_pending)
+            {
+                return Some((process.pid, WaitStatus::Continued));
             }
         }
 
@@ -3416,6 +3446,19 @@ pub fn mark_waited_stopped(parent: Pid, child: Pid) -> bool {
             return false;
         }
         process.stop_reported = true;
+        true
+    })
+}
+
+pub fn mark_waited_continued(parent: Pid, child: Pid) -> bool {
+    with_table(|table| {
+        let Some(process) = table.get_mut(child) else {
+            return false;
+        };
+        if process.parent != Some(parent) || !process.continued_report_pending {
+            return false;
+        }
+        process.continued_report_pending = false;
         true
     })
 }

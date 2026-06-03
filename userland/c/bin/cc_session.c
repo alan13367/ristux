@@ -268,6 +268,59 @@ static int check_wait_process_groups(void) {
     return 0;
 }
 
+static int check_wait_continued_once(void) {
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_session: wait continued fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        for (;;) {
+            getpid();
+        }
+    }
+
+    if (kill(child, SIGTSTP) < 0) {
+        puts("cc_session: wait continued stop failed");
+        cleanup_wait_child(child);
+        return 1;
+    }
+
+    int status = 0;
+    if (waitpid(child, &status, WUNTRACED) != child ||
+        !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTSTP) {
+        puts("cc_session: wait continued stop wait failed");
+        cleanup_wait_child(child);
+        return 1;
+    }
+
+    if (kill(child, SIGCONT) < 0 ||
+        waitpid(child, &status, WCONTINUED) != child ||
+        !WIFCONTINUED(status)) {
+        puts("cc_session: wait continued failed");
+        cleanup_wait_child(child);
+        return 1;
+    }
+
+    errno = 0;
+    if (waitpid(child, &status, WNOHANG | WCONTINUED) != 0) {
+        puts("cc_session: wait continued duplicate failed");
+        cleanup_wait_child(child);
+        return 1;
+    }
+
+    if (kill(child, SIGTERM) < 0 ||
+        waitpid(child, &status, 0) != child ||
+        !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        puts("cc_session: wait continued cleanup failed");
+        cleanup_wait_child(child);
+        return 1;
+    }
+
+    puts("cc_session: wait continued ok");
+    return 0;
+}
+
 static int check_wait_errors(void) {
     int status = 0;
     errno = 0;
@@ -375,6 +428,9 @@ int main(void) {
         return 1;
     }
     if (check_wait_process_groups() != 0) {
+        return 1;
+    }
+    if (check_wait_continued_once() != 0) {
         return 1;
     }
     if (check_wait_errors() != 0) {
