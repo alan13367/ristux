@@ -473,6 +473,33 @@ static int check_sigcont_handler(void) {
         puts("cc_signal: sigcont default failed");
         return 1;
     }
+
+    sigset_t blocked;
+    sigset_t oldmask;
+    sigset_t pending;
+    if (sigemptyset(&blocked) < 0 ||
+        sigaddset(&blocked, SIGTSTP) < 0 ||
+        sigprocmask(SIG_BLOCK, &blocked, &oldmask) < 0) {
+        puts("cc_signal: sigcont pending setup failed");
+        return 1;
+    }
+    if (raise(SIGTSTP) != 0 ||
+        sigpending(&pending) < 0 ||
+        sigismember(&pending, SIGTSTP) != 1) {
+        puts("cc_signal: sigcont pending stop failed");
+        return 1;
+    }
+    if (raise(SIGCONT) != 0 ||
+        sigpending(&pending) < 0 ||
+        sigismember(&pending, SIGTSTP) != 0) {
+        puts("cc_signal: sigcont pending clear failed");
+        return 1;
+    }
+    if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0) {
+        puts("cc_signal: sigcont mask restore failed");
+        return 1;
+    }
+
     saw_cont = 0;
     if (signal(SIGCONT, on_cont) == SIG_ERR ||
         raise(SIGCONT) != 0 || !saw_cont) {

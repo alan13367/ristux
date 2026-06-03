@@ -298,6 +298,24 @@ fn clear_pending_signal(process: &mut Process, signal: usize) {
     }
 }
 
+fn discard_pending_signal_interactions(process: &mut Process, status: i32) {
+    let Some(signal_number) = signal_from_legacy_status(status) else {
+        return;
+    };
+    let Some(signal) = crate::signal::Signal::from_number(signal_number) else {
+        return;
+    };
+
+    if signal == crate::signal::Signal::Cont {
+        clear_pending_signal(process, crate::signal::Signal::Stop.number() as usize);
+        clear_pending_signal(process, crate::signal::Signal::Tstp.number() as usize);
+        clear_pending_signal(process, crate::signal::Signal::Ttin.number() as usize);
+        clear_pending_signal(process, crate::signal::Signal::Ttou.number() as usize);
+    } else if signal.has_stop_default() {
+        clear_pending_signal(process, crate::signal::Signal::Cont.number() as usize);
+    }
+}
+
 fn next_deliverable_pending_signal(process: &Process) -> Option<u8> {
     let mut pending = process.pending_signals;
     while pending != 0 {
@@ -1382,6 +1400,10 @@ impl ProcessTable {
     }
 
     fn signal(&mut self, pid: Pid, status: i32, current: Option<Pid>) -> Option<WakeList> {
+        {
+            let process = self.get_mut(pid)?;
+            discard_pending_signal_interactions(process, status);
+        }
         let process = self.get(pid)?;
         if is_ignored_signal(process, status) {
             return Some(WakeList::new());
