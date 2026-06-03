@@ -21,6 +21,8 @@ pub struct AddressSpace {
 
 pub const USER_MMAP_START: usize = 0x5000_0000;
 pub const USER_MMAP_END: usize = 0x5800_0000;
+const USER_MAPPING_START: usize = 0x4000_0000;
+const USER_MAPPING_END: usize = paging::USER_STACK_TOP;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum UserProtection {
@@ -60,6 +62,17 @@ pub enum UserAccess {
     Execute,
 }
 
+fn validate_user_mapping_page(virt: usize) -> Result<(), PagingError> {
+    if virt % FRAME_SIZE != 0 {
+        return Err(PagingError::NotMapped);
+    }
+    let end = virt.checked_add(FRAME_SIZE).ok_or(PagingError::NotMapped)?;
+    if virt < USER_MAPPING_START || end > USER_MAPPING_END {
+        return Err(PagingError::NotMapped);
+    }
+    Ok(())
+}
+
 impl AddressSpace {
     pub fn new_kernel_clone() -> Result<Self, PagingError> {
         let p4_frame = unsafe { paging::create_p4_table()? };
@@ -91,6 +104,7 @@ impl AddressSpace {
         phys: usize,
         flags: PageFlags,
     ) -> Result<(), PagingError> {
+        validate_user_mapping_page(virt)?;
         unsafe { paging::map_page_at(self.p4, virt, phys, flags) }?;
         Ok(())
     }
@@ -110,6 +124,7 @@ impl AddressSpace {
         frame: Frame,
         protection: UserProtection,
     ) -> Result<(), PagingError> {
+        validate_user_mapping_page(virt)?;
         self.reserve_user_mapping_entries(1)?;
         unsafe { self.map_user_page(virt, frame.start, protection.page_flags())? };
         self.user_mappings.push((virt, frame));
@@ -126,6 +141,7 @@ impl AddressSpace {
         virt: usize,
         protection: UserProtection,
     ) -> Result<(), PagingError> {
+        validate_user_mapping_page(virt)?;
         self.reserve_user_mapping_entries(1)?;
         let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
         unsafe {
@@ -801,6 +817,7 @@ pub fn self_test() {
         .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadWrite)
         .expect("address space writable protection restore failed");
     assert_user_page_nx(&space_a, VIRT, true, "restored writable page");
+    assert_user_mapping_bounds(&mut space_a);
     assert_parent_cow_restore(&space_a, VIRT);
     assert_mprotect_metadata_failure_is_atomic(&mut space_a);
 
@@ -831,6 +848,15 @@ fn assert_user_page_nx(space: &AddressSpace, page: usize, expected: bool, label:
             "address space NX self-test {} expected {}, got {}",
             label, expected, actual
         );
+    }
+}
+
+fn assert_user_mapping_bounds(space: &mut AddressSpace) {
+    if space.map_zero_page(USER_MAPPING_START - FRAME_SIZE).is_ok() {
+        panic!("address space user mapping lower bound self-test failed");
+    }
+    if space.map_zero_page(USER_MAPPING_END).is_ok() {
+        panic!("address space user mapping upper bound self-test failed");
     }
 }
 
