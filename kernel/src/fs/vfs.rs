@@ -1618,7 +1618,10 @@ impl Vfs {
                 .ok_or(VfsError::NotFound)?
                 .read_file(&path)
                 .map_err(map_ext2_error)?;
-            let remaining = data.len().saturating_sub(offset);
+            if offset >= data.len() {
+                return Ok(0);
+            }
+            let remaining = data.len() - offset;
             let count = remaining.min(output.len());
             output[..count].copy_from_slice(&data[offset..offset + count]);
             if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =

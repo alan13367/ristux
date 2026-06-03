@@ -84,6 +84,13 @@ static int check_large_offset_rejected(const char *path, const char *label) {
         unlink(path);
         return 1;
     }
+    char byte = 0;
+    if (read(fd, &byte, 1) != 0) {
+        printf("cc_file_sync: %s large read failed errno=%d\n", label, errno);
+        close(fd);
+        unlink(path);
+        return 1;
+    }
     errno = 0;
     if (lseek(fd, 1, SEEK_CUR) != -1 || errno != EINVAL) {
         printf("cc_file_sync: %s seek overflow errno=%d\n", label, errno);
