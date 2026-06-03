@@ -308,6 +308,10 @@ pub fn stats() -> SchedStats {
     }
 }
 
+pub fn user_scheduler_cpu_count() -> usize {
+    USER_SCHEDULER_CPU_COUNT
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SchedStats {
     pub cpu_count: usize,

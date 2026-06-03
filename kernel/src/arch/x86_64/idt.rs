@@ -290,6 +290,7 @@ extern "x86-interrupt" fn tlb_shootdown_interrupt_handler(_stack_frame: Interrup
         let cr3: usize;
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
         asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+        crate::smp::acknowledge_tlb_shootdown();
         crate::smp::signal_eoi();
     }
 }

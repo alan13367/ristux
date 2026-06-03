@@ -17,6 +17,10 @@ use crate::{
 
 static SMP: SpinLock<Option<SmpSystem>> = SpinLock::new(None);
 static AP_STARTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static LOCAL_APIC_ADDR: AtomicUsize = AtomicUsize::new(0);
+static TLB_SHOOTDOWN_ACKS: AtomicUsize = AtomicUsize::new(0);
+static TLB_SHOOTDOWN_BROADCASTS: AtomicUsize = AtomicUsize::new(0);
+static TLB_SHOOTDOWN_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1b;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
@@ -121,6 +125,9 @@ pub struct SmpStats {
     pub ipis_sent: usize,
     pub scheduled_tasks: usize,
     pub shared_lock_audit_passed: bool,
+    pub tlb_shootdown_broadcasts: usize,
+    pub tlb_shootdown_acks: usize,
+    pub tlb_shootdown_timeouts: usize,
 }
 
 impl SmpSystem {
@@ -231,14 +238,17 @@ impl SmpSystem {
         }
     }
 
+    fn started_cpu_count(&self) -> usize {
+        self.cpus
+            .iter()
+            .filter(|cpu| matches!(cpu.state, CpuState::Bootstrap | CpuState::Running))
+            .count()
+    }
+
     fn stats(&self) -> SmpStats {
         SmpStats {
             cpu_count: self.cpus.len(),
-            started_cpus: self
-                .cpus
-                .iter()
-                .filter(|cpu| matches!(cpu.state, CpuState::Bootstrap | CpuState::Running))
-                .count(),
+            started_cpus: self.started_cpu_count(),
             firmware_cpu_count: self.firmware_cpu_count,
             local_apic_addr: self.local_apic_addr,
             acpi_table_detected: self.acpi_table_detected,
@@ -251,6 +261,9 @@ impl SmpSystem {
             ipis_sent: self.ipis_sent,
             scheduled_tasks: self.scheduled_tasks,
             shared_lock_audit_passed: self.shared_lock_audit_passed,
+            tlb_shootdown_broadcasts: TLB_SHOOTDOWN_BROADCASTS.load(Ordering::Acquire),
+            tlb_shootdown_acks: TLB_SHOOTDOWN_ACKS.load(Ordering::Acquire),
+            tlb_shootdown_timeouts: TLB_SHOOTDOWN_TIMEOUTS.load(Ordering::Acquire),
         }
     }
 }
@@ -266,6 +279,7 @@ pub fn init(rsdp: Option<AcpiRsdp>) {
         system.local_apic_addr,
         system.apic_version
     );
+    LOCAL_APIC_ADDR.store(system.local_apic_addr as usize, Ordering::Release);
 
     for cpu in system.cpus.iter().skip(1) {
         crate::println!(
@@ -315,6 +329,9 @@ pub fn stats() -> SmpStats {
         ipis_sent: 0,
         scheduled_tasks: 0,
         shared_lock_audit_passed: false,
+        tlb_shootdown_broadcasts: 0,
+        tlb_shootdown_acks: 0,
+        tlb_shootdown_timeouts: 0,
     })
 }
 
@@ -338,6 +355,14 @@ fn self_test(system: &mut SmpSystem) {
         panic!("SMP IPI self-test did not deliver messages");
     }
 
+    // APs are booted for kernel work today, but user address spaces are only
+    // dispatched on CPU0. Only CPUs that can hold user TLB entries need remote
+    // acknowledgement before user frames are reused.
+    let tlb_targets = crate::sched::user_scheduler_cpu_count().saturating_sub(1);
+    if !send_tlb_shootdown_to(system.local_apic_addr as usize, tlb_targets) {
+        panic!("SMP TLB shootdown self-test timed out");
+    }
+
     system.audit_shared_locks();
     let stats = system.stats();
     if stats.started_cpus < 1 || stats.scheduled_tasks < tasks.len() {
@@ -348,6 +373,9 @@ fn self_test(system: &mut SmpSystem) {
     }
     if !stats.local_apic_mapped {
         panic!("local APIC map self-test failed");
+    }
+    if stats.tlb_shootdown_timeouts != 0 {
+        panic!("SMP TLB shootdown acknowledgement self-test failed");
     }
     if stats.trampoline_installed
         && stats.ap_start_attempts > 0
@@ -677,23 +705,67 @@ pub fn send_reschedule_ipi(cpu_index: usize) {
 }
 
 pub fn send_tlb_shootdown() {
-    let addr = {
+    let info = {
         let guard = SMP.lock();
-        guard.as_ref().map(|s| s.local_apic_addr as usize)
+        guard.as_ref().map(|s| {
+            (
+                s.local_apic_addr as usize,
+                // See the SMP self-test: APs are not remote user-TLB targets
+                // until the userspace scheduler contract expands past CPU0.
+                crate::sched::user_scheduler_cpu_count().saturating_sub(1),
+            )
+        })
     };
-    if let Some(local_apic) = addr {
-        wait_icr_idle(local_apic);
-        write_u32(local_apic + APIC_ICR_LOW, 0x000c_00f0);
-        wait_icr_idle(local_apic);
+    if let Some((local_apic, target_count)) = info {
+        let _ = send_tlb_shootdown_to(local_apic, target_count);
     }
+}
+
+fn send_tlb_shootdown_to(local_apic: usize, target_count: usize) -> bool {
+    if target_count == 0 {
+        return true;
+    }
+    if local_apic == 0 {
+        TLB_SHOOTDOWN_TIMEOUTS.fetch_add(1, Ordering::AcqRel);
+        return false;
+    }
+    TLB_SHOOTDOWN_ACKS.store(0, Ordering::Release);
+    TLB_SHOOTDOWN_BROADCASTS.fetch_add(1, Ordering::AcqRel);
+    wait_icr_idle(local_apic);
+    write_u32(local_apic + APIC_ICR_LOW, 0x000c_00f0);
+    wait_icr_idle(local_apic);
+    if wait_tlb_shootdown_acks(target_count) {
+        true
+    } else {
+        TLB_SHOOTDOWN_TIMEOUTS.fetch_add(1, Ordering::AcqRel);
+        false
+    }
+}
+
+fn wait_tlb_shootdown_acks(target_count: usize) -> bool {
+    for _ in 0..1_000_000 {
+        if TLB_SHOOTDOWN_ACKS.load(Ordering::Acquire) >= target_count {
+            return true;
+        }
+        spin_loop();
+    }
+    false
+}
+
+pub fn acknowledge_tlb_shootdown() {
+    TLB_SHOOTDOWN_ACKS.fetch_add(1, Ordering::AcqRel);
 }
 
 pub fn signal_eoi() {
     let addr = {
         let guard = SMP.lock();
-        guard.as_ref().map(|s| s.local_apic_addr as usize)
+        guard
+            .as_ref()
+            .map(|s| s.local_apic_addr as usize)
+            .unwrap_or_else(|| LOCAL_APIC_ADDR.load(Ordering::Acquire))
     };
-    if let Some(local_apic) = addr {
+    if addr != 0 {
+        let local_apic = addr;
         write_u32(local_apic + 0xb0, 0);
     }
 }

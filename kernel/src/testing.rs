@@ -69,6 +69,10 @@ fn run() -> KernelResult<()> {
         "SMP firmware/APIC discovery did not complete",
     )?;
     ensure(smp.shared_lock_audit_passed, "SMP lock audit did not pass")?;
+    ensure(
+        smp.tlb_shootdown_timeouts == 0,
+        "SMP TLB shootdown acknowledgement timed out",
+    )?;
     let sched = crate::sched::stats();
     ensure(sched.cpu_count >= 1, "per-CPU scheduler did not initialize")?;
     ensure(
@@ -176,7 +180,7 @@ fn run() -> KernelResult<()> {
         linker.relocations_applied
     );
     crate::println!(
-        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, APIC version {:#x}, mapped {}, AP boots {}/{}, trampoline {}, {} IPI(s), {} dispatch(es)",
+        "SMP stats: {} CPU(s), {} firmware, {} started, LAPIC {:#x}, APIC version {:#x}, mapped {}, AP boots {}/{}, trampoline {}, {} IPI(s), {} dispatch(es), {} TLB broadcast(s), {} ack(s), {} timeout(s)",
         smp.cpu_count,
         smp.firmware_cpu_count,
         smp.started_cpus,
@@ -187,7 +191,10 @@ fn run() -> KernelResult<()> {
         smp.ap_start_attempts,
         smp.trampoline_installed,
         smp.ipis_sent,
-        smp.scheduled_tasks
+        smp.scheduled_tasks,
+        smp.tlb_shootdown_broadcasts,
+        smp.tlb_shootdown_acks,
+        smp.tlb_shootdown_timeouts
     );
     crate::println!(
         "Scheduler stats: {} CPU(s), {} userspace CPU(s), {} queued, {} dispatch(es), {} AP dispatch(es), {} idle loop(s)",
