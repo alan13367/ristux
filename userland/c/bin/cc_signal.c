@@ -150,6 +150,52 @@ static int check_sigprocmask_fault_preserves_oldset(void) {
     return 0;
 }
 
+static int check_multiple_pending_signals(void) {
+    sigset_t blocked;
+    sigset_t oldmask;
+    sigset_t pending;
+    if (signal(SIGUSR1, on_usr1) == SIG_ERR ||
+        signal(SIGUSR2, on_usr2) == SIG_ERR ||
+        sigemptyset(&blocked) < 0 ||
+        sigaddset(&blocked, SIGUSR1) < 0 ||
+        sigaddset(&blocked, SIGUSR2) < 0 ||
+        sigprocmask(SIG_BLOCK, &blocked, &oldmask) < 0) {
+        puts("cc_signal: pending multi setup failed");
+        return 1;
+    }
+
+    saw_usr1 = 0;
+    saw_usr2 = 0;
+    if (raise(SIGUSR1) != 0 || raise(SIGUSR2) != 0 || saw_usr1 || saw_usr2) {
+        puts("cc_signal: pending multi queue failed");
+        return 1;
+    }
+    if (sigpending(&pending) < 0 ||
+        sigismember(&pending, SIGUSR1) != 1 ||
+        sigismember(&pending, SIGUSR2) != 1) {
+        puts("cc_signal: pending multi bits failed");
+        return 1;
+    }
+    if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0) {
+        puts("cc_signal: pending multi unblock failed");
+        return 1;
+    }
+    (void)getpid();
+    if (!saw_usr1 || !saw_usr2) {
+        puts("cc_signal: pending multi delivery failed");
+        return 1;
+    }
+    if (sigpending(&pending) < 0 ||
+        sigismember(&pending, SIGUSR1) != 0 ||
+        sigismember(&pending, SIGUSR2) != 0) {
+        puts("cc_signal: pending multi clear failed");
+        return 1;
+    }
+
+    puts("cc_signal: pending multi ok");
+    return 0;
+}
+
 static int check_sigkill_uncatchable(void) {
     errno = 0;
     if (signal(SIGKILL, SIG_IGN) != SIG_ERR || errno != EINVAL) {
@@ -426,6 +472,9 @@ int main(void) {
     }
     puts("cc_signal: mask ok");
     if (check_sigprocmask_fault_preserves_oldset() != 0) {
+        return 1;
+    }
+    if (check_multiple_pending_signals() != 0) {
         return 1;
     }
     errno = 0;

@@ -286,6 +286,23 @@ fn clear_pending_signal(process: &mut Process, signal: usize) {
     }
 }
 
+fn next_deliverable_pending_signal(process: &Process) -> Option<u8> {
+    let mut pending = process.pending_signals;
+    while pending != 0 {
+        let signal = pending.trailing_zeros() as u8;
+        let bit = 1u64 << signal;
+        pending &= !bit;
+        if signal == 0 {
+            continue;
+        }
+        if !is_uncatchable_signal(signal) && process.signal_mask & bit != 0 {
+            continue;
+        }
+        return Some(signal);
+    }
+    None
+}
+
 fn should_queue_signal(process: &Process, status: i32, current: Option<Pid>) -> bool {
     if current == Some(process.pid) {
         return true;
@@ -1901,19 +1918,14 @@ pub fn take_pending_signal_current() -> Option<(Pid, usize, i32)> {
     let pid = current_pid()?;
     let status = with_table(|table| {
         let process = table.get_mut(pid)?;
-        let status = process.pending_signal_status?;
-        if status >= 128 {
-            let signal = (status - 128) as u64;
-            if signal < 64
-                && !is_uncatchable_signal(signal as u8)
-                && process.signal_mask & (1 << signal) != 0
-            {
-                return None;
-            }
+        if let Some(signal) = next_deliverable_pending_signal(process) {
+            clear_pending_signal(process, signal as usize);
+            return Some(128 + signal as i32);
         }
-        let status = process.pending_signal_status.take()?;
-        process.pending_signals = 0;
-        Some(status)
+        if process.pending_signals != 0 {
+            return None;
+        }
+        process.pending_signal_status.take()
     })?;
     let signum = if status >= 128 {
         (status - 128) as usize
