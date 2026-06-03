@@ -2084,7 +2084,7 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     sighandler_t old = signal_handlers[signum];
     sigset_t old_mask = signal_action_masks[signum];
     int old_flags = signal_action_flags[signum];
-    if (act != NULL && (act->sa_flags & ~SA_NOCLDSTOP) != 0) {
+    if (act != NULL && (act->sa_flags & ~(SA_NOCLDSTOP | SA_RESTART)) != 0) {
         errno = EINVAL;
         return -1;
     }

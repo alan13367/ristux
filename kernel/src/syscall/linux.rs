@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{USER_MMAP_END, USER_MMAP_START, UserProtection},
+        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -247,6 +247,13 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
     if process::take_interrupted_syscall_current() {
         let mut interrupted_errno = EINTR;
         let timed_wait_deadline = process::take_current_timed_wait_deadline();
+        if interrupted_syscall_can_restart(nr, timed_wait_deadline.is_some())
+            && deliverable_signal_requests_restart()
+            && deliver_pending_signal(frame, SignalResume::RestartSyscall)
+        {
+            process::restore_current_fpu();
+            return;
+        }
         if nr == NR_nanosleep {
             if let Some(deadline_ms) = timed_wait_deadline {
                 if let Err(err) = write_nanosleep_remaining(a1 as usize, deadline_ms) {
@@ -457,6 +464,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
 enum SignalResume {
     Current,
     RestartSyscall,
+    CompleteRestartedSyscall,
 }
 
 fn deliver_pending_signal(frame: &mut SyscallInterruptFrame, resume: SignalResume) -> bool {
@@ -654,8 +662,14 @@ fn saved_from_linux_frame_for_resume(
     resume: SignalResume,
 ) -> process::SavedSyscallFrame {
     let mut saved = saved_from_linux_frame(frame);
-    if matches!(resume, SignalResume::RestartSyscall) {
-        saved.rip = saved.rip.saturating_sub(2);
+    match resume {
+        SignalResume::Current => {}
+        SignalResume::RestartSyscall => {
+            saved.rip = saved.rip.saturating_sub(2);
+        }
+        SignalResume::CompleteRestartedSyscall => {
+            saved.rip = saved.rip.saturating_add(2);
+        }
     }
     saved
 }
@@ -1242,23 +1256,60 @@ fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> 
 
 fn yield_blocked_or_interrupted(frame: &mut SyscallInterruptFrame) -> Result<(), i64> {
     if process::has_deliverable_signal_current() {
-        let _ = process::take_interrupted_syscall_current();
-        if let Some(pid) = process::current_pid() {
-            let _ = process::mark_ready(pid);
-        }
-        return Err(EINTR);
+        return handle_blocked_signal(frame, SignalResume::RestartSyscall, SignalResume::Current);
     }
     if !crate::syscall::yield_blocked(frame) {
         return Err(CONTEXT_SWITCHED);
     }
     if process::has_deliverable_signal_current() {
-        let _ = process::take_interrupted_syscall_current();
-        if let Some(pid) = process::current_pid() {
-            let _ = process::mark_ready(pid);
-        }
-        return Err(EINTR);
+        return handle_blocked_signal(
+            frame,
+            SignalResume::Current,
+            SignalResume::CompleteRestartedSyscall,
+        );
     }
     Ok(())
+}
+
+fn handle_blocked_signal(
+    frame: &mut SyscallInterruptFrame,
+    restart_resume: SignalResume,
+    interrupt_resume: SignalResume,
+) -> Result<(), i64> {
+    let restartable = deliverable_signal_requests_restart();
+    let _ = process::take_interrupted_syscall_current();
+    if let Some(pid) = process::current_pid() {
+        let _ = process::mark_ready(pid);
+    }
+    if restartable {
+        if deliver_pending_signal(frame, restart_resume) {
+            return Err(CONTEXT_SWITCHED);
+        }
+    } else {
+        frame.rax = EINTR as u64;
+        if deliver_pending_signal(frame, interrupt_resume) {
+            return Err(CONTEXT_SWITCHED);
+        }
+    }
+    Err(EINTR)
+}
+
+fn deliverable_signal_requests_restart() -> bool {
+    process::deliverable_signal_action_current().is_some_and(|(_, handler, flags)| {
+        handler != crate::signal::DEFAULT_HANDLER
+            && handler != crate::signal::IGNORE_HANDLER
+            && flags & process::SIGNAL_FLAG_RESTART != 0
+    })
+}
+
+fn interrupted_syscall_can_restart(nr: u64, had_timed_wait: bool) -> bool {
+    if had_timed_wait {
+        return false;
+    }
+    matches!(
+        nr,
+        NR_read | NR_write | NR_readv | NR_wait4 | NR_accept | NR_recvfrom
+    )
 }
 
 fn linux_futex(
@@ -3566,7 +3617,7 @@ fn linux_rt_sigaction(signum: usize, act: usize, oldact: usize) -> Result<u64, i
     const SIGACTION_SIZE: usize = 24;
     const SIGACTION_MASK_OFFSET: usize = 8;
     const SIGACTION_FLAGS_OFFSET: usize = 16;
-    const SUPPORTED_FLAGS: u32 = process::SIGNAL_FLAG_NOCLDSTOP;
+    const SUPPORTED_FLAGS: u32 = process::SIGNAL_FLAG_NOCLDSTOP | process::SIGNAL_FLAG_RESTART;
 
     if signum == 0 || signum >= 32 {
         return Err(EINVAL);

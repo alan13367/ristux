@@ -14,6 +14,7 @@ static volatile int saw_usr2;
 static volatile int saw_external_usr1;
 static volatile int saw_entry_usr1;
 static volatile int saw_interrupt_usr1;
+static volatile int saw_restart_usr1;
 static volatile int saw_sigchld;
 static volatile int saw_cont;
 static volatile int handler_mask_in_usr1;
@@ -58,6 +59,12 @@ static void on_entry_usr1(int signum) {
 static void on_interrupt_usr1(int signum) {
     if (signum == SIGUSR1) {
         saw_interrupt_usr1 = 1;
+    }
+}
+
+static void on_restart_usr1(int signum) {
+    if (signum == SIGUSR1) {
+        saw_restart_usr1 = 1;
     }
 }
 
@@ -920,6 +927,101 @@ static int check_signal_interrupts_blocked_read(void) {
     return 1;
 }
 
+static int check_sa_restart_blocked_read(void) {
+    int data_pipe[2];
+    int ready_pipe[2];
+    if (pipe(data_pipe) < 0 || pipe(ready_pipe) < 0) {
+        puts("cc_signal: restart read pipe failed");
+        return 1;
+    }
+
+    saw_restart_usr1 = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        close(data_pipe[0]);
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        puts("cc_signal: restart read fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        saw_restart_usr1 = 0;
+        struct sigaction act;
+        sigemptyset(&act.sa_mask);
+        act.sa_handler = on_restart_usr1;
+        act.sa_flags = SA_RESTART;
+        if (sigaction(SIGUSR1, &act, NULL) < 0) {
+            _exit(2);
+        }
+        char ready = 'r';
+        if (write(ready_pipe[1], &ready, 1) != 1) {
+            _exit(3);
+        }
+        close(ready_pipe[1]);
+
+        char byte = 0;
+        errno = 0;
+        ssize_t n = read(data_pipe[0], &byte, 1);
+        close(data_pipe[0]);
+        if (n != 1 || byte != 'R') {
+            _exit(10);
+        }
+        if (!saw_restart_usr1 || errno == EINTR) {
+            _exit(20);
+        }
+        _exit(0);
+    }
+
+    close(data_pipe[0]);
+    close(ready_pipe[1]);
+    char ready = 0;
+    if (read(ready_pipe[0], &ready, 1) != 1) {
+        close(data_pipe[1]);
+        close(ready_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: restart read ready failed");
+        return 1;
+    }
+    close(ready_pipe[0]);
+
+    for (int i = 0; i < 2000; i++) {
+        syscall(SYS_sched_yield);
+    }
+
+    if (kill(child, SIGUSR1) < 0) {
+        close(data_pipe[1]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: restart read send failed");
+        return 1;
+    }
+    for (int i = 0; i < 200; i++) {
+        syscall(SYS_sched_yield);
+    }
+    char byte = 'R';
+    if (write(data_pipe[1], &byte, 1) != 1) {
+        close(data_pipe[1]);
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        puts("cc_signal: restart read write failed");
+        return 1;
+    }
+    close(data_pipe[1]);
+
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        printf("cc_signal: restart read child failed status=%d\n", status);
+        return 1;
+    }
+    puts("cc_signal: sa restart ok");
+    return 0;
+}
+
 static int check_sigchld_disposition(void) {
     if (raise(SIGCHLD) != 0 || saw_sigchld) {
         puts("cc_signal: sigchld default failed");
@@ -1255,6 +1357,7 @@ int main(int argc, char **argv) {
         check_signal_wakes_blocked_syscall() != 0 ||
         check_signal_restarts_syscall_entry() != 0 ||
         check_signal_interrupts_blocked_read() != 0 ||
+        check_sa_restart_blocked_read() != 0 ||
         check_handler_signal_mask() != 0 ||
         check_invalid_raw_handler() != 0 ||
         check_sigaction_fault_preserves_handler() != 0 ||

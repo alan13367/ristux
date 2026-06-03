@@ -42,6 +42,7 @@ typedef unsigned long sigset_t;
 #define SIG_ERR ((sighandler_t)-1)
 
 #define SA_NOCLDSTOP 0x00000001
+#define SA_RESTART 0x00000002
 
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1

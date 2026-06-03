@@ -69,7 +69,7 @@ The current Linux-like syscall surface is:
 | 10 | `mprotect` | No-access/read/read-write page permission changes. |
 | 11 | `munmap` | Unmaps page-aligned mmap ranges. |
 | 12 | `brk` | Process heap break used by the in-tree malloc. |
-| 13 | `rt_sigaction` | Installs one handler pointer per signal; `SA_NOCLDSTOP` is supported for `SIGCHLD`. |
+| 13 | `rt_sigaction` | Installs one handler pointer per signal; supports `SA_RESTART` and `SA_NOCLDSTOP` for `SIGCHLD`. |
 | 14 | `rt_sigprocmask` | Reads and updates the current process signal mask. |
 | 15 | `rt_sigreturn` | Returns from a delivered signal frame. |
 | 16 | `ioctl` | TTY-oriented requests currently implemented by the kernel. |

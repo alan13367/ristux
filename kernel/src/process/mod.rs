@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
+        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -26,6 +26,7 @@ pub const MAX_USER_ARGS: usize = 64;
 pub const MAX_USER_ENVS: usize = 64;
 pub const FD_CLOEXEC: u32 = 1;
 pub const SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
+pub const SIGNAL_FLAG_RESTART: u32 = 2;
 const MAX_WAKE_PIDS: usize = MAX_FDS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2344,6 +2345,20 @@ pub fn get_signal_action(pid: Pid, signal: usize) -> Option<(usize, u64, u32)> {
 
 pub fn signal_action(pid: Pid, signal: usize) -> Option<(usize, u64, u32)> {
     get_signal_action(pid, signal)
+}
+
+pub fn deliverable_signal_action_current() -> Option<(u8, usize, u32)> {
+    with_current_read(|process| {
+        let signal = next_deliverable_pending_signal(process)?;
+        let index = signal as usize;
+        let handler = process
+            .signal_handlers
+            .get(index)
+            .copied()
+            .unwrap_or(crate::signal::DEFAULT_HANDLER);
+        let flags = process.signal_flags.get(index).copied().unwrap_or(0);
+        Some((signal, handler, flags))
+    })?
 }
 
 pub fn set_current(pid: Pid) {
