@@ -2586,8 +2586,10 @@ fn linux_mmap(
         if fd < 0 || offset < 0 || offset as usize % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
+        let file_offset = offset as usize;
+        validate_mmap_file_range(file_offset, length)?;
         let vfs_fd = process::user_vfs_fd(fd as usize).ok_or(EBADF)?;
-        Some((vfs_fd, offset as usize))
+        Some((vfs_fd, file_offset))
     };
 
     let mapped = if flags & MAP_FIXED != 0 {
@@ -2682,6 +2684,14 @@ fn page_aligned_len(len: usize) -> Result<usize, i64> {
         .ok_or(ENOMEM)
 }
 
+fn validate_mmap_file_range(offset: usize, len: usize) -> Result<(), i64> {
+    let end = offset.checked_add(len).ok_or(EINVAL)?;
+    if end > isize::MAX as usize {
+        return Err(EINVAL);
+    }
+    Ok(())
+}
+
 fn copy_mmap_file_from_vfs_dup(
     vfs_fd: usize,
     mapped: usize,
@@ -2700,6 +2710,7 @@ fn copy_mmap_file_from_vfs(
     len: usize,
     offset: usize,
 ) -> Result<(), i64> {
+    validate_mmap_file_range(offset, len)?;
     let offset = isize::try_from(offset).map_err(|_| EINVAL)?;
     fs::lseek(vfs_fd, offset, 0).map_err(map_vfs_error)?;
     let mut buffer = [0u8; FRAME_SIZE];
@@ -3534,6 +3545,7 @@ fn map_chdir_error(err: fs::vfs::VfsError) -> i64 {
 
 fn map_shared_mapping_error(err: process::SharedMappingError) -> i64 {
     match err {
+        process::SharedMappingError::InvalidRange => EINVAL,
         process::SharedMappingError::OutOfMemory => ENOMEM,
         process::SharedMappingError::Vfs(err) => map_vfs_error(err),
     }

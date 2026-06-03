@@ -1692,7 +1692,10 @@ impl Vfs {
 
                 let data_node = canonical_node_index(&self.nodes, *node);
                 let data = &self.nodes[data_node].data;
-                let remaining = data.len().saturating_sub(*offset);
+                if *offset >= data.len() {
+                    return Ok(0);
+                }
+                let remaining = data.len() - *offset;
                 let count = remaining.min(output.len());
                 output[..count].copy_from_slice(&data[*offset..*offset + count]);
                 *offset += count;

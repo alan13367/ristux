@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -362,6 +363,24 @@ int main(void) {
         return 1;
     }
     puts("cc_mmap: shared ok");
+
+    fd = open("/tmp/cc_mmap_shared.txt", O_RDWR, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared range open failed");
+        return 1;
+    }
+    long huge_offset = LONG_MAX & ~4095L;
+    errno = 0;
+    void *bad_shared = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, huge_offset);
+    close(fd);
+    if (bad_shared != MAP_FAILED || errno != EINVAL) {
+        if (bad_shared != MAP_FAILED) {
+            munmap(bad_shared, 4096);
+        }
+        printf("cc_mmap: shared range failed errno=%d\n", errno);
+        return 1;
+    }
+    puts("cc_mmap: shared range ok");
 
     puts("cc_mmap: done");
     return 0;

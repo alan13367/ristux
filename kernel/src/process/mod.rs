@@ -1014,6 +1014,15 @@ impl Process {
         file_offset: usize,
         writable: bool,
     ) -> Result<(), SharedMappingError> {
+        let _range_end = addr
+            .checked_add(len)
+            .ok_or(SharedMappingError::InvalidRange)?;
+        let file_range_end = file_offset
+            .checked_add(len)
+            .ok_or(SharedMappingError::InvalidRange)?;
+        if len == 0 || file_range_end > isize::MAX as usize {
+            return Err(SharedMappingError::InvalidRange);
+        }
         self.shared_mappings
             .try_reserve_exact(1)
             .map_err(|_| SharedMappingError::OutOfMemory)?;
@@ -1538,6 +1547,7 @@ pub enum SocketInstallError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedMappingError {
+    InvalidRange,
     OutOfMemory,
     Vfs(fs::vfs::VfsError),
 }
@@ -3300,6 +3310,7 @@ fn map_paging_mmap_error(err: paging::PagingError) -> MmapError {
 
 fn map_shared_mapping_mmap_error(err: SharedMappingError) -> MmapError {
     match err {
+        SharedMappingError::InvalidRange => MmapError::Invalid,
         SharedMappingError::OutOfMemory => MmapError::OutOfMemory,
         SharedMappingError::Vfs(err) => MmapError::Vfs(err),
     }

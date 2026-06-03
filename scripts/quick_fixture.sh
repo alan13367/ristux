@@ -234,6 +234,7 @@ case "$SCENARIO" in
       "^cc_mmap: offset ok$"
       "^cc_mmap: file multi ok$"
       "^cc_mmap: shared ok$"
+      "^cc_mmap: shared range ok$"
       "^cc_mmap: done$"
       "TTY canonical line ready: cc_path"
       "^cc_path: normalized io ok$"
