@@ -1228,9 +1228,24 @@ impl ProcessTable {
             self.wake_waiter_for_child(waiter, pid, &mut wake);
         }
         if let Some(parent) = parent_pid {
+            self.queue_sigchld(parent);
             self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         wake
+    }
+
+    fn queue_sigchld(&mut self, parent: Pid) {
+        let status = crate::signal::Signal::Child.default_status();
+        let current = current_pid();
+        let Some(process) = self.get_mut(parent) else {
+            return;
+        };
+        if is_ignored_signal(process, status) {
+            return;
+        }
+        if should_queue_signal(process, status, current) {
+            queue_signal(process, status);
+        }
     }
 
     fn wake_waiters_for(&mut self, pid: Pid) -> WakeList {

@@ -430,6 +430,31 @@ static int check_sigchld_disposition(void) {
         puts("cc_signal: sigchld handler failed");
         return 1;
     }
+
+    saw_sigchld = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        puts("cc_signal: sigchld fork failed");
+        return 1;
+    }
+    if (child == 0) {
+        _exit(0);
+    }
+
+    for (int i = 0; i < 200000 && !saw_sigchld; i++) {
+        syscall(SYS_sched_yield);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || !saw_sigchld) {
+        puts("cc_signal: sigchld child failed");
+        return 1;
+    }
+    if (signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
+        puts("cc_signal: sigchld restore failed");
+        return 1;
+    }
+    puts("cc_signal: sigchld child ok");
     puts("cc_signal: sigchld ok");
     return 0;
 }

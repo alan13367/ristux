@@ -138,6 +138,27 @@ case "$SCENARIO" in
       "cc_futex: done"
     )
     ;;
+  signal)
+    COMMANDS=("cc_signal")
+    EXPECTS=(
+      "cc_signal: handler"
+      "cc_signal: mask ok"
+      "cc_signal: sigprocmask fault ok"
+      "cc_signal: pending multi ok"
+      "cc_signal: exec disposition ok"
+      "cc_signal: extra signals ok"
+      "cc_signal: sigchld child ok"
+      "cc_signal: sigchld ok"
+      "cc_signal: external handler ok"
+      "cc_signal: invalid handler ok"
+      "cc_signal: sigaction fault ok"
+      "cc_signal: sigkill ok"
+      "cc_signal: sigstop ok"
+      "cc_signal: stop wait once ok"
+      "cc_signal: ignore ok"
+      "cc_signal: after handler"
+    )
+    ;;
   ext2-reboot)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
     COMMANDS=("cc_ext2")
@@ -271,6 +292,7 @@ case "$SCENARIO" in
       "^cc_signal: pending multi ok$"
       "^cc_signal: exec disposition ok$"
       "^cc_signal: extra signals ok$"
+      "^cc_signal: sigchld child ok$"
       "^cc_signal: sigchld ok$"
       "^cc_signal: external handler ok$"
       "^cc_signal: invalid handler ok$"
@@ -2821,7 +2843,7 @@ case "$SCENARIO" in
     fi
     ;;
   *)
-    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-arrows, editor-c, poweroff, shutdown-timer, poweroff-delay, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
+    echo "unknown scenario '$SCENARIO' (try boot, autocomplete, line-edit, dns, http, entropy, filesync, futex, signal, ext2-reboot, pkg-reboot, cred, fs, kernel-prims, passwd, libc, libc-hosted, newlib, sse, session, job-control, socket, udp, tcp, uio, tar, pkg, ar, pkgconf, pkg-hook, make, tinycc, tinycc-make, toolchain, nativepkg, libc-dev, filetools, mv, ls, kill, pwd, chmod, grep, script-prims, shell-script, shell-list, shell-c, shell-args, shell-if, shell-for, shell-while, shell-case, shell-loop-control, shell-source, shell-functions, shell-unset, shell-subst, shell-backtick, shell-arith, shell-param, shell-command, shell-path, shell-assign, shell-redir, shell-envp, shell-read-shift, links, wc, head, tail, tee, sort, stat, chown, uniq, pathutils, install, env, cut, find, xargs, sed, uname, tr, date, sysinfo, ps, df, which, cmp, dd, seq, expr, yes, diff, awk, patch, gzip, xz, hostname, sourcepkg, loopback, pty, pty-shell, termios, editor, editor-arrows, editor-c, poweroff, shutdown-timer, poweroff-delay, dropbear, dropbear-banner, dropbear-session, ssh, command)" >&2
     exit 2
     ;;
 esac
