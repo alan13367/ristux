@@ -96,6 +96,7 @@ The current Linux-like syscall surface is:
 | 50 | `listen` | TCP listen. |
 | 51 | `getsockname` | Socket local address. |
 | 52 | `getpeername` | Socket peer address. |
+| 56 | `clone` | Supports the fork-equivalent `flags == SIGCHLD` form; thread/TLS forms return `EINVAL`. |
 | 57 | `fork` | Copy-on-write user address-space clone. |
 | 59 | `execve` | Replaces image, preserves descriptors, and supports `#!` interpreter scripts. |
 | 60 | `exit` | Terminates the current process. |
@@ -268,8 +269,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
   `printf`, `vprintf`.
 - Threading primitives: `gettid` and Linux-style futex constants are exposed;
   the kernel implements `FUTEX_WAIT` mismatch/timeout behavior and
-  `FUTEX_WAKE` wakeups as a first pthread-portability layer. Full clone-based
-  thread groups are not part of the ABI yet.
+  `FUTEX_WAKE` wakeups as a first pthread-portability layer. `clone` only
+  accepts the fork-equivalent `SIGCHLD` form; full clone-based thread groups are
+  not part of the ABI yet.
 
 The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
 are reused and adjacent free blocks are coalesced, but heap pages are not yet

@@ -181,6 +181,7 @@ case "$SCENARIO" in
     EXPECTS=(
       "cc_proc: pipe exec ok"
       "cc_proc: wait ok"
+      "cc_proc: clone sigchld ok"
       "cc_proc: exec vector limits ok"
       "cc_proc: exec unterminated path ok"
       "cc_proc: exec shebang limit ok"
@@ -360,6 +361,7 @@ case "$SCENARIO" in
       "TTY canonical line ready: cc_proc"
       "^cc_proc: pipe exec ok$"
       "^cc_proc: wait ok$"
+      "^cc_proc: clone sigchld ok$"
       "^cc_proc: exec vector limits ok$"
       "^cc_proc: exec unterminated path ok$"
       "^cc_proc: exec shebang limit ok$"

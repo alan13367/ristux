@@ -65,6 +65,7 @@ pub const NR_getsockname: u64 = 51;
 pub const NR_getpeername: u64 = 52;
 pub const NR_setsockopt: u64 = 54;
 pub const NR_getsockopt: u64 = 55;
+pub const NR_clone: u64 = 56;
 pub const NR_fork: u64 = 57;
 pub const NR_execve: u64 = 59;
 pub const NR_exit: u64 = 60;
@@ -315,6 +316,14 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             linux_getsockopt(a0 as usize, a1 as i32, a2 as i32, a3 as usize, a4 as usize)
         }
         NR_getppid => linux_getppid(),
+        NR_clone => linux_clone(
+            frame,
+            a0,
+            a1 as usize,
+            a2 as usize,
+            a3 as usize,
+            a4 as usize,
+        ),
         NR_fork => linux_fork(frame),
         NR_execve => linux_execve(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_exit => {
@@ -2109,6 +2118,21 @@ fn linux_reboot(magic1: u32, magic2: u32, cmd: u32) -> Result<u64, i64> {
     crate::power::reboot_syscall(magic1, magic2, cmd)
         .map(|_| 0)
         .map_err(|_| EINVAL)
+}
+
+fn linux_clone(
+    frame: &mut SyscallInterruptFrame,
+    flags: u64,
+    child_stack: usize,
+    parent_tid: usize,
+    child_tid: usize,
+    tls: usize,
+) -> Result<u64, i64> {
+    let sigchld = crate::signal::Signal::Child.number() as u64;
+    if flags != sigchld || child_stack != 0 || parent_tid != 0 || child_tid != 0 || tls != 0 {
+        return Err(EINVAL);
+    }
+    linux_fork(frame)
 }
 
 fn linux_fork(frame: &mut SyscallInterruptFrame) -> Result<u64, i64> {

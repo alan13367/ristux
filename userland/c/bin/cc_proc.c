@@ -1,8 +1,10 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -541,6 +543,43 @@ static int check_exec_wx_segment(void) {
     return 0;
 }
 
+static int check_clone_sigchld(void) {
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD | 0x100, 0, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_proc: clone flags failed");
+        return 1;
+    }
+
+    int child_stack_word = 0;
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD, (long)&child_stack_word, 0, 0, 0, 0) != -1 ||
+        errno != EINVAL) {
+        puts("cc_proc: clone stack failed");
+        return 1;
+    }
+
+    errno = 0;
+    long cloned = syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0, 0);
+    if (cloned < 0) {
+        puts("cc_proc: clone sigchld failed");
+        return 1;
+    }
+    if (cloned == 0) {
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid((pid_t)cloned, &status, 0) != (pid_t)cloned ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        puts("cc_proc: clone wait failed");
+        return 1;
+    }
+
+    puts("cc_proc: clone sigchld ok");
+    return 0;
+}
+
 int main(void) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -589,6 +628,9 @@ int main(void) {
 
     puts("cc_proc: pipe exec ok");
     puts("cc_proc: wait ok");
+    if (check_clone_sigchld() != 0) {
+        return 1;
+    }
     if (check_exec_vector_limits() != 0) {
         return 1;
     }
