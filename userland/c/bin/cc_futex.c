@@ -77,6 +77,81 @@ static int check_wake_empty(void) {
     return 0;
 }
 
+static int check_pointer_validation(void) {
+    int futex_word = 1;
+    errno = 0;
+    if (futex_call((int *)((char *)&futex_word + 1), FUTEX_WAIT, 1, NULL) != -1 ||
+        errno != EINVAL) {
+        puts("cc_futex: unaligned wait failed");
+        return 1;
+    }
+    errno = 0;
+    if (futex_call((int *)((char *)&futex_word + 1), FUTEX_WAKE, 1, NULL) != -1 ||
+        errno != EINVAL) {
+        puts("cc_futex: unaligned wake failed");
+        return 1;
+    }
+    errno = 0;
+    if (futex_call((int *)(~0UL - 3UL), FUTEX_WAIT, 0, NULL) != -1 || errno != EFAULT) {
+        puts("cc_futex: unmapped wait failed");
+        return 1;
+    }
+    errno = 0;
+    if (futex_call((int *)(~0UL - 3UL), FUTEX_WAKE, 1, NULL) != -1 || errno != EFAULT) {
+        puts("cc_futex: unmapped wake failed");
+        return 1;
+    }
+
+    int *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("cc_futex: pointer mmap failed errno=%d\n", errno);
+        return 1;
+    }
+    *page = 4;
+    if (mprotect(page, 4096, PROT_NONE) < 0) {
+        printf("cc_futex: pointer protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (futex_call(page, FUTEX_WAIT, 4, NULL) != -1 || errno != EFAULT) {
+        puts("cc_futex: prot none wait failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (futex_call(page, FUTEX_WAKE, 1, NULL) != -1 || errno != EFAULT) {
+        puts("cc_futex: prot none wake failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    if (mprotect(page, 4096, PROT_READ) < 0) {
+        printf("cc_futex: pointer read protect failed errno=%d\n", errno);
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (futex_call(page, FUTEX_WAIT, 5, NULL) != -1 || errno != EAGAIN) {
+        puts("cc_futex: readonly wait failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    errno = 0;
+    if (futex_call(page, FUTEX_WAKE, 1, NULL) != 0) {
+        puts("cc_futex: readonly wake failed");
+        munmap(page, 4096);
+        return 1;
+    }
+    if (munmap(page, 4096) < 0) {
+        puts("cc_futex: pointer munmap failed");
+        return 1;
+    }
+
+    puts("cc_futex: pointer validation ok");
+    return 0;
+}
+
 static int check_wake_waiter(void) {
     const char *path = "/tmp/cc_futex_waiter.bin";
     unlink(path);
@@ -553,6 +628,7 @@ int main(void) {
         check_wait_timeout() != 0 ||
         check_wait_timeout_overflow() != 0 ||
         check_wake_empty() != 0 ||
+        check_pointer_validation() != 0 ||
         check_wake_waiter() != 0 ||
         check_value_change_without_wake() != 0 ||
         check_wait_interrupted_by_signal() != 0 ||

@@ -1329,6 +1329,7 @@ fn linux_futex(
             if val < 0 {
                 return Err(EINVAL);
             }
+            let _ = read_user_u32(uaddr)?;
             let key = futex_wait_key(uaddr, private);
             Ok(process::wake_timed_waiters(key, val as usize) as u64)
         }
