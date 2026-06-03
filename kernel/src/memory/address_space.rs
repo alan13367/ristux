@@ -817,6 +817,7 @@ pub fn self_test() {
         .protect_user_range(VIRT, FRAME_SIZE, UserProtection::ReadWrite)
         .expect("address space writable protection restore failed");
     assert_user_page_nx(&space_a, VIRT, true, "restored writable page");
+    assert_cow_refcount_overflow_is_atomic(&space_a, VIRT);
     assert_user_mapping_bounds(&mut space_a);
     assert_parent_cow_restore(&space_a, VIRT);
     assert_mprotect_metadata_failure_is_atomic(&mut space_a);
@@ -858,6 +859,42 @@ fn assert_user_mapping_bounds(space: &mut AddressSpace) {
     if space.map_zero_page(USER_MAPPING_END).is_ok() {
         panic!("address space user mapping upper bound self-test failed");
     }
+}
+
+fn assert_cow_refcount_overflow_is_atomic(space: &AddressSpace, page: usize) {
+    let frame = space
+        .user_mappings
+        .iter()
+        .find(|(virt, _)| *virt == page)
+        .map(|(_, frame)| *frame)
+        .unwrap_or_else(|| panic!("address space COW overflow self-test missing page"));
+    let pte = unsafe { paging::get_pte_mut(space.p4, page) }
+        .unwrap_or_else(|| panic!("address space COW overflow self-test missing PTE"));
+    let original_flags = *pte & !paging::ADDR_MASK;
+    let original_refcount = super::refcount::get(frame.start);
+
+    super::refcount::set(frame.start, u16::MAX);
+    let result = space.clone_full_copy();
+    super::refcount::set(frame.start, original_refcount);
+
+    match result {
+        Err(PagingError::RefcountOverflow) => {}
+        Err(err) => panic!(
+            "address space COW overflow self-test returned unexpected error: {}",
+            err
+        ),
+        Ok(clone) => {
+            clone.destroy();
+            panic!("address space COW overflow self-test unexpectedly cloned");
+        }
+    }
+
+    let pte = unsafe { paging::get_pte_mut(space.p4, page) }
+        .unwrap_or_else(|| panic!("address space COW overflow self-test lost PTE"));
+    if *pte & !paging::ADDR_MASK != original_flags {
+        panic!("address space COW overflow self-test changed parent flags");
+    }
+    assert_user_page_writable(space, page, true, "COW overflow parent page");
 }
 
 fn assert_mprotect_metadata_failure_is_atomic(space: &mut AddressSpace) {
