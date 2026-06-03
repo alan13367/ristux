@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <linux/futex.h>
+#include <limits.h>
 #include <stdio.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -41,6 +42,18 @@ static int check_wait_timeout(void) {
     return 0;
 }
 
+static int check_wait_timeout_overflow(void) {
+    int futex_word = 12;
+    struct timespec timeout = { LONG_MAX, 0 };
+    errno = 0;
+    if (futex_call(&futex_word, FUTEX_WAIT, 12, &timeout) != -1 || errno != EINVAL) {
+        puts("cc_futex: timeout overflow failed");
+        return 1;
+    }
+    puts("cc_futex: timeout overflow ok");
+    return 0;
+}
+
 static int check_wake(void) {
     int futex_word = 1;
     errno = 0;
@@ -63,12 +76,25 @@ static int check_nanosleep_invalid(void) {
     return 0;
 }
 
+static int check_nanosleep_overflow(void) {
+    struct timespec req = { LONG_MAX, 0 };
+    errno = 0;
+    if (nanosleep(&req, NULL) != -1 || errno != EINVAL) {
+        puts("cc_futex: nanosleep overflow failed");
+        return 1;
+    }
+    puts("cc_futex: nanosleep overflow ok");
+    return 0;
+}
+
 int main(void) {
     if (check_gettid() != 0 ||
         check_wait_mismatch() != 0 ||
         check_wait_timeout() != 0 ||
+        check_wait_timeout_overflow() != 0 ||
         check_wake() != 0 ||
-        check_nanosleep_invalid() != 0) {
+        check_nanosleep_invalid() != 0 ||
+        check_nanosleep_overflow() != 0) {
         return 1;
     }
     puts("cc_futex: done");

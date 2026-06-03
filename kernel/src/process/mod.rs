@@ -57,6 +57,12 @@ struct TimedWait {
     deadline_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimedWaitError {
+    NoCurrentProcess,
+    DeadlineOverflow,
+}
+
 #[derive(Clone, Copy)]
 struct SharedMapping {
     addr: usize,
@@ -596,15 +602,22 @@ impl Process {
         }
     }
 
-    fn timed_wait_deadline(&mut self, key: u64, timeout_ms: u64, now_ms: u64) -> u64 {
+    fn timed_wait_deadline(
+        &mut self,
+        key: u64,
+        timeout_ms: u64,
+        now_ms: u64,
+    ) -> Result<u64, TimedWaitError> {
         if let Some(wait) = self.timed_wait {
             if wait.key == key {
-                return wait.deadline_ms;
+                return Ok(wait.deadline_ms);
             }
         }
-        let deadline_ms = now_ms.saturating_add(timeout_ms);
+        let deadline_ms = now_ms
+            .checked_add(timeout_ms)
+            .ok_or(TimedWaitError::DeadlineOverflow)?;
         self.timed_wait = Some(TimedWait { key, deadline_ms });
-        deadline_ms
+        Ok(deadline_ms)
     }
 
     fn clear_timed_wait(&mut self, key: u64) {
@@ -2426,8 +2439,9 @@ pub fn user_close_socket_handle(handle: usize) -> Result<(), ()> {
     crate::net::socket::with_sockets(|table| table.close(handle)).map_err(|_| ())
 }
 
-pub fn timed_wait_deadline(key: u64, timeout_ms: u64, now_ms: u64) -> Option<u64> {
+pub fn timed_wait_deadline(key: u64, timeout_ms: u64, now_ms: u64) -> Result<u64, TimedWaitError> {
     with_current(|p| p.timed_wait_deadline(key, timeout_ms, now_ms))
+        .unwrap_or(Err(TimedWaitError::NoCurrentProcess))
 }
 
 pub fn clear_timed_wait(key: u64) {

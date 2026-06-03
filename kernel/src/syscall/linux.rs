@@ -1047,7 +1047,7 @@ fn linux_poll(
     };
     let deadline_ms = if let Some(key) = wait_key {
         let now_ms = crate::time::uptime_millis();
-        Some(process::timed_wait_deadline(key, timeout_ms as u64, now_ms).ok_or(ESRCH)?)
+        Some(timed_wait_deadline_errno(key, timeout_ms as u64, now_ms)?)
     } else {
         None
     };
@@ -1153,6 +1153,13 @@ fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
     nr.rotate_left(48) ^ (a0 as u64).rotate_left(17) ^ (a1 as u64).rotate_left(7) ^ a2 as u64
 }
 
+fn timed_wait_deadline_errno(key: u64, timeout_ms: u64, now_ms: u64) -> Result<u64, i64> {
+    process::timed_wait_deadline(key, timeout_ms, now_ms).map_err(|err| match err {
+        process::TimedWaitError::NoCurrentProcess => ESRCH,
+        process::TimedWaitError::DeadlineOverflow => EINVAL,
+    })
+}
+
 fn block_for_io(frame: &mut SyscallInterruptFrame, deadline_ms: Option<u64>) -> Result<(), i64> {
     match deadline_ms {
         Some(deadline_ms) => process::block_current(process::BlockReason::WaitIoUntil(deadline_ms)),
@@ -1211,11 +1218,11 @@ fn linux_futex_wait(
 
         let now_ms = crate::time::uptime_millis();
         let deadline_ms = if timeout == 0 {
-            let _ = process::timed_wait_deadline(key, u64::MAX / 4, now_ms).ok_or(ESRCH)?;
+            let _ = timed_wait_deadline_errno(key, u64::MAX / 4, now_ms)?;
             None
         } else {
             let timeout_ms = read_timespec_millis(timeout)?;
-            Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+            Some(timed_wait_deadline_errno(key, timeout_ms, now_ms)?)
         };
         if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
             process::clear_timed_wait(key);
@@ -1239,9 +1246,9 @@ fn read_timespec_millis(addr: usize) -> Result<u64, i64> {
     if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
         return Err(EINVAL);
     }
-    let sec_ms = (sec as u64).saturating_mul(1000);
-    let nsec_ms = ((nsec as u64).saturating_add(999_999)) / 1_000_000;
-    Ok(sec_ms.saturating_add(nsec_ms))
+    let sec_ms = (sec as u64).checked_mul(1000).ok_or(EINVAL)?;
+    let nsec_ms = ((nsec as u64) + 999_999) / 1_000_000;
+    sec_ms.checked_add(nsec_ms).ok_or(EINVAL)
 }
 
 const SELECT_FD_SETSIZE: usize = 4096;
@@ -1286,7 +1293,7 @@ fn linux_select(
     };
     let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
         let now_ms = crate::time::uptime_millis();
-        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+        Some(timed_wait_deadline_errno(key, timeout_ms, now_ms)?)
     } else {
         None
     };
@@ -1579,7 +1586,7 @@ fn linux_accept(
         timeout_ms.map(|timeout_ms| timed_wait_key(NR_accept, fd, handle, timeout_ms as usize));
     let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
         let now_ms = crate::time::uptime_millis();
-        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+        Some(timed_wait_deadline_errno(key, timeout_ms, now_ms)?)
     } else {
         None
     };
@@ -1671,7 +1678,7 @@ fn linux_recvfrom(
         timeout_ms.map(|timeout_ms| timed_wait_key(NR_recvfrom, fd, handle, timeout_ms as usize));
     let deadline_ms = if let (Some(key), Some(timeout_ms)) = (wait_key, timeout_ms) {
         let now_ms = crate::time::uptime_millis();
-        Some(process::timed_wait_deadline(key, timeout_ms, now_ms).ok_or(ESRCH)?)
+        Some(timed_wait_deadline_errno(key, timeout_ms, now_ms)?)
     } else {
         None
     };
@@ -2867,10 +2874,16 @@ fn linux_nanosleep(req: usize, rem: usize) -> Result<u64, i64> {
         return Err(EINVAL);
     }
     let hz = crate::config::PIT_TARGET_HZ as u64;
-    let sec_ticks = (sec as u64).saturating_mul(hz);
-    let nsec_ticks = ((nsec as u64).saturating_mul(hz) + 999_999_999) / 1_000_000_000;
-    let sleep_ticks = sec_ticks.saturating_add(nsec_ticks);
-    let target = crate::time::monotonic_ticks().saturating_add(sleep_ticks);
+    let sec_ticks = (sec as u64).checked_mul(hz).ok_or(EINVAL)?;
+    let nsec_ticks = (nsec as u64)
+        .checked_mul(hz)
+        .and_then(|ticks| ticks.checked_add(999_999_999))
+        .map(|ticks| ticks / 1_000_000_000)
+        .ok_or(EINVAL)?;
+    let sleep_ticks = sec_ticks.checked_add(nsec_ticks).ok_or(EINVAL)?;
+    let target = crate::time::monotonic_ticks()
+        .checked_add(sleep_ticks)
+        .ok_or(EINVAL)?;
     while crate::time::monotonic_ticks() < target {
         core::hint::spin_loop();
     }
