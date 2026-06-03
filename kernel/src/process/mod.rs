@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
+        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -88,6 +88,11 @@ impl SharedMappingDiscard {
             let _ = fs::close(fragment.vfs_fd);
         }
     }
+}
+
+fn shared_mapping_overlaps(mapping: &SharedMapping, addr: usize, range_end: usize) -> bool {
+    let mapping_end = mapping.addr.saturating_add(mapping.len);
+    cmp::max(addr, mapping.addr) < cmp::min(range_end, mapping_end)
 }
 
 struct WakeList {
@@ -1000,6 +1005,37 @@ impl Process {
             written += count;
         }
         Ok(())
+    }
+
+    fn validate_shared_mprotect_write(
+        &self,
+        addr: usize,
+        len: usize,
+    ) -> Result<(), SharedMappingError> {
+        let range_end = addr
+            .checked_add(len)
+            .ok_or(SharedMappingError::InvalidRange)?;
+        for mapping in &self.shared_mappings {
+            if !shared_mapping_overlaps(mapping, addr, range_end) || mapping.writable {
+                continue;
+            }
+            let rights = fs::fd_rights(mapping.vfs_fd).map_err(SharedMappingError::Vfs)?;
+            if !rights.write {
+                return Err(SharedMappingError::Vfs(fs::vfs::VfsError::PermissionDenied));
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_shared_mappings_writable(&mut self, addr: usize, len: usize) {
+        let Some(range_end) = addr.checked_add(len) else {
+            return;
+        };
+        for mapping in &mut self.shared_mappings {
+            if shared_mapping_overlaps(mapping, addr, range_end) {
+                mapping.writable = true;
+            }
+        }
     }
 
     fn prepare_shared_mappings_discard(
@@ -3752,9 +3788,17 @@ pub fn msync(addr: usize, len: usize) -> Result<(), MmapError> {
 
 pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(), MmapError> {
     with_current(|p| {
+        if protection.allows_write() {
+            p.validate_shared_mprotect_write(addr, len)
+                .map_err(map_shared_mapping_mmap_error)?;
+        }
         p.address_space
             .protect_user_range(addr, len, protection)
-            .map_err(map_paging_mmap_error)
+            .map_err(map_paging_mmap_error)?;
+        if protection.allows_write() {
+            p.mark_shared_mappings_writable(addr, len);
+        }
+        Ok(())
     })
     .ok_or(MmapError::Invalid)?
 }

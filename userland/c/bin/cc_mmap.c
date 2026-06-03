@@ -346,6 +346,85 @@ static int check_fixed_file_failure_preserves_mapping(void) {
     return 0;
 }
 
+static int check_shared_mprotect_rights(void) {
+    const char *path = "/tmp/cc_mmap_shared_mprotect.txt";
+    const char *initial = "shared mprotect initial";
+    const char *changed = "shared mprotect changed";
+
+    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (fd < 0) {
+        puts("cc_mmap: shared mprotect create failed");
+        return 1;
+    }
+    if (write(fd, initial, strlen(initial)) != (ssize_t)strlen(initial)) {
+        close(fd);
+        puts("cc_mmap: shared mprotect write failed");
+        return 1;
+    }
+    close(fd);
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared mprotect readonly open failed");
+        return 1;
+    }
+    char *readonly = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (readonly == MAP_FAILED) {
+        printf("cc_mmap: shared mprotect readonly mmap errno=%d\n", errno);
+        return 1;
+    }
+    errno = 0;
+    if (mprotect(readonly, 4096, PROT_READ | PROT_WRITE) != -1 ||
+        errno != EACCES) {
+        printf("cc_mmap: shared mprotect readonly errno=%d\n", errno);
+        munmap(readonly, 4096);
+        return 1;
+    }
+    if (munmap(readonly, 4096) < 0) {
+        puts("cc_mmap: shared mprotect readonly munmap failed");
+        return 1;
+    }
+
+    fd = open(path, O_RDWR, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared mprotect rdwr open failed");
+        return 1;
+    }
+    char *writable = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (writable == MAP_FAILED) {
+        printf("cc_mmap: shared mprotect rdwr mmap errno=%d\n", errno);
+        return 1;
+    }
+    if (mprotect(writable, 4096, PROT_READ | PROT_WRITE) < 0) {
+        printf("cc_mmap: shared mprotect rdwr protect errno=%d\n", errno);
+        munmap(writable, 4096);
+        return 1;
+    }
+    memcpy(writable, changed, strlen(changed));
+    if (munmap(writable, 4096) < 0) {
+        puts("cc_mmap: shared mprotect rdwr munmap failed");
+        return 1;
+    }
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        puts("cc_mmap: shared mprotect verify open failed");
+        return 1;
+    }
+    char buf[64];
+    int nread = read(fd, buf, sizeof(buf));
+    close(fd);
+    if (nread < (int)strlen(changed) || memcmp(buf, changed, strlen(changed)) != 0) {
+        puts("cc_mmap: shared mprotect contents failed");
+        return 1;
+    }
+
+    puts("cc_mmap: shared mprotect ok");
+    return 0;
+}
+
 int main(void) {
     if (check_brk_shrink() != 0) {
         return 1;
@@ -521,6 +600,9 @@ int main(void) {
         return 1;
     }
     if (check_fixed_file_failure_preserves_mapping() != 0) {
+        return 1;
+    }
+    if (check_shared_mprotect_rights() != 0) {
         return 1;
     }
 
