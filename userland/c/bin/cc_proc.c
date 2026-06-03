@@ -10,7 +10,14 @@
 #include <unistd.h>
 
 #define CLONE_VM 0x00000100UL
+#define CLONE_FS 0x00000200UL
+#define CLONE_FILES 0x00000400UL
+#define CLONE_SIGHAND 0x00000800UL
+#define CLONE_THREAD 0x00010000UL
 #define CLONE_SETTLS 0x00080000UL
+#define CLONE_PARENT_SETTID 0x00100000UL
+#define CLONE_CHILD_CLEARTID 0x00200000UL
+#define CLONE_CHILD_SETTID 0x01000000UL
 #define TLS_SENTINEL 0x1122334455667788UL
 
 static const char elf_rodata_probe[] = "rodata-permission-probe";
@@ -813,9 +820,30 @@ static int check_exec_wx_segment(void) {
 
 static int check_clone_sigchld(void) {
     errno = 0;
-    if (syscall(SYS_clone, SIGCHLD | CLONE_VM, 0, 0, 0, 0, 0) != -1 ||
-        errno != EINVAL) {
-        puts("cc_proc: clone flags failed");
+    unsigned long shared_flags[] = {
+        CLONE_VM,
+        CLONE_FS,
+        CLONE_FILES,
+        CLONE_SIGHAND,
+        CLONE_THREAD,
+        CLONE_VM | CLONE_THREAD | CLONE_SIGHAND,
+        CLONE_PARENT_SETTID,
+        CLONE_CHILD_CLEARTID,
+        CLONE_CHILD_SETTID,
+    };
+    for (size_t i = 0; i < sizeof(shared_flags) / sizeof(shared_flags[0]); i++) {
+        errno = 0;
+        if (syscall(SYS_clone, SIGCHLD | shared_flags[i], 0, 0, 0, 0, 0) != -1 ||
+            errno != EINVAL) {
+            puts("cc_proc: clone flags failed");
+            return 1;
+        }
+    }
+
+    errno = 0;
+    if (syscall(SYS_clone, SIGCHLD | CLONE_SETTLS, 0, 0, 0, 0x70000000L, 0) != -1 ||
+        errno != EFAULT) {
+        puts("cc_proc: clone tls fault failed");
         return 1;
     }
 

@@ -39,6 +39,24 @@ null pointer. `envp` is a null-terminated pointer array. The C runtime stores
 File descriptors `0`, `1`, and `2` are initialized for interactive processes.
 Descriptors are inherited across `fork` and preserved across `execve`.
 
+## Scheduling and Threads
+
+User processes are preempted by timer interrupts and may also yield explicitly
+with `sched_yield`. For now, userspace dispatch is intentionally constrained to
+the bootstrap CPU; application processors run kernel idle/IPI paths only. Kernel
+self-tests assert this contract by requiring one userspace CPU and zero
+non-bootstrap userspace dispatches.
+
+`clone` supports process-style children, not Linux thread groups. The accepted
+forms are `flags == SIGCHLD` and `flags == SIGCHLD | CLONE_SETTLS`; the latter
+sets the child's x86_64 FS base before it runs and is intended as TLS groundwork
+for future pthread support. `child_stack` is validated as a userspace stack top
+when supplied, but the in-tree libc only exposes the raw syscall wrapper and
+does not yet provide a pthread stack trampoline. Shared address-space and
+thread-group flags such as `CLONE_VM`, `CLONE_THREAD`, `CLONE_SIGHAND`,
+`CLONE_FS`, `CLONE_FILES`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, and
+`CLONE_CHILD_CLEARTID` return `EINVAL`.
+
 ## Syscall ABI
 
 Ristux follows Linux x86_64 syscall register assignment:
@@ -96,7 +114,7 @@ The current Linux-like syscall surface is:
 | 50 | `listen` | TCP listen. |
 | 51 | `getsockname` | Socket local address. |
 | 52 | `getpeername` | Socket peer address. |
-| 56 | `clone` | Supports the fork-equivalent `flags == SIGCHLD` form; thread/TLS forms return `EINVAL`. |
+| 56 | `clone` | Supports process-style `SIGCHLD` clones and `SIGCHLD | CLONE_SETTLS` FS-base setup; shared thread-group flags return `EINVAL`. |
 | 57 | `fork` | Copy-on-write user address-space clone. |
 | 59 | `execve` | Replaces image, preserves descriptors, and supports `#!` interpreter scripts. |
 | 60 | `exit` | Terminates the current process. |
@@ -270,8 +288,9 @@ The in-tree libc currently exposes the Phase E smoke-test surface:
 - Threading primitives: `gettid` and Linux-style futex constants are exposed;
   the kernel implements `FUTEX_WAIT` mismatch, timeout, and signal interruption
   behavior plus `FUTEX_WAKE` wakeups as a first pthread-portability layer.
-  `clone` only accepts the fork-equivalent `SIGCHLD` form; full clone-based
-  thread groups are not part of the ABI yet.
+  `clone` accepts process-style `SIGCHLD` children and `CLONE_SETTLS` FS-base
+  setup, but full clone-based thread groups and shared address spaces are not
+  part of the ABI yet.
 
 The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
 are reused and adjacent free blocks are coalesced, but heap pages are not yet
