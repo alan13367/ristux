@@ -269,8 +269,10 @@ toolchain bootstrap:
   `:w`, `:q`, `:q!`, and `:wq` on the bottom command line.
 - Build tools: `/bin/rustc`, `/bin/cargo`, `/bin/rustdoc`, and
   `/bin/ristux-ld` are present in the default image as the Rust Stable 1.96.0
-  toolchain package surface. The current binaries expose version, sysroot,
-  target, Cargo/Rustdoc, and package integration metadata. The canonical
+  toolchain package surface. `/bin/rustc` is the official stage2
+  Ristux-hosted compiler copied from the no-LLVM/no-LLD bootstrap output at
+  `build/official-rust/bin/rustc`; Cargo and Rustdoc remain bootstrap package
+  frontends while their no-C native builds are completed. The canonical
   `x86_64-unknown-ristux` target declares `target_os = "ristux"` and
   `target_family = "unix"` so upstream Rust `std` selects the Unix host
   module family while the Ristux-owned port fills the OS-specific pieces. The
@@ -313,8 +315,11 @@ toolchain bootstrap:
   `make rust-official-bootstrap-stage2` then prebuilds that stage1 boundary,
   builds a host-runnable pure Rust `ristux-ld`, patches the temporary official
   compiler so `rustc-main` links Cranelift statically, skips dynamic backend
-  component installation, and runs the real stage2 Ristux-hosted Cargo
-  bootstrap path. That probe now gets past the previous `rustc_driver`
+  component installation, and builds the real stage2 Ristux-hosted `rustc`.
+  `make rust-official-rustc` copies that compiler into
+  `build/official-rust/bin/rustc`, and the default rootfs and installer use it
+  as `/bin/rustc`. The same probe then runs the real stage2 Ristux-hosted
+  Cargo bootstrap path. That path now gets past the previous `rustc_driver`
   dylib-output and Cranelift component-format blockers and reaches Cargo
   C-backed dependency blockers: `curl-sys`, `libgit2-sys`, `libssh2-sys`, and
   `libz-sys` still enter the build and try to compile C for Ristux. These need
@@ -335,8 +340,9 @@ toolchain bootstrap:
   (`--as-needed`, `-Bstatic`, `-Bdynamic`, `--eh-frame-hdr`, `-z noexecstack`,
   `-L`, and `--gc-sections`); duplicate weak symbols are tolerated with the
   usual strong-symbol preference. Full native Rust program builds still require
-  completing the stage2 Ristux-hosted `rustc` package and making Cargo's
-  transport and package database graph build without C-backed artifacts.
+  boot-verifying the installed stage2 compiler against the packaged
+  sysroot/linker and making Cargo's transport and package database graph build
+  without C-backed artifacts.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

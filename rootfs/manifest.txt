@@ -95,7 +95,7 @@ file /bin/ristux-ld ../build/userland/ristux_ld.elf
 file /bin/rust_host_probe ../build/userland/rust_host_probe.elf
 file /bin/rust_std_probe ../build/userland/rust_std_probe.elf
 file /bin/rm ../build/userland/rm.elf
-file /bin/rustc ../build/userland/rustc.elf
+file /bin/rustc ../build/official-rust/bin/rustc
 file /bin/rustdoc ../build/userland/rustdoc.elf
 file /bin/sed ../build/userland/sed.elf
 file /bin/seq ../build/userland/seq.elf

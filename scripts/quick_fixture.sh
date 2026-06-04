@@ -916,7 +916,7 @@ case "$SCENARIO" in
       "pkg info rust-ristux-overlays"
     )
     EXPECTS=(
-      "^rustc 1\\.96\\.0 (ristux official-bootstrap stage0)$"
+      "^rustc 1\\.96\\.0"
       "^x86_64-unknown-ristux$"
       "^/usr$"
       "^/usr/lib/rustlib/x86_64-unknown-ristux/lib$"

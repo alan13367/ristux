@@ -8,6 +8,7 @@ PROBE_DIR="${RISTUX_RUST_BOOTSTRAP_STAGE2_DIR:-${RISTUX_RUST_TARGET_PROBE_DIR:-/
 LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_LOG:-$PROBE_DIR/bootstrap-stage2-build.log}"
 RUSTC_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_RUSTC_LOG:-$PROBE_DIR/bootstrap-stage2-rustc-build.log}"
 STAGE1_CODEGEN_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_CODEGEN_LOG:-$PROBE_DIR/bootstrap-stage1-codegen.log}"
+RUSTC_OUTPUT="${RISTUX_RUSTC_OUTPUT:-}"
 HOST_RISTUX_LD_DIR="$PROBE_DIR/host-tools"
 RUSTC_HOST="${RISTUX_HOST_RUSTC:-rustc +nightly}"
 CARGO_STAGE0="${RISTUX_STAGE0_CARGO:-cargo +1.96.0}"
@@ -836,11 +837,16 @@ if [[ $rustc_status -eq 0 ]]; then
   rustc_bins=()
   while IFS= read -r rustc_bin; do
     rustc_bins+=("$rustc_bin")
-  done < <(find "$PROBE_DIR/bootstrap-build" -type f -path '*/x86_64-unknown-ristux/stage2/bin/rustc' -print)
+  done < <(find "$PROBE_DIR/bootstrap-build" -type f -path '*/x86_64-unknown-ristux/stage2/bin/rustc' -print | sort)
   if [[ ${#rustc_bins[@]} -eq 0 ]]; then
     echo "official Rust $RUST_VERSION stage2 Ristux rustc build succeeded but did not produce expected rustc binary" >&2
     echo "log: $RUSTC_LOG" >&2
     exit 1
+  fi
+  if [[ -n "$RUSTC_OUTPUT" ]]; then
+    mkdir -p "$(dirname "$RUSTC_OUTPUT")"
+    cp "${rustc_bins[0]}" "$RUSTC_OUTPUT"
+    chmod 755 "$RUSTC_OUTPUT"
   fi
 else
   if grep -q 'cannot produce dylib for `rustc_driver' "$RUSTC_LOG"; then

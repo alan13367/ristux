@@ -8,7 +8,7 @@ use std::{
 mod package_archive;
 
 const BLOCK_SIZE: usize = 1024;
-const DISK_SIZE: usize = 1024 * 1024 * 1024;
+const DISK_SIZE: usize = 2 * 1024 * 1024 * 1024;
 const BLOCKS_COUNT: u32 = (DISK_SIZE / BLOCK_SIZE) as u32;
 const BLOCKS_PER_GROUP: u32 = 8192;
 const INODES_PER_GROUP: u32 = 512;
@@ -89,6 +89,7 @@ impl Entry {
 struct Builder {
     image: Vec<u8>,
     entries: BTreeMap<String, Entry>,
+    children: BTreeMap<String, Vec<String>>,
     block_used: Vec<bool>,
     inode_used: Vec<bool>,
     next_free_block: usize,
@@ -107,6 +108,7 @@ impl Builder {
         let mut builder = Self {
             image: vec![0; DISK_SIZE],
             entries: BTreeMap::new(),
+            children: BTreeMap::new(),
             block_used: vec![false; BLOCKS_COUNT as usize],
             inode_used: vec![false; INODES_COUNT as usize],
             next_free_block: 0,
@@ -196,21 +198,30 @@ impl Builder {
         }
     }
 
+    fn rebuild_children(&mut self) {
+        self.children.clear();
+        for path in self.entries.keys() {
+            if path == "/" {
+                continue;
+            }
+            self.children
+                .entry(parent_path(path))
+                .or_insert_with(Vec::new)
+                .push(path.clone());
+        }
+    }
+
     fn allocate_payload_blocks(&mut self) {
         let paths = self.entries.keys().cloned().collect::<Vec<_>>();
         for path in paths {
             let kind = self.entries[&path].kind;
-            let data = if kind == EntryKind::Directory {
-                self.directory_payload(&path)
+            let mut directory_data = Vec::new();
+            let mut blocks = if kind == EntryKind::Directory {
+                directory_data = self.directory_payload(&path);
+                self.allocate_data_blocks(&directory_data)
             } else {
-                self.entries[&path].data.clone()
+                self.allocate_file_blocks(&path)
             };
-            let mut blocks = Vec::new();
-            for chunk in data.chunks(BLOCK_SIZE) {
-                let block = self.alloc_block();
-                self.write_block_prefix(block, chunk);
-                blocks.push(block);
-            }
             if blocks.is_empty() {
                 let block = self.alloc_block();
                 blocks.push(block);
@@ -293,13 +304,43 @@ impl Builder {
             };
             let entry = self.entries.get_mut(&path).expect("entry vanished");
             if kind == EntryKind::Directory {
-                entry.data = data;
+                entry.data = directory_data;
             }
             entry.data_blocks = blocks;
             entry.indirect_block = indirect;
             entry.double_indirect_block = double_indirect;
             entry.triple_indirect_block = triple_indirect;
         }
+    }
+
+    fn allocate_data_blocks(&mut self, data: &[u8]) -> Vec<u32> {
+        let mut blocks = Vec::new();
+        for chunk in data.chunks(BLOCK_SIZE) {
+            let block = self.alloc_block();
+            self.write_block_prefix(block, chunk);
+            blocks.push(block);
+        }
+        blocks
+    }
+
+    fn allocate_file_blocks(&mut self, path: &str) -> Vec<u32> {
+        let data_len = self.entries[path].data.len();
+        let mut blocks = Vec::new();
+        let mut offset = 0usize;
+        while offset < data_len {
+            let end = (offset + BLOCK_SIZE).min(data_len);
+            let chunk_len = end - offset;
+            let mut chunk = [0u8; BLOCK_SIZE];
+            {
+                let data = &self.entries[path].data;
+                chunk[..chunk_len].copy_from_slice(&data[offset..end]);
+            }
+            let block = self.alloc_block();
+            self.write_block_prefix(block, &chunk[..chunk_len]);
+            blocks.push(block);
+            offset = end;
+        }
+        blocks
     }
 
     fn directory_payload(&self, path: &str) -> Vec<u8> {
@@ -313,11 +354,9 @@ impl Builder {
         records.push((self_inode, String::from("."), EntryKind::Directory));
         records.push((parent_inode, String::from(".."), EntryKind::Directory));
 
-        for (child_path, child) in &self.entries {
-            if child_path == path || child_path == "/" {
-                continue;
-            }
-            if parent_path(child_path) == path {
+        if let Some(children) = self.children.get(path) {
+            for child_path in children {
+                let child = self.entries.get(child_path).expect("child entry missing");
                 records.push((child.inode, file_name(child_path), child.kind));
             }
         }
@@ -365,11 +404,7 @@ impl Builder {
     }
 
     fn alloc_block(&mut self) -> u32 {
-        while self
-            .block_used
-            .get(self.next_free_block)
-            .copied()
-            .unwrap_or(true)
+        while self.next_free_block < self.block_used.len() && self.block_used[self.next_free_block]
         {
             self.next_free_block += 1;
         }
@@ -545,19 +580,25 @@ impl Builder {
     }
 
     fn immediate_subdir_count(&self, path: &str) -> usize {
-        self.entries
-            .iter()
-            .filter(|(child_path, child)| {
-                child.kind == EntryKind::Directory
-                    && child_path.as_str() != path
-                    && child_path.as_str() != "/"
-                    && parent_path(child_path) == path
+        self.children
+            .get(path)
+            .map(|children| {
+                children
+                    .iter()
+                    .filter(|child_path| {
+                        self.entries
+                            .get(*child_path)
+                            .map(|child| child.kind == EntryKind::Directory)
+                            .unwrap_or(false)
+                    })
+                    .count()
             })
-            .count()
+            .unwrap_or(0)
     }
 
     fn finish(mut self, output: &Path) {
         self.assign_inodes();
+        self.rebuild_children();
         self.allocate_payload_blocks();
         self.write_metadata();
         if let Some(parent) = output.parent() {
@@ -596,7 +637,7 @@ fn main() {
     builder.ensure_dir("/boot/grub", 0o755, 0, 0);
 
     let mut init_data = None;
-    let mut installed_files = BTreeMap::new();
+    let mut installed_file_checksums = BTreeMap::new();
     let mut packages = Vec::new();
     for (line_index, line) in manifest.lines().enumerate() {
         let line = line.trim();
@@ -613,7 +654,7 @@ fn main() {
                 if *path == "/bin/init" {
                     init_data = Some(data.clone());
                 }
-                add_manifest_file(&mut builder, &mut installed_files, path, data);
+                add_manifest_file(&mut builder, &mut installed_file_checksums, path, data);
             }
             ["package", name, version, path, options @ ..] => {
                 let (dependencies, post_install) = parse_package_options(options);
@@ -631,7 +672,7 @@ fn main() {
                 for file in package_archive::extract_package_archive(&source, prefix) {
                     let path = file.path;
                     let data = file.data;
-                    add_manifest_file(&mut builder, &mut installed_files, &path, data);
+                    add_manifest_file(&mut builder, &mut installed_file_checksums, &path, data);
                     packages.push(PackageEntry {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
@@ -645,7 +686,7 @@ fn main() {
                 let (dependencies, post_install) = parse_package_options(options);
                 let source = manifest_dir.join(source);
                 for (path, data) in collect_tree_files(&source, prefix) {
-                    add_manifest_file(&mut builder, &mut installed_files, &path, data);
+                    add_manifest_file(&mut builder, &mut installed_file_checksums, &path, data);
                     packages.push(PackageEntry {
                         name: (*name).to_owned(),
                         version: (*version).to_owned(),
@@ -661,7 +702,7 @@ fn main() {
 
     builder.add_file(
         "/pkg/packages.txt",
-        package_index(&packages, &installed_files).into_bytes(),
+        package_index(&packages, &installed_file_checksums).into_bytes(),
         0o644,
         0,
         0,
@@ -742,12 +783,12 @@ fn main() {
 
 fn add_manifest_file(
     builder: &mut Builder,
-    installed_files: &mut BTreeMap<String, Vec<u8>>,
+    installed_file_checksums: &mut BTreeMap<String, u64>,
     path: &str,
     data: Vec<u8>,
 ) {
     let mode = manifest_file_mode(path);
-    installed_files.insert(String::from(path), data.clone());
+    installed_file_checksums.insert(String::from(path), checksum(&data));
     builder.add_file(path, data, mode, 0, 0);
 }
 
@@ -917,10 +958,10 @@ fn add_package_metadata(builder: &mut Builder, packages: &[PackageEntry]) {
     }
 }
 
-fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -> String {
+fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, u64>) -> String {
     let mut output = String::from("# name version path checksum\n");
     for package in packages {
-        let data = files.get(&package.path).unwrap_or_else(|| {
+        let checksum = files.get(&package.path).unwrap_or_else(|| {
             panic!(
                 "package {} references missing {}",
                 package.name, package.path
@@ -928,10 +969,7 @@ fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -
         });
         output.push_str(&format!(
             "{} {} {} {:016x}\n",
-            package.name,
-            package.version,
-            package.path,
-            checksum(data)
+            package.name, package.version, package.path, *checksum
         ));
     }
     output

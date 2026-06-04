@@ -1,5 +1,6 @@
 CARGO ?= cargo
 RUSTC ?= rustc
+HOST_TOOL_RUSTFLAGS ?= -O
 GRUB_FILE ?= $(shell command -v grub-file 2>/dev/null || command -v i686-elf-grub-file 2>/dev/null || command -v x86_64-elf-grub-file 2>/dev/null || printf grub-file)
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue 2>/dev/null || command -v i686-elf-grub-mkrescue 2>/dev/null || command -v x86_64-elf-grub-mkrescue 2>/dev/null || printf grub-mkrescue)
 GRUB_MKIMAGE ?= $(shell command -v grub-mkimage 2>/dev/null || command -v i686-elf-grub-mkimage 2>/dev/null || command -v x86_64-elf-grub-mkimage 2>/dev/null || printf grub-mkimage)
@@ -141,11 +142,12 @@ RUST_SYSROOT_STAMP := build/rustlib.stamp
 RUST_STD_PROBE_ELF := build/userland/rust_std_probe.elf
 RUST_STD_SYSROOT_TREE := build/rust-std-sysroot
 RUST_STD_SYSROOT_STAMP := build/rust-std-sysroot.stamp
+RUST_OFFICIAL_RUSTC := build/official-rust/bin/rustc
 RUST_OVERLAY_TREE := toolchain/rust-overlays/rust-1.96.0
 RUST_OVERLAY_INPUTS := $(shell find $(RUST_OVERLAY_TREE) -type f 2>/dev/null)
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(RUST_OFFICIAL_RUSTC) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
 
-.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% rust-std-probe rust-std-probe-current rust-std-probe-current-blocker rust-std-probe-binary rust-std-sysroot rust-official-target-probe rust-official-bootstrap-std rust-official-bootstrap-stage2 rust-official-std-probe debug test clean
+.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% rust-std-probe rust-std-probe-current rust-std-probe-current-blocker rust-std-probe-binary rust-std-sysroot rust-official-rustc rust-official-target-probe rust-official-bootstrap-std rust-official-bootstrap-stage2 rust-official-std-probe debug test clean
 
 all: build
 
@@ -181,6 +183,11 @@ $(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh targets/x86_64-unknown-rist
 
 $(RUST_STD_PROBE_ELF): $(RUST_STD_SYSROOT_STAMP)
 	@test -f $@
+
+$(RUST_OFFICIAL_RUSTC): scripts/probe_rust_bootstrap_stage2.sh scripts/probe_rust_target.sh userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS)
+	RISTUX_RUSTC_OUTPUT=$@ scripts/probe_rust_bootstrap_stage2.sh
+
+rust-official-rustc: $(RUST_OFFICIAL_RUSTC)
 
 $(USER_INIT_ELF): $(USERLAND_RS_STAMP)
 $(USER_SH_ELF): $(USERLAND_RS_STAMP)
@@ -256,21 +263,21 @@ $(USER_GZIP_ELF): $(USERLAND_RS_STAMP)
 $(USER_XZ_ELF): $(USERLAND_RS_STAMP)
 $(USER_STAT_ELF): $(USERLAND_RS_STAMP)
 
-$(ROOTFS_BUILDER): tools/build_rootfs.rs tools/package_archive.rs
+$(ROOTFS_BUILDER): tools/build_rootfs.rs tools/package_archive.rs Makefile
 	mkdir -p build
-	$(RUSTC) $< -o $@
+	$(RUSTC) $(HOST_TOOL_RUSTFLAGS) $< -o $@
 
-$(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs tools/package_archive.rs
+$(EXT2_DISK_BUILDER): tools/build_ext2_disk.rs tools/package_archive.rs Makefile
 	mkdir -p build
-	$(RUSTC) $< -o $@
+	$(RUSTC) $(HOST_TOOL_RUSTFLAGS) $< -o $@
 
-$(VM_DISK_BUILDER): tools/build_vm_disk.rs
+$(VM_DISK_BUILDER): tools/build_vm_disk.rs Makefile
 	mkdir -p build
-	$(RUSTC) $< -o $@
+	$(RUSTC) $(HOST_TOOL_RUSTFLAGS) $< -o $@
 
-$(PACKAGE_TAR_BUILDER): tools/build_package_tar.rs
+$(PACKAGE_TAR_BUILDER): tools/build_package_tar.rs Makefile
 	mkdir -p build
-	$(RUSTC) $< -o $@
+	$(RUSTC) $(HOST_TOOL_RUSTFLAGS) $< -o $@
 
 $(ROOTFS_BASE_PACKAGE_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_BASE_PACKAGE_INPUTS)
 	mkdir -p build/packages
