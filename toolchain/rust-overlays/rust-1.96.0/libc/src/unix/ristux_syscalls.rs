@@ -1,16 +1,159 @@
-use crate::{c_char, c_int, c_void, iovec, size_t, ssize_t};
+use crate::{
+    addrinfo, c_char, c_int, c_long, c_uint, c_ulong, c_void, clockid_t, dev_t, dirent, gid_t,
+    iovec, mode_t, nfds_t, off_t, pid_t, pollfd, pthread_attr_t, pthread_cond_t,
+    pthread_condattr_t, pthread_key_t, pthread_mutex_t, pthread_mutexattr_t, pthread_rwlock_t,
+    pthread_rwlockattr_t, pthread_t, rusage, sigaction as sigaction_t, sighandler_t, sigset_t,
+    size_t, ssize_t, stat as stat_t, statfs as statfs_t, timespec, timeval, uid_t, utsname,
+    Dl_info,
+};
 
 const NR_READ: usize = 0;
 const NR_WRITE: usize = 1;
+const NR_OPEN: usize = 2;
 const NR_CLOSE: usize = 3;
-const NR_EXIT: usize = 60;
-const NR_GETCWD: usize = 79;
+const NR_STAT: usize = 4;
+const NR_FSTAT: usize = 5;
+const NR_LSTAT: usize = 6;
+const NR_POLL: usize = 7;
+const NR_LSEEK: usize = 8;
+const NR_MMAP: usize = 9;
+const NR_MPROTECT: usize = 10;
+const NR_MUNMAP: usize = 11;
+const NR_RT_SIGACTION: usize = 13;
+const NR_RT_SIGPROCMASK: usize = 14;
+const NR_IOCTL: usize = 16;
+const NR_PREAD64: usize = 17;
+const NR_PWRITE64: usize = 18;
 const NR_READV: usize = 19;
 const NR_WRITEV: usize = 20;
+const NR_ACCESS: usize = 21;
+const NR_PIPE: usize = 22;
+const NR_SCHED_YIELD: usize = 24;
+const NR_MADVISE: usize = 28;
+const NR_NANOSLEEP: usize = 35;
+const NR_DUP: usize = 32;
+const NR_DUP2: usize = 33;
+const NR_GETPID: usize = 39;
+const NR_FORK: usize = 57;
+const NR_EXECVE: usize = 59;
+const NR_EXIT: usize = 60;
+const NR_WAIT4: usize = 61;
+const NR_KILL: usize = 62;
+const NR_UNAME: usize = 63;
+const NR_FCNTL: usize = 72;
+const NR_FSYNC: usize = 74;
+const NR_TRUNCATE: usize = 76;
+const NR_FTRUNCATE: usize = 77;
+const NR_GETCWD: usize = 79;
+const NR_CHDIR: usize = 80;
+const NR_RENAME: usize = 82;
+const NR_MKDIR: usize = 83;
+const NR_RMDIR: usize = 84;
+const NR_LINK: usize = 86;
+const NR_UNLINK: usize = 87;
+const NR_SYMLINK: usize = 88;
+const NR_READLINK: usize = 89;
+const NR_CHMOD: usize = 90;
+const NR_FCHMOD: usize = 91;
+const NR_CHOWN: usize = 92;
+const NR_FCHOWN: usize = 93;
+const NR_UMASK: usize = 95;
+const NR_GETTIMEOFDAY: usize = 96;
+const NR_GETUID: usize = 102;
+const NR_GETGID: usize = 104;
+const NR_SETUID: usize = 105;
+const NR_SETGID: usize = 106;
+const NR_GETEUID: usize = 107;
+const NR_GETEGID: usize = 108;
+const NR_SETPGID: usize = 109;
+const NR_GETPPID: usize = 110;
+const NR_GETPGRP: usize = 111;
+const NR_SETSID: usize = 112;
+const NR_SETGROUPS: usize = 116;
+const NR_STATFS: usize = 137;
+const NR_FSTATFS: usize = 138;
+const NR_GETTID: usize = 186;
+const NR_GETDENTS64: usize = 217;
+const NR_FADVISE64: usize = 221;
+const NR_CLOCK_GETTIME: usize = 228;
+const NR_CLOCK_GETRES: usize = 229;
+const NR_OPENAT: usize = 257;
+const NR_MKDIRAT: usize = 258;
+const NR_FCHOWNAT: usize = 260;
+const NR_NEWFSTATAT: usize = 262;
+const NR_UNLINKAT: usize = 263;
+const NR_RENAMEAT: usize = 264;
+const NR_LINKAT: usize = 265;
+const NR_SYMLINKAT: usize = 266;
+const NR_READLINKAT: usize = 267;
+const NR_FCHMODAT: usize = 268;
+const NR_FACCESSAT: usize = 269;
+const NR_UTIMENSAT: usize = 280;
+const NR_DUP3: usize = 292;
+const NR_PIPE2: usize = 293;
+const NR_RENAMEAT2: usize = 316;
+const NR_GETRANDOM: usize = 318;
 const SYSCALL_TRAMPOLINE_BASE: usize = 0x4000_0000;
 const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
+const EAGAIN: c_int = 11;
+const EBADF: c_int = 9;
+const EINVAL: c_int = 22;
+const ENOSYS: c_int = 38;
+const ETIMEDOUT: c_int = 110;
+const EAI_NONAME: c_int = -2;
+const DIRENT64_HEADER: usize = 19;
+const DIR_BUFFER_LEN: usize = 4096;
+const AT_FDCWD: c_int = -100;
+const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
+const KERNEL_SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
+const KERNEL_SIGNAL_FLAG_RESTART: u32 = 2;
+const LIBC_SA_RESTART: c_int = 0x0800_0000;
+const LIBC_SA_NOCLDSTOP: c_int = 0x4000_0000;
+const SC_CLK_TCK: c_int = 2;
+const SC_OPEN_MAX: c_int = 4;
+const SC_PAGESIZE: c_int = 30;
+const SC_NPROCESSORS_CONF: c_int = 57;
+const SC_NPROCESSORS_ONLN: c_int = 58;
+const DEFAULT_PTHREAD_STACK_SIZE: size_t = 2 * 1024 * 1024;
+const MAX_PTHREAD_KEYS: usize = 64;
+
+#[repr(C)]
+struct RistuxDir {
+    fd: c_int,
+    pos: usize,
+    len: usize,
+    buf: [u8; DIR_BUFFER_LEN],
+    ent: dirent,
+}
+
+#[repr(C)]
+struct KernelSigAction {
+    handler: usize,
+    mask: u64,
+    flags: u32,
+    _pad: u32,
+}
 
 static mut ERRNO: c_int = 0;
+static mut NEXT_PTHREAD_KEY: pthread_key_t = 1;
+static mut PTHREAD_VALUES: [*const c_void; MAX_PTHREAD_KEYS] =
+    [core::ptr::null(); MAX_PTHREAD_KEYS];
+static mut DIR_STATE: RistuxDir = RistuxDir {
+    fd: -1,
+    pos: 0,
+    len: 0,
+    buf: [0; DIR_BUFFER_LEN],
+    ent: dirent {
+        d_ino: 0,
+        d_off: 0,
+        d_reclen: 0,
+        d_type: 0,
+        d_name: [0; 256],
+    },
+};
+
+#[no_mangle]
+pub static mut environ: *const *const c_char = core::ptr::null();
 
 #[no_mangle]
 pub extern "C" fn errno_location() -> *mut c_int {
@@ -31,11 +174,16 @@ pub extern "C" fn __errno_location() -> *mut c_int {
 unsafe fn syscall1(nr: usize, a0: usize) -> isize {
     type Syscall1 = unsafe extern "C" fn(usize, usize) -> isize;
     let f = unsafe {
-        core::mem::transmute::<usize, Syscall1>(
-            SYSCALL_TRAMPOLINE_BASE + SYSCALL_TRAMPOLINE_STRIDE,
-        )
+        core::mem::transmute::<usize, Syscall1>(SYSCALL_TRAMPOLINE_BASE + SYSCALL_TRAMPOLINE_STRIDE)
     };
     unsafe { f(nr, a0) }
+}
+
+#[inline]
+unsafe fn syscall0(nr: usize) -> isize {
+    type Syscall0 = unsafe extern "C" fn(usize) -> isize;
+    let f = unsafe { core::mem::transmute::<usize, Syscall0>(SYSCALL_TRAMPOLINE_BASE) };
+    unsafe { f(nr) }
 }
 
 #[inline]
@@ -61,15 +209,221 @@ unsafe fn syscall3(nr: usize, a0: usize, a1: usize, a2: usize) -> isize {
 }
 
 #[inline]
+unsafe fn syscall4(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
+    type Syscall4 = unsafe extern "C" fn(usize, usize, usize, usize, usize) -> isize;
+    let f = unsafe {
+        core::mem::transmute::<usize, Syscall4>(
+            SYSCALL_TRAMPOLINE_BASE + SYSCALL_TRAMPOLINE_STRIDE * 4,
+        )
+    };
+    unsafe { f(nr, a0, a1, a2, a3) }
+}
+
+#[inline]
+unsafe fn syscall5(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
+    type Syscall5 = unsafe extern "C" fn(usize, usize, usize, usize, usize, usize) -> isize;
+    let f = unsafe {
+        core::mem::transmute::<usize, Syscall5>(
+            SYSCALL_TRAMPOLINE_BASE + SYSCALL_TRAMPOLINE_STRIDE * 5,
+        )
+    };
+    unsafe { f(nr, a0, a1, a2, a3, a4) }
+}
+
+#[inline]
+unsafe fn syscall6(
+    nr: usize,
+    a0: usize,
+    a1: usize,
+    a2: usize,
+    a3: usize,
+    a4: usize,
+    a5: usize,
+) -> isize {
+    type Syscall6 = unsafe extern "C" fn(usize, usize, usize, usize, usize, usize, usize) -> isize;
+    let f = unsafe {
+        core::mem::transmute::<usize, Syscall6>(
+            SYSCALL_TRAMPOLINE_BASE + SYSCALL_TRAMPOLINE_STRIDE * 6,
+        )
+    };
+    unsafe { f(nr, a0, a1, a2, a3, a4, a5) }
+}
+
+#[inline]
+fn is_errno(ret: isize) -> bool {
+    (-4095..0).contains(&ret)
+}
+
+#[inline]
+fn set_errno_from(ret: isize) {
+    unsafe {
+        ERRNO = (-ret) as c_int;
+    }
+}
+
+#[inline]
+fn set_errno(errno: c_int) {
+    unsafe {
+        ERRNO = errno;
+    }
+}
+
+#[inline]
 fn cvt(ret: isize) -> ssize_t {
-    if (-4095..0).contains(&ret) {
-        unsafe {
-            ERRNO = (-ret) as c_int;
-        }
+    if is_errno(ret) {
+        set_errno_from(ret);
         -1
     } else {
         ret as ssize_t
     }
+}
+
+#[inline]
+fn cvt_int(ret: isize) -> c_int {
+    cvt(ret) as c_int
+}
+
+#[inline]
+fn cvt_pid(ret: isize) -> pid_t {
+    cvt(ret) as pid_t
+}
+
+#[inline]
+fn cvt_off(ret: isize) -> off_t {
+    cvt(ret) as off_t
+}
+
+#[inline]
+fn cvt_ptr(ret: isize) -> *mut c_void {
+    if is_errno(ret) {
+        set_errno_from(ret);
+        !0usize as *mut c_void
+    } else {
+        ret as usize as *mut c_void
+    }
+}
+
+#[inline]
+fn cvt_pthread(ret: isize) -> c_int {
+    if is_errno(ret) {
+        (-ret) as c_int
+    } else {
+        0
+    }
+}
+
+#[inline]
+unsafe fn zero_pthread_object<T>(ptr: *mut T) -> c_int {
+    if ptr.is_null() {
+        return EINVAL;
+    }
+    unsafe {
+        core::ptr::write_bytes(ptr, 0, 1);
+    }
+    0
+}
+
+#[inline]
+unsafe fn copy_c_string_unbounded(src: *const c_char, dst: *mut c_char) -> bool {
+    if src.is_null() || dst.is_null() {
+        return false;
+    }
+    let mut offset = 0usize;
+    loop {
+        let byte = unsafe { *src.add(offset) };
+        unsafe {
+            *dst.add(offset) = byte;
+        }
+        if byte == 0 {
+            return true;
+        }
+        offset += 1;
+    }
+}
+
+#[inline]
+unsafe fn dir_state_mut() -> &'static mut RistuxDir {
+    unsafe { &mut *core::ptr::addr_of_mut!(DIR_STATE) }
+}
+
+unsafe fn init_dir_state(fd: c_int) -> *mut crate::DIR {
+    let state = unsafe { dir_state_mut() };
+    if state.fd >= 0 {
+        let _ = unsafe { close(state.fd) };
+    }
+    state.fd = fd;
+    state.pos = 0;
+    state.len = 0;
+    state.buf.fill(0);
+    state.ent = dirent {
+        d_ino: 0,
+        d_off: 0,
+        d_reclen: 0,
+        d_type: 0,
+        d_name: [0; 256],
+    };
+    state as *mut RistuxDir as *mut crate::DIR
+}
+
+#[inline]
+fn libc_signal_flags_to_kernel(flags: c_int) -> core::option::Option<u32> {
+    let mut out = 0u32;
+    let mut unsupported = flags;
+    if unsupported & LIBC_SA_RESTART != 0 {
+        out |= KERNEL_SIGNAL_FLAG_RESTART;
+        unsupported &= !LIBC_SA_RESTART;
+    }
+    if unsupported & LIBC_SA_NOCLDSTOP != 0 {
+        out |= KERNEL_SIGNAL_FLAG_NOCLDSTOP;
+        unsupported &= !LIBC_SA_NOCLDSTOP;
+    }
+    if unsupported == 0 {
+        core::option::Option::Some(out)
+    } else {
+        core::option::Option::None
+    }
+}
+
+#[inline]
+fn kernel_signal_flags_to_libc(flags: u32) -> c_int {
+    let mut out = 0;
+    if flags & KERNEL_SIGNAL_FLAG_RESTART != 0 {
+        out |= LIBC_SA_RESTART;
+    }
+    if flags & KERNEL_SIGNAL_FLAG_NOCLDSTOP != 0 {
+        out |= LIBC_SA_NOCLDSTOP;
+    }
+    out
+}
+
+#[no_mangle]
+pub extern "sysv64" fn rust_psm_stack_direction() -> u8 {
+    2
+}
+
+#[no_mangle]
+pub extern "sysv64" fn rust_psm_stack_pointer() -> *mut u8 {
+    let local = 0u8;
+    (&local as *const u8) as *mut u8
+}
+
+#[no_mangle]
+pub unsafe extern "sysv64" fn rust_psm_on_stack(
+    data: usize,
+    return_ptr: usize,
+    callback: unsafe extern "sysv64" fn(usize, usize),
+    _sp: *mut u8,
+) {
+    unsafe { callback(data, return_ptr) }
+}
+
+#[no_mangle]
+pub unsafe extern "sysv64" fn rust_psm_replace_stack(
+    data: usize,
+    callback: unsafe extern "sysv64" fn(usize) -> !,
+    _sp: *mut u8,
+) -> ! {
+    unsafe { callback(data) }
 }
 
 #[no_mangle]
@@ -83,6 +437,29 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+    cvt_int(unsafe { syscall3(NR_OPEN, path as usize, flags as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openat(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mode: mode_t,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_OPENAT,
+            dirfd as usize,
+            path as usize,
+            flags as usize,
+            mode as usize,
+        )
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn readv(fd: c_int, iov: *const iovec, iovcnt: c_int) -> ssize_t {
     cvt(unsafe { syscall3(NR_READV, fd as usize, iov as usize, iovcnt as usize) })
 }
@@ -93,21 +470,822 @@ pub unsafe extern "C" fn writev(fd: c_int, iov: *const iovec, iovcnt: c_int) -> 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn pread(
+    fd: c_int,
+    buf: *mut c_void,
+    count: size_t,
+    offset: off_t,
+) -> ssize_t {
+    cvt(unsafe {
+        syscall4(
+            NR_PREAD64,
+            fd as usize,
+            buf as usize,
+            count,
+            offset as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pwrite(
+    fd: c_int,
+    buf: *const c_void,
+    count: size_t,
+    offset: off_t,
+) -> ssize_t {
+    cvt(unsafe {
+        syscall4(
+            NR_PWRITE64,
+            fd as usize,
+            buf as usize,
+            count,
+            offset as usize,
+        )
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     cvt(unsafe { syscall1(NR_CLOSE, fd as usize) }) as c_int
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut stat_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_STAT, path as usize, buf as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut stat_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_FSTAT, fd as usize, buf as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut stat_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_LSTAT, path as usize, buf as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fstatat(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut stat_t,
+    flags: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_NEWFSTATAT,
+            dirfd as usize,
+            path as usize,
+            buf as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn statfs(path: *const c_char, buf: *mut statfs_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_STATFS, path as usize, buf as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fstatfs(fd: c_int, buf: *mut statfs_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_FSTATFS, fd as usize, buf as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t {
+    cvt_off(unsafe { syscall3(NR_LSEEK, fd as usize, offset as usize, whence as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn truncate(path: *const c_char, len: off_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_TRUNCATE, path as usize, len as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ftruncate(fd: c_int, len: off_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_FTRUNCATE, fd as usize, len as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn chdir(path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall1(NR_CHDIR, path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn chroot(_path: *const c_char) -> c_int {
+    set_errno(ENOSYS);
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mkdir(path: *const c_char, mode: mode_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_MKDIR, path as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mkfifo(_path: *const c_char, _mode: mode_t) -> c_int {
+    set_errno(ENOSYS);
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int {
+    cvt_int(unsafe { syscall3(NR_MKDIRAT, dirfd as usize, path as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rmdir(path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall1(NR_RMDIR, path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall2(NR_RENAME, old_path as usize, new_path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn renameat(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_RENAMEAT,
+            old_dirfd as usize,
+            old_path as usize,
+            new_dirfd as usize,
+            new_path as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn renameat2(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+    flags: c_uint,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall5(
+            NR_RENAMEAT2,
+            old_dirfd as usize,
+            old_path as usize,
+            new_dirfd as usize,
+            new_path as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn link(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall2(NR_LINK, old_path as usize, new_path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn linkat(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+    flags: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall5(
+            NR_LINKAT,
+            old_dirfd as usize,
+            old_path as usize,
+            new_dirfd as usize,
+            new_path as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall1(NR_UNLINK, path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    cvt_int(unsafe { syscall3(NR_UNLINKAT, dirfd as usize, path as usize, flags as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn symlink(target: *const c_char, link_path: *const c_char) -> c_int {
+    cvt_int(unsafe { syscall2(NR_SYMLINK, target as usize, link_path as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn symlinkat(
+    target: *const c_char,
+    dirfd: c_int,
+    link_path: *const c_char,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall3(
+            NR_SYMLINKAT,
+            target as usize,
+            dirfd as usize,
+            link_path as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn readlink(
+    path: *const c_char,
+    buf: *mut c_char,
+    bufsiz: size_t,
+) -> ssize_t {
+    cvt(unsafe { syscall3(NR_READLINK, path as usize, buf as usize, bufsiz) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn readlinkat(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut c_char,
+    bufsiz: size_t,
+) -> ssize_t {
+    cvt(unsafe {
+        syscall4(
+            NR_READLINKAT,
+            dirfd as usize,
+            path as usize,
+            buf as usize,
+            bufsiz,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn realpath(pathname: *const c_char, resolved: *mut c_char) -> *mut c_char {
+    if resolved.is_null() || !unsafe { copy_c_string_unbounded(pathname, resolved) } {
+        set_errno(EINVAL);
+        core::ptr::null_mut()
+    } else {
+        resolved
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn chmod(path: *const c_char, mode: mode_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_CHMOD, path as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fchmod(fd: c_int, mode: mode_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_FCHMOD, fd as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fchmodat(
+    dirfd: c_int,
+    path: *const c_char,
+    mode: mode_t,
+    flags: c_int,
+) -> c_int {
+    if flags != 0 {
+        set_errno(EINVAL);
+        return -1;
+    }
+    cvt_int(unsafe { syscall3(NR_FCHMODAT, dirfd as usize, path as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn chown(path: *const c_char, uid: uid_t, gid: gid_t) -> c_int {
+    cvt_int(unsafe { syscall3(NR_CHOWN, path as usize, uid as usize, gid as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lchown(path: *const c_char, uid: uid_t, gid: gid_t) -> c_int {
+    unsafe { fchownat(AT_FDCWD, path, uid, gid, AT_SYMLINK_NOFOLLOW) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fchown(fd: c_int, uid: uid_t, gid: gid_t) -> c_int {
+    cvt_int(unsafe { syscall3(NR_FCHOWN, fd as usize, uid as usize, gid as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fchownat(
+    dirfd: c_int,
+    path: *const c_char,
+    uid: uid_t,
+    gid: gid_t,
+    flags: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall5(
+            NR_FCHOWNAT,
+            dirfd as usize,
+            path as usize,
+            uid as usize,
+            gid as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn umask(mask: mode_t) -> mode_t {
+    cvt_int(unsafe { syscall1(NR_UMASK, mask as usize) }) as mode_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn utimensat(
+    dirfd: c_int,
+    pathname: *const c_char,
+    times: *const timespec,
+    flags: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_UTIMENSAT,
+            dirfd as usize,
+            pathname as usize,
+            times as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
+    cvt_int(unsafe { syscall2(NR_ACCESS, path as usize, mode as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn faccessat(
+    dirfd: c_int,
+    path: *const c_char,
+    mode: c_int,
+    flags: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_FACCESSAT,
+            dirfd as usize,
+            path as usize,
+            mode as usize,
+            flags as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
+    cvt_int(unsafe { syscall1(NR_FSYNC, fd as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fdatasync(fd: c_int) -> c_int {
+    unsafe { fsync(fd) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sync() {}
+
+#[no_mangle]
+pub unsafe extern "C" fn fallocate(_fd: c_int, _mode: c_int, _offset: off_t, _len: off_t) -> c_int {
+    set_errno(ENOSYS);
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_fallocate(_fd: c_int, _offset: off_t, _len: off_t) -> c_int {
+    ENOSYS
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mknodat(
+    _dirfd: c_int,
+    _pathname: *const c_char,
+    _mode: mode_t,
+    _dev: dev_t,
+) -> c_int {
+    set_errno(ENOSYS);
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn seekdir(_dirp: *mut crate::DIR, _loc: c_long) {}
+
+#[no_mangle]
+pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: usize) -> c_int {
+    cvt_int(unsafe { syscall3(NR_FCNTL, fd as usize, cmd as usize, arg) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, arg: usize) -> c_int {
+    cvt_int(unsafe { syscall3(NR_IOCTL, fd as usize, request as usize, arg) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn isatty(fd: c_int) -> c_int {
+    const TCGETS: c_ulong = 0x5401;
+    let mut storage = [0u8; 64];
+    if unsafe { ioctl(fd, TCGETS, storage.as_mut_ptr() as usize) } == 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn opendir(dirname: *const c_char) -> *mut crate::DIR {
+    let fd = unsafe { open(dirname, 0, 0) };
+    if fd < 0 {
+        core::ptr::null_mut()
+    } else {
+        unsafe { init_dir_state(fd) }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fdopendir(fd: c_int) -> *mut crate::DIR {
+    if fd < 0 {
+        set_errno(EBADF);
+        core::ptr::null_mut()
+    } else {
+        unsafe { init_dir_state(fd) }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn readdir(dirp: *mut crate::DIR) -> *mut dirent {
+    if dirp.is_null() {
+        set_errno(EINVAL);
+        return core::ptr::null_mut();
+    }
+    let state = unsafe { dir_state_mut() };
+    if state.fd < 0 {
+        set_errno(EBADF);
+        return core::ptr::null_mut();
+    }
+    loop {
+        if state.pos + DIRENT64_HEADER <= state.len {
+            let reclen =
+                u16::from_le_bytes([state.buf[state.pos + 16], state.buf[state.pos + 17]]) as usize;
+            if reclen == 0 || state.pos + reclen > state.len {
+                state.pos = state.len;
+                continue;
+            }
+            let base = state.pos;
+            state.pos += reclen;
+
+            let ino = u64::from_le_bytes([
+                state.buf[base],
+                state.buf[base + 1],
+                state.buf[base + 2],
+                state.buf[base + 3],
+                state.buf[base + 4],
+                state.buf[base + 5],
+                state.buf[base + 6],
+                state.buf[base + 7],
+            ]);
+            let off = i64::from_le_bytes([
+                state.buf[base + 8],
+                state.buf[base + 9],
+                state.buf[base + 10],
+                state.buf[base + 11],
+                state.buf[base + 12],
+                state.buf[base + 13],
+                state.buf[base + 14],
+                state.buf[base + 15],
+            ]);
+            state.ent.d_ino = ino as _;
+            state.ent.d_off = off as _;
+            state.ent.d_reclen = core::mem::size_of::<dirent>() as _;
+            state.ent.d_type = state.buf[base + 18] as _;
+            state.ent.d_name.fill(0);
+            let name_start = base + DIRENT64_HEADER;
+            let mut name_end = base + reclen;
+            let mut scan = name_start;
+            while scan < base + reclen {
+                if state.buf[scan] == 0 {
+                    name_end = scan;
+                    break;
+                }
+                scan += 1;
+            }
+            let max_name_len = state.ent.d_name.len() - 1;
+            let raw_name_len = name_end - name_start;
+            let name_len = if raw_name_len < max_name_len {
+                raw_name_len
+            } else {
+                max_name_len
+            };
+            let mut index = 0usize;
+            while index < name_len {
+                state.ent.d_name[index] = state.buf[name_start + index] as c_char;
+                index += 1;
+            }
+            return core::ptr::addr_of_mut!(state.ent);
+        }
+
+        let ret = unsafe {
+            syscall3(
+                NR_GETDENTS64,
+                state.fd as usize,
+                state.buf.as_mut_ptr() as usize,
+                state.buf.len(),
+            )
+        };
+        if is_errno(ret) {
+            set_errno_from(ret);
+            return core::ptr::null_mut();
+        }
+        if ret == 0 {
+            return core::ptr::null_mut();
+        }
+        state.pos = 0;
+        state.len = ret as usize;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn closedir(dirp: *mut crate::DIR) -> c_int {
+    if dirp.is_null() {
+        set_errno(EINVAL);
+        return -1;
+    }
+    let state = unsafe { dir_state_mut() };
+    if state.fd < 0 {
+        set_errno(EBADF);
+        return -1;
+    }
+    let fd = state.fd;
+    state.fd = -1;
+    state.pos = 0;
+    state.len = 0;
+    unsafe { close(fd) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dirfd(dirp: *mut crate::DIR) -> c_int {
+    if dirp.is_null() {
+        set_errno(EINVAL);
+        -1
+    } else {
+        unsafe { dir_state_mut() }.fd
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn poll(fds: *mut pollfd, nfds: nfds_t, timeout: c_int) -> c_int {
+    cvt_int(unsafe { syscall3(NR_POLL, fds as usize, nfds as usize, timeout as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pipe(fds: *mut c_int) -> c_int {
+    cvt_int(unsafe { syscall1(NR_PIPE, fds as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pipe2(fds: *mut c_int, flags: c_int) -> c_int {
+    cvt_int(unsafe { syscall2(NR_PIPE2, fds as usize, flags as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dup(fd: c_int) -> c_int {
+    cvt_int(unsafe { syscall1(NR_DUP, fd as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dup2(oldfd: c_int, newfd: c_int) -> c_int {
+    cvt_int(unsafe { syscall2(NR_DUP2, oldfd as usize, newfd as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dup3(oldfd: c_int, newfd: c_int, flags: c_int) -> c_int {
+    cvt_int(unsafe { syscall3(NR_DUP3, oldfd as usize, newfd as usize, flags as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mmap(
+    addr: *mut c_void,
+    len: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: off_t,
+) -> *mut c_void {
+    cvt_ptr(unsafe {
+        syscall6(
+            NR_MMAP,
+            addr as usize,
+            len,
+            prot as usize,
+            flags as usize,
+            fd as usize,
+            offset as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int {
+    cvt_int(unsafe { syscall3(NR_MPROTECT, addr as usize, len, prot as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn munmap(addr: *mut c_void, len: size_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_MUNMAP, addr as usize, len) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn madvise(addr: *mut c_void, len: size_t, advice: c_int) -> c_int {
+    cvt_int(unsafe { syscall3(NR_MADVISE, addr as usize, len, advice as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_fadvise(
+    fd: c_int,
+    offset: off_t,
+    len: off_t,
+    advice: c_int,
+) -> c_int {
+    cvt_int(unsafe {
+        syscall4(
+            NR_FADVISE64,
+            fd as usize,
+            offset as usize,
+            len as usize,
+            advice as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gettimeofday(tp: *mut timeval, _tz: *mut c_void) -> c_int {
+    cvt_int(unsafe { syscall2(NR_GETTIMEOFDAY, tp as usize, 0) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int {
+    cvt_int(unsafe { syscall2(NR_CLOCK_GETTIME, clk_id as usize, tp as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_getres(clk_id: clockid_t, tp: *mut timespec) -> c_int {
+    cvt_int(unsafe { syscall2(NR_CLOCK_GETRES, clk_id as usize, tp as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nanosleep(req: *const timespec, rem: *mut timespec) -> c_int {
+    cvt_int(unsafe { syscall2(NR_NANOSLEEP, req as usize, rem as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getrandom(buf: *mut c_void, buflen: size_t, flags: c_uint) -> ssize_t {
+    cvt(unsafe { syscall3(NR_GETRANDOM, buf as usize, buflen, flags as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sched_yield() -> c_int {
+    cvt_int(unsafe { syscall0(NR_SCHED_YIELD) })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: size_t) -> *mut c_char {
     let ret = unsafe { syscall2(NR_GETCWD, buf as usize, size) };
-    if (-4095..0).contains(&ret) {
-        unsafe {
-            ERRNO = (-ret) as c_int;
-        }
+    if is_errno(ret) {
+        set_errno_from(ret);
         core::ptr::null_mut()
     } else {
         buf
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fork() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_FORK) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execve(
+    path: *const c_char,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    cvt_int(unsafe { syscall3(NR_EXECVE, path as usize, argv as usize, envp as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execvp(path: *const c_char, argv: *const *const c_char) -> c_int {
+    unsafe { execve(path, argv, environ) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t {
+    cvt_pid(unsafe { syscall4(NR_WAIT4, pid as usize, status as usize, options as usize, 0) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wait4(
+    pid: pid_t,
+    status: *mut c_int,
+    options: c_int,
+    usage: *mut rusage,
+) -> pid_t {
+    cvt_pid(unsafe {
+        syscall4(
+            NR_WAIT4,
+            pid as usize,
+            status as usize,
+            options as usize,
+            usage as usize,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kill(pid: pid_t, sig: c_int) -> c_int {
+    cvt_int(unsafe { syscall2(NR_KILL, pid as usize, sig as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn killpg(pgrp: pid_t, sig: c_int) -> c_int {
+    cvt_int(unsafe { syscall2(NR_KILL, (-(pgrp as isize)) as usize, sig as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getpid() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_GETPID) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gettid() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_GETTID) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getppid() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_GETPPID) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getpgrp() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_GETPGRP) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setpgid(pid: pid_t, pgid: pid_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_SETPGID, pid as usize, pgid as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setsid() -> pid_t {
+    cvt_pid(unsafe { syscall0(NR_SETSID) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getuid() -> uid_t {
+    cvt_int(unsafe { syscall0(NR_GETUID) }) as uid_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn geteuid() -> uid_t {
+    cvt_int(unsafe { syscall0(NR_GETEUID) }) as uid_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getgid() -> gid_t {
+    cvt_int(unsafe { syscall0(NR_GETGID) }) as gid_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getegid() -> gid_t {
+    cvt_int(unsafe { syscall0(NR_GETEGID) }) as gid_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setuid(uid: uid_t) -> c_int {
+    cvt_int(unsafe { syscall1(NR_SETUID, uid as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setgid(gid: gid_t) -> c_int {
+    cvt_int(unsafe { syscall1(NR_SETGID, gid as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setgroups(size: size_t, list: *const gid_t) -> c_int {
+    cvt_int(unsafe { syscall2(NR_SETGROUPS, size, list as usize) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn uname(name: *mut utsname) -> c_int {
+    cvt_int(unsafe { syscall1(NR_UNAME, name as usize) })
 }
 
 #[no_mangle]
@@ -131,6 +1309,605 @@ pub unsafe extern "C" fn strerror_r(_errnum: c_int, buf: *mut c_char, buflen: si
         *buf.add(nul_index) = 0;
     }
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free(_ptr: *mut c_void) {}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlopen(_filename: *const c_char, _flag: c_int) -> *mut c_void {
+    set_errno(ENOSYS);
+    core::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlerror() -> *mut c_char {
+    b"Ristux dynamic loading unsupported\0".as_ptr() as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlsym(_handle: *mut c_void, _symbol: *const c_char) -> *mut c_void {
+    set_errno(ENOSYS);
+    core::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dladdr(_addr: *const c_void, info: *mut Dl_info) -> c_int {
+    if !info.is_null() {
+        unsafe {
+            (*info).dli_fname = core::ptr::null();
+            (*info).dli_fbase = core::ptr::null_mut();
+            (*info).dli_sname = core::ptr::null();
+            (*info).dli_saddr = core::ptr::null_mut();
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getaddrinfo(
+    _node: *const c_char,
+    _service: *const c_char,
+    _hints: *const addrinfo,
+    res: *mut *mut addrinfo,
+) -> c_int {
+    if !res.is_null() {
+        unsafe {
+            *res = core::ptr::null_mut();
+        }
+    }
+    EAI_NONAME
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn freeaddrinfo(_res: *mut addrinfo) {}
+
+#[no_mangle]
+pub unsafe extern "C" fn gai_strerror(_errcode: c_int) -> *const c_char {
+    b"Ristux name resolution unavailable\0".as_ptr() as *const c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sysconf(name: c_int) -> c_long {
+    match name {
+        SC_CLK_TCK => 100,
+        SC_OPEN_MAX => 256,
+        SC_PAGESIZE => 4096,
+        SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => 1,
+        _ => {
+            set_errno(EINVAL);
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigaction(
+    signum: c_int,
+    act: *const sigaction_t,
+    oldact: *mut sigaction_t,
+) -> c_int {
+    let mut kernel_new = KernelSigAction {
+        handler: 0,
+        mask: 0,
+        flags: 0,
+        _pad: 0,
+    };
+    let kernel_new_ptr = if act.is_null() {
+        0
+    } else {
+        let act_ref = unsafe { &*act };
+        let core::option::Option::Some(flags) = libc_signal_flags_to_kernel(act_ref.sa_flags)
+        else {
+            set_errno(EINVAL);
+            return -1;
+        };
+        kernel_new.handler = act_ref.sa_sigaction as usize;
+        kernel_new.mask = act_ref.sa_mask as u64;
+        kernel_new.flags = flags;
+        &kernel_new as *const KernelSigAction as usize
+    };
+    let mut kernel_old = KernelSigAction {
+        handler: 0,
+        mask: 0,
+        flags: 0,
+        _pad: 0,
+    };
+    let kernel_old_ptr = if oldact.is_null() {
+        0
+    } else {
+        &mut kernel_old as *mut KernelSigAction as usize
+    };
+    let rc = cvt_int(unsafe {
+        syscall3(
+            NR_RT_SIGACTION,
+            signum as usize,
+            kernel_new_ptr,
+            kernel_old_ptr,
+        )
+    });
+    if rc == 0 && !oldact.is_null() {
+        unsafe {
+            (*oldact).sa_sigaction = kernel_old.handler as sighandler_t;
+            (*oldact).sa_flags = kernel_signal_flags_to_libc(kernel_old.flags);
+            (*oldact).sa_restorer = core::option::Option::None;
+            (*oldact).sa_mask = kernel_old.mask as sigset_t;
+        }
+    }
+    rc
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal(signum: c_int, handler: sighandler_t) -> sighandler_t {
+    let act = sigaction_t {
+        sa_sigaction: handler,
+        sa_flags: 0,
+        sa_restorer: core::option::Option::None,
+        sa_mask: 0,
+    };
+    let mut oldact = sigaction_t {
+        sa_sigaction: !0usize as sighandler_t,
+        sa_flags: 0,
+        sa_restorer: core::option::Option::None,
+        sa_mask: 0,
+    };
+    if unsafe { sigaction(signum, &act, &mut oldact) } == 0 {
+        oldact.sa_sigaction
+    } else {
+        !0usize as sighandler_t
+    }
+}
+
+#[inline]
+unsafe fn valid_env_name(name: *const c_char) -> bool {
+    if name.is_null() {
+        return false;
+    }
+    let mut offset = 0usize;
+    loop {
+        let byte = unsafe { *name.add(offset) };
+        if byte == 0 {
+            return offset != 0;
+        }
+        if byte == b'=' as c_char {
+            return false;
+        }
+        offset += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
+    core::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setenv(
+    name: *const c_char,
+    value: *const c_char,
+    _overwrite: c_int,
+) -> c_int {
+    if value.is_null() || !unsafe { valid_env_name(name) } {
+        unsafe {
+            ERRNO = EINVAL;
+        }
+        return -1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
+    if !unsafe { valid_env_name(name) } {
+        unsafe {
+            ERRNO = EINVAL;
+        }
+        return -1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clearenv() -> c_int {
+    unsafe {
+        environ = core::ptr::null();
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_self() -> pthread_t {
+    1usize as pthread_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_equal(left: pthread_t, right: pthread_t) -> c_int {
+    (left == right) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_init(attr: *mut pthread_attr_t) -> c_int {
+    unsafe { zero_pthread_object(attr) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_destroy(attr: *mut pthread_attr_t) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getstacksize(
+    attr: *const pthread_attr_t,
+    stacksize: *mut size_t,
+) -> c_int {
+    if attr.is_null() || stacksize.is_null() {
+        return EINVAL;
+    }
+    unsafe {
+        *stacksize = DEFAULT_PTHREAD_STACK_SIZE;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setstacksize(
+    attr: *mut pthread_attr_t,
+    stack_size: size_t,
+) -> c_int {
+    if attr.is_null() || stack_size == 0 {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setdetachstate(
+    attr: *mut pthread_attr_t,
+    _state: c_int,
+) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_create(
+    tid: *mut pthread_t,
+    _attr: *const pthread_attr_t,
+    _start: extern "C" fn(*mut c_void) -> *mut c_void,
+    _arg: *mut c_void,
+) -> c_int {
+    if !tid.is_null() {
+        unsafe {
+            *tid = core::ptr::null_mut();
+        }
+    }
+    ENOSYS
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_join(_thread: pthread_t, _value: *mut *mut c_void) -> c_int {
+    ENOSYS
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_detach(_thread: pthread_t) -> c_int {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_exit(_value: *mut c_void) -> ! {
+    unsafe { _exit(0) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_key_create(
+    key: *mut pthread_key_t,
+    _dtor: core::option::Option<unsafe extern "C" fn(*mut c_void)>,
+) -> c_int {
+    if key.is_null() {
+        return EINVAL;
+    }
+    unsafe {
+        let next = NEXT_PTHREAD_KEY;
+        if next as usize >= MAX_PTHREAD_KEYS {
+            return EAGAIN;
+        }
+        NEXT_PTHREAD_KEY = next + 1;
+        *key = next;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_key_delete(key: pthread_key_t) -> c_int {
+    if key as usize >= MAX_PTHREAD_KEYS {
+        return EINVAL;
+    }
+    unsafe {
+        PTHREAD_VALUES[key as usize] = core::ptr::null();
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void {
+    if key as usize >= MAX_PTHREAD_KEYS {
+        core::ptr::null_mut()
+    } else {
+        unsafe { PTHREAD_VALUES[key as usize] as *mut c_void }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c_void) -> c_int {
+    if key as usize >= MAX_PTHREAD_KEYS {
+        return EINVAL;
+    }
+    unsafe {
+        PTHREAD_VALUES[key as usize] = value;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_init(
+    lock: *mut pthread_mutex_t,
+    _attr: *const pthread_mutexattr_t,
+) -> c_int {
+    unsafe { zero_pthread_object(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_destroy(lock: *mut pthread_mutex_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_lock(lock: *mut pthread_mutex_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_trylock(lock: *mut pthread_mutex_t) -> c_int {
+    unsafe { pthread_mutex_lock(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_unlock(lock: *mut pthread_mutex_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_init(attr: *mut pthread_mutexattr_t) -> c_int {
+    unsafe { zero_pthread_object(attr) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_destroy(attr: *mut pthread_mutexattr_t) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_settype(
+    attr: *mut pthread_mutexattr_t,
+    _kind: c_int,
+) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_init(
+    cond: *mut pthread_cond_t,
+    _attr: *const pthread_condattr_t,
+) -> c_int {
+    unsafe { zero_pthread_object(cond) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_wait(
+    cond: *mut pthread_cond_t,
+    lock: *mut pthread_mutex_t,
+) -> c_int {
+    if cond.is_null() || lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_timedwait(
+    cond: *mut pthread_cond_t,
+    lock: *mut pthread_mutex_t,
+    _abstime: *const timespec,
+) -> c_int {
+    if cond.is_null() || lock.is_null() {
+        EINVAL
+    } else {
+        ETIMEDOUT
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_signal(cond: *mut pthread_cond_t) -> c_int {
+    if cond.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut pthread_cond_t) -> c_int {
+    unsafe { pthread_cond_signal(cond) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut pthread_cond_t) -> c_int {
+    if cond.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_init(attr: *mut pthread_condattr_t) -> c_int {
+    unsafe { zero_pthread_object(attr) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_destroy(attr: *mut pthread_condattr_t) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_setclock(
+    attr: *mut pthread_condattr_t,
+    _clock_id: clockid_t,
+) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_init(
+    lock: *mut pthread_rwlock_t,
+    _attr: *const pthread_rwlockattr_t,
+) -> c_int {
+    unsafe { zero_pthread_object(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_destroy(lock: *mut pthread_rwlock_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_rdlock(lock: *mut pthread_rwlock_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_tryrdlock(lock: *mut pthread_rwlock_t) -> c_int {
+    unsafe { pthread_rwlock_rdlock(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_wrlock(lock: *mut pthread_rwlock_t) -> c_int {
+    unsafe { pthread_rwlock_rdlock(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_trywrlock(lock: *mut pthread_rwlock_t) -> c_int {
+    unsafe { pthread_rwlock_rdlock(lock) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_unlock(lock: *mut pthread_rwlock_t) -> c_int {
+    if lock.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_init(attr: *mut pthread_rwlockattr_t) -> c_int {
+    unsafe { zero_pthread_object(attr) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_destroy(attr: *mut pthread_rwlockattr_t) -> c_int {
+    if attr.is_null() {
+        EINVAL
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_sigmask(
+    how: c_int,
+    set: *const sigset_t,
+    oldset: *mut sigset_t,
+) -> c_int {
+    cvt_pthread(unsafe {
+        syscall4(
+            NR_RT_SIGPROCMASK,
+            how as usize,
+            set as usize,
+            oldset as usize,
+            core::mem::size_of::<sigset_t>(),
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_atfork(
+    _prepare: core::option::Option<unsafe extern "C" fn()>,
+    _parent: core::option::Option<unsafe extern "C" fn()>,
+    _child: core::option::Option<unsafe extern "C" fn()>,
+) -> c_int {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cancel(_thread: pthread_t) -> c_int {
+    ENOSYS
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_kill(_thread: pthread_t, _sig: c_int) -> c_int {
+    ENOSYS
 }
 
 #[no_mangle]

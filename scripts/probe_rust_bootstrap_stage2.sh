@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 RUST_VERSION="${RISTUX_RUST_VERSION:-1.96.0}"
 PROBE_DIR="${RISTUX_RUST_BOOTSTRAP_STAGE2_DIR:-${RISTUX_RUST_TARGET_PROBE_DIR:-/tmp/ristux-rust-bootstrap-stage2}}"
 LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_LOG:-$PROBE_DIR/bootstrap-stage2-build.log}"
+RUSTC_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_RUSTC_LOG:-$PROBE_DIR/bootstrap-stage2-rustc-build.log}"
 STAGE1_CODEGEN_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_CODEGEN_LOG:-$PROBE_DIR/bootstrap-stage1-codegen.log}"
 HOST_RISTUX_LD_DIR="$PROBE_DIR/host-tools"
 RUSTC_HOST="${RISTUX_HOST_RUSTC:-rustc +nightly}"
@@ -299,6 +300,366 @@ for crate_dir in sorted((root / "vendor").glob("sha1-*")):
 if patched_sha1 == 0:
     raise SystemExit("failed to patch vendored sha1 crates for Ristux soft backend")
 
+patched_sha2 = 0
+for crate_dir in sorted((root / "vendor").glob("sha2-*")):
+    changed = []
+    for path_name in ("src/sha256.rs", "src/sha512.rs"):
+        path = crate_dir / path_name
+        if not path.exists():
+            continue
+        text = path.read_text()
+        new_text = text.replace(
+            'if #[cfg(feature = "force-soft")] {',
+            'if #[cfg(any(feature = "force-soft", target_os = "ristux"))] {',
+        ).replace(
+            'if #[cfg(feature = "force-soft-compact")] {',
+            'if #[cfg(all(feature = "force-soft-compact", not(target_os = "ristux")))] {',
+        ).replace(
+            'if #[cfg(any(sha2_backend = "soft", sha2_256_backend = "soft"))] {',
+            'if #[cfg(any(target_os = "ristux", sha2_backend = "soft", sha2_256_backend = "soft"))] {',
+        )
+        if new_text != text:
+            path.write_text(new_text)
+            changed.append(path_name)
+    if changed:
+        refresh_vendor_checksum(crate_dir, *changed)
+        patched_sha2 += 1
+
+if patched_sha2 == 0:
+    raise SystemExit("failed to patch vendored sha2 crates for Ristux soft backend")
+
+patched_libm = 0
+for crate_dir in sorted((root / "vendor").glob("libm-*")):
+    changed = []
+    for toml_name in ("Cargo.toml", "Cargo.toml.orig"):
+        toml = crate_dir / toml_name
+        if not toml.exists():
+            continue
+        text = toml.read_text()
+        new_text = text.replace('default = ["arch"]', 'default = []')
+        if new_text != text:
+            toml.write_text(new_text)
+            changed.append(toml_name)
+    if changed:
+        refresh_vendor_checksum(crate_dir, *changed)
+        patched_libm += 1
+
+if patched_libm == 0:
+    raise SystemExit("failed to patch vendored libm crates for Ristux portable backend")
+
+patched_blake3 = 0
+for crate_dir in sorted((root / "vendor").glob("blake3-*")):
+    build_rs = crate_dir / "build.rs"
+    if not build_rs.exists():
+        continue
+    text = build_rs.read_text()
+    new_text = text.replace(
+        '''fn is_pure() -> bool {
+    defined("CARGO_FEATURE_PURE")
+}
+''',
+        '''fn is_pure() -> bool {
+    defined("CARGO_FEATURE_PURE")
+        || env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ristux")
+}
+''',
+    )
+    if new_text != text:
+        build_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "build.rs")
+        patched_blake3 += 1
+
+if patched_blake3 == 0:
+    raise SystemExit("failed to patch vendored blake3 crates for Ristux non-assembly backend")
+
+patched_constant_time_eq = 0
+for crate_dir in sorted((root / "vendor").glob("constant_time_eq-*")):
+    changed = []
+    for path in sorted((crate_dir / "src").rglob("*.rs")):
+        text = path.read_text()
+        new_text = text.replace(
+            '#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]',
+            '#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(target_os = "ristux")))]',
+        ).replace(
+            'any(target_arch = "x86", target_arch = "x86_64"),\n    target_feature = "sse2",',
+            'any(target_arch = "x86", target_arch = "x86_64"),\n    not(target_os = "ristux"),\n    target_feature = "sse2",',
+        ).replace(
+            '''#[cfg(all(
+    not(miri),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "s390x",
+    )
+))]''',
+            '''#[cfg(all(
+    not(target_os = "ristux"),
+    not(miri),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "s390x",
+    )
+))]''',
+        ).replace(
+            '''#[cfg(any(
+    miri,
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "s390x",
+    ))
+))]''',
+            '''#[cfg(any(
+    target_os = "ristux",
+    miri,
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "s390x",
+    ))
+))]''',
+        ).replace(
+            '''#[cfg(any(
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+    )),
+    miri,
+))]''',
+            '''#[cfg(any(
+    target_os = "ristux",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+    )),
+    miri,
+))]''',
+        )
+        if new_text != text:
+            path.write_text(new_text)
+            changed.append(str(path.relative_to(crate_dir)))
+    if changed:
+        refresh_vendor_checksum(crate_dir, *changed)
+        patched_constant_time_eq += 1
+
+if patched_constant_time_eq == 0:
+    raise SystemExit("failed to patch vendored constant_time_eq crates for Ristux generic backend")
+
+patched_libloading = 0
+for crate_dir in sorted((root / "vendor").glob("libloading-*")):
+    consts_rs = crate_dir / "src/os/unix/consts.rs"
+    if not consts_rs.exists():
+        continue
+    text = consts_rs.read_text()
+    new_text = text.replace(
+        '            target_os = "redox",\n            target_os = "nto",',
+        '            target_os = "redox",\n            target_os = "ristux",\n            target_os = "nto",',
+    ).replace(
+        '            target_os = "redox",\n            target_os = "hurd",',
+        '            target_os = "redox",\n            target_os = "ristux",\n            target_os = "hurd",',
+    )
+    if new_text != text:
+        consts_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "src/os/unix/consts.rs")
+        patched_libloading += 1
+
+if patched_libloading == 0:
+    raise SystemExit("failed to patch vendored libloading crates for Ristux RTLD constants")
+
+patched_target_lexicon = 0
+for crate_dir in sorted((root / "vendor").glob("target-lexicon-*")):
+    changed = []
+    targets_rs = crate_dir / "src/targets.rs"
+    if targets_rs.exists():
+        text = targets_rs.read_text()
+        new_text = text.replace(
+            '    Redox,\n    Solaris,',
+            '    Redox,\n    Ristux,\n    Solaris,',
+        ).replace(
+            '            Redox => Cow::Borrowed("redox"),\n            Solaris => Cow::Borrowed("solaris"),',
+            '            Redox => Cow::Borrowed("redox"),\n            Ristux => Cow::Borrowed("ristux"),\n            Solaris => Cow::Borrowed("solaris"),',
+        ).replace(
+            '            "redox" => Redox,\n            "solaris" => Solaris,',
+            '            "redox" => Redox,\n            "ristux" => Ristux,\n            "solaris" => Solaris,',
+        )
+        if new_text != text:
+            targets_rs.write_text(new_text)
+            changed.append("src/targets.rs")
+    triple_rs = crate_dir / "src/triple.rs"
+    if triple_rs.exists():
+        text = triple_rs.read_text()
+        new_text = text.replace(
+            '            | OperatingSystem::Redox\n            | OperatingSystem::Solaris => CallingConvention::SystemV,',
+            '            | OperatingSystem::Redox\n            | OperatingSystem::Ristux\n            | OperatingSystem::Solaris => CallingConvention::SystemV,',
+        )
+        if new_text != text:
+            triple_rs.write_text(new_text)
+            changed.append("src/triple.rs")
+    if changed:
+        refresh_vendor_checksum(crate_dir, *changed)
+        patched_target_lexicon += 1
+
+if patched_target_lexicon == 0:
+    raise SystemExit("failed to patch vendored target-lexicon crates for Ristux target triples")
+
+patched_nix = 0
+for crate_dir in sorted((root / "vendor").glob("nix-*")):
+    changed = []
+    errno_rs = crate_dir / "src/errno.rs"
+    if errno_rs.exists():
+        text = errno_rs.read_text()
+        new_text = text.replace(
+            'target_os = "linux",\n                        target_os = "redox",\n                        target_os = "dragonfly",',
+            'target_os = "linux",\n                        target_os = "redox",\n                        target_os = "ristux",\n                        target_os = "dragonfly",',
+        ).replace(
+            '#[cfg(target_os = "redox")]\nmod consts {',
+            '#[cfg(any(target_os = "redox", target_os = "ristux"))]\nmod consts {',
+        ).replace(
+            '        #[cfg(target_os = "hurd")]\n        EGRATUITOUS => "Gratuitous error",\n    }\n}\n',
+            '        #[cfg(target_os = "hurd")]\n        EGRATUITOUS => "Gratuitous error",\n\n        #[cfg(target_os = "ristux")]\n        _ => "Unknown errno",\n    }\n}\n',
+        )
+        if new_text != text:
+            errno_rs.write_text(new_text)
+            changed.append("src/errno.rs")
+
+    signal_rs = crate_dir / "src/sys/signal.rs"
+    if signal_rs.exists():
+        text = signal_rs.read_text()
+        new_text = text.replace(
+            'target_os = "openbsd",\n    target_os = "redox"\n)))]',
+            'target_os = "openbsd",\n    target_os = "redox",\n    target_os = "ristux"\n)))]',
+        ).replace(
+            'target_os = "redox", target_os = "haiku"',
+            'target_os = "redox", target_os = "ristux", target_os = "haiku"',
+        ).replace(
+            'target_os = "redox",\n                target_os = "haiku"',
+            'target_os = "redox",\n                target_os = "ristux",\n                target_os = "haiku"',
+        ).replace(
+            'target_os = "redox",\n                target_os = "aix"',
+            'target_os = "redox",\n                target_os = "ristux",\n                target_os = "aix"',
+        ).replace(
+            'target_os = "redox",\n                      target_os = "haiku"',
+            'target_os = "redox",\n                      target_os = "ristux",\n                      target_os = "haiku"',
+        ).replace(
+            '#[cfg(target_os = "redox")]\n#[cfg(feature = "signal")]\nconst SIGNALS: [Signal; 29] = [',
+            '#[cfg(any(target_os = "redox", target_os = "ristux"))]\n#[cfg(feature = "signal")]\nconst SIGNALS: [Signal; 29] = [',
+        ).replace(
+            '    target_os = "redox",\n    target_os = "haiku",',
+            '    target_os = "redox",\n    target_os = "ristux",\n    target_os = "haiku",',
+        ).replace(
+            'not(target_os = "redox")',
+            'not(any(target_os = "redox", target_os = "ristux"))',
+        ).replace(
+            '        SA_NOCLDSTOP;',
+            '        SA_NOCLDSTOP as SaFlags_t;',
+        ).replace(
+            '        SA_NOCLDWAIT;',
+            '        SA_NOCLDWAIT as SaFlags_t;',
+        ).replace(
+            '        SA_NODEFER;',
+            '        SA_NODEFER as SaFlags_t;',
+        ).replace(
+            '        SA_ONSTACK;',
+            '        SA_ONSTACK as SaFlags_t;',
+        ).replace(
+            '        SA_RESETHAND;',
+            '        SA_RESETHAND as SaFlags_t;',
+        ).replace(
+            '        SA_RESTART;',
+            '        SA_RESTART as SaFlags_t;',
+        ).replace(
+            '        SA_SIGINFO;',
+            '        SA_SIGINFO as SaFlags_t;',
+        )
+        if new_text != text:
+            signal_rs.write_text(new_text)
+            changed.append("src/sys/signal.rs")
+
+    if changed:
+        refresh_vendor_checksum(crate_dir, *changed)
+        patched_nix += 1
+
+if patched_nix == 0:
+    raise SystemExit("failed to patch vendored nix crates for Ristux Redox-shaped errno/signal ABI")
+
+patched_ctrlc = 0
+for crate_dir in sorted((root / "vendor").glob("ctrlc-*")):
+    unix_rs = crate_dir / "src/platform/unix/mod.rs"
+    if not unix_rs.exists():
+        continue
+    text = unix_rs.read_text()
+    new_text = text.replace(
+        '#[cfg(not(target_vendor = "apple"))]\n#[allow(static_mut_refs)] // rust-version = "1.69.0"\nmod implementation {',
+        '#[cfg(not(any(target_vendor = "apple", target_os = "ristux")))]\n#[allow(static_mut_refs)] // rust-version = "1.69.0"\nmod implementation {',
+    ).replace(
+        '''#[cfg(target_vendor = "apple")]
+mod implementation {''',
+        '''#[cfg(target_os = "ristux")]
+mod implementation {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    static SIGNALED: AtomicBool = AtomicBool::new(false);
+
+    pub unsafe fn sem_init() {
+        SIGNALED.store(false, Ordering::SeqCst);
+    }
+
+    pub unsafe fn sem_post() {
+        SIGNALED.store(true, Ordering::SeqCst);
+    }
+
+    pub unsafe fn sem_wait_forever() {
+        while !SIGNALED.swap(false, Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+mod implementation {''',
+    )
+    if new_text != text:
+        unix_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "src/platform/unix/mod.rs")
+        patched_ctrlc += 1
+
+if patched_ctrlc == 0:
+    raise SystemExit("failed to patch vendored ctrlc crates for Ristux non-POSIX-semaphore signal wait")
+
 patched_zlib_rs = 0
 for crate_dir in sorted((root / "vendor").glob("zlib-rs-*")):
     changed = []
@@ -362,6 +723,16 @@ for crate_dir in sorted((root / "vendor").glob("getrandom-*")):
         if new_text != text:
             get_errno_rs.write_text(new_text)
             changed.append("src/utils/get_errno.rs")
+    util_libc_rs = crate_dir / "src/util_libc.rs"
+    if util_libc_rs.exists():
+        text = util_libc_rs.read_text()
+        new_text = text.replace(
+            'target_os = "linux", target_os = "emscripten", target_os = "hurd", target_os = "redox", target_os = "dragonfly"',
+            'target_os = "linux", target_os = "emscripten", target_os = "hurd", target_os = "redox", target_os = "ristux", target_os = "dragonfly"',
+        )
+        if new_text != text:
+            util_libc_rs.write_text(new_text)
+            changed.append("src/util_libc.rs")
     if changed:
         refresh_vendor_checksum(crate_dir, *changed)
         patched_getrandom += 1
@@ -444,6 +815,58 @@ fi
 
 patch_static_cranelift_compiler "$source_dir"
 
+mkdir -p "$(dirname "$RUSTC_LOG")"
+set +e
+(
+  cd "$source_dir"
+  PATH="$HOST_RISTUX_LD_DIR:$PATH" \
+    BOOTSTRAP_SKIP_TARGET_SANITY=1 \
+    python3 x.py \
+      --config "$config" \
+      build \
+      --stage 2 \
+      --host x86_64-unknown-ristux \
+      --target x86_64-unknown-ristux \
+      compiler/rustc
+) > "$RUSTC_LOG" 2>&1
+rustc_status=$?
+set -e
+
+if [[ $rustc_status -eq 0 ]]; then
+  rustc_bins=()
+  while IFS= read -r rustc_bin; do
+    rustc_bins+=("$rustc_bin")
+  done < <(find "$PROBE_DIR/bootstrap-build" -type f -path '*/x86_64-unknown-ristux/stage2/bin/rustc' -print)
+  if [[ ${#rustc_bins[@]} -eq 0 ]]; then
+    echo "official Rust $RUST_VERSION stage2 Ristux rustc build succeeded but did not produce expected rustc binary" >&2
+    echo "log: $RUSTC_LOG" >&2
+    exit 1
+  fi
+else
+  if grep -q 'cannot produce dylib for `rustc_driver' "$RUSTC_LOG"; then
+    echo "official Rust $RUST_VERSION stage2 Ristux rustc build is still blocked by rustc_driver dylib output despite static patch; tail of $RUSTC_LOG:" >&2
+    tail -120 "$RUSTC_LOG" >&2
+    exit "$rustc_status"
+  fi
+
+  if grep -q 'required to be available in rlib format' "$RUSTC_LOG" \
+    && grep -q 'could not compile `rustc_codegen_cranelift`' "$RUSTC_LOG"; then
+    echo "official Rust $RUST_VERSION stage2 Ristux rustc build regressed to the old static codegen-backend dependency-format blocker; tail of $RUSTC_LOG:" >&2
+    tail -120 "$RUSTC_LOG" >&2
+    exit "$rustc_status"
+  fi
+
+  if grep -q 'No space left on device' "$RUSTC_LOG"; then
+    echo "official Rust $RUST_VERSION stage2 Ristux rustc build ran out of local disk space; tail of $RUSTC_LOG:" >&2
+    tail -120 "$RUSTC_LOG" >&2
+    exit "$rustc_status"
+  fi
+
+  echo "official Rust $RUST_VERSION stage2 Ristux rustc build failed with an unexpected blocker; tail of $RUSTC_LOG:" >&2
+  tail -120 "$RUSTC_LOG" >&2
+  exit "$rustc_status"
+fi
+
 mkdir -p "$(dirname "$LOG")"
 set +e
 (
@@ -462,14 +885,16 @@ status=$?
 set -e
 
 if [[ $status -eq 0 ]]; then
-  mapfile -t rustc_bins < <(find "$PROBE_DIR/bootstrap-build" -type f -path '*/x86_64-unknown-ristux/stage2/bin/rustc' -print)
-  mapfile -t cargo_bins < <(find "$PROBE_DIR/bootstrap-build" -type f \( -path '*/stage2-tools-bin/cargo' -o -path '*/stage2-tools/x86_64-unknown-ristux/release/cargo' \) -print)
-  if [[ ${#rustc_bins[@]} -eq 0 || ${#cargo_bins[@]} -eq 0 ]]; then
-    echo "official Rust $RUST_VERSION stage2 build succeeded but did not produce expected Ristux rustc/Cargo binaries" >&2
+  cargo_bins=()
+  while IFS= read -r cargo_bin; do
+    cargo_bins+=("$cargo_bin")
+  done < <(find "$PROBE_DIR/bootstrap-build" -type f \( -path '*/stage2-tools-bin/cargo' -o -path '*/stage2-tools/x86_64-unknown-ristux/release/cargo' \) -print)
+  if [[ ${#cargo_bins[@]} -eq 0 ]]; then
+    echo "official Rust $RUST_VERSION stage2 Cargo build succeeded but did not produce expected Ristux Cargo binary" >&2
     echo "log: $LOG" >&2
     exit 1
   fi
-  echo "official Rust $RUST_VERSION stage2 Ristux rustc/Cargo bootstrap build passed: $LOG"
+  echo "official Rust $RUST_VERSION stage2 Ristux rustc/Cargo bootstrap build passed: $RUSTC_LOG ; $LOG"
   exit 0
 fi
 
@@ -507,7 +932,7 @@ if { grep -q 'Building stage2 tool cargo' "$LOG" \
     || grep -q 'unresolved imports.*F_RDLCK' "$LOG" \
     || grep -q 'could not compile `getrandom`' "$LOG" \
     || grep -q 'could not compile `rustix`' "$LOG"; }; then
-  echo "official Rust $RUST_VERSION stage2 Ristux compiler bootstrap reached Cargo C-backed dependency blockers: $LOG"
+  echo "official Rust $RUST_VERSION stage2 Ristux rustc build passed; Cargo reached C-backed dependency blockers: $RUSTC_LOG ; $LOG"
   exit 0
 fi
 

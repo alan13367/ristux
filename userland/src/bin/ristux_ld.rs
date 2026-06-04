@@ -6,6 +6,7 @@ extern crate alloc;
 #[cfg(not(ristux_ld_host))]
 extern crate ristux_userland;
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 #[cfg(not(ristux_ld_host))]
 use ristux_userland::sys;
@@ -566,9 +567,7 @@ fn has_defined_symbol(objects: &[Object], name: &[u8]) -> bool {
 
 fn symbol_is_definition(symbol: &Symbol) -> bool {
     let bind = symbol.info >> 4;
-    !symbol.name.is_empty()
-        && symbol.shndx != SHN_UNDEF
-        && (bind == STB_GLOBAL || bind == STB_WEAK)
+    !symbol.name.is_empty() && symbol.shndx != SHN_UNDEF && (bind == STB_GLOBAL || bind == STB_WEAK)
 }
 
 fn symbol_is_strong_undefined(symbol: &Symbol) -> bool {
@@ -576,44 +575,50 @@ fn symbol_is_strong_undefined(symbol: &Symbol) -> bool {
     !symbol.name.is_empty() && symbol.shndx == SHN_UNDEF && bind != STB_WEAK
 }
 
-fn name_list_contains(names: &[Vec<u8>], name: &[u8]) -> bool {
-    names.iter().any(|existing| existing == name)
+fn name_set_contains(names: &BTreeSet<Vec<u8>>, name: &[u8]) -> bool {
+    names.contains(name)
 }
 
-fn push_unique_name(names: &mut Vec<Vec<u8>>, name: &[u8]) {
-    if !name_list_contains(names, name) {
-        names.push(name.to_vec());
-    }
+fn insert_name(names: &mut BTreeSet<Vec<u8>>, name: &[u8]) {
+    names.insert(name.to_vec());
 }
 
-fn collect_defined_names(objects: &[Object]) -> Vec<Vec<u8>> {
-    let mut names = Vec::new();
+fn collect_defined_names(objects: &[Object]) -> BTreeSet<Vec<u8>> {
+    let mut names = BTreeSet::new();
     for object in objects {
         for symbol in &object.symbols {
             if symbol_is_definition(symbol) {
-                push_unique_name(&mut names, &symbol.name);
+                insert_name(&mut names, &symbol.name);
             }
         }
     }
     names
 }
 
-fn object_defines_any(object: &Object, names: &[Vec<u8>]) -> bool {
+fn collect_global_names(globals: &[Global]) -> BTreeSet<Vec<u8>> {
+    let mut names = BTreeSet::new();
+    for global in globals {
+        insert_name(&mut names, &global.name);
+    }
+    names
+}
+
+fn object_defines_any(object: &Object, names: &BTreeSet<Vec<u8>>) -> bool {
     object
         .symbols
         .iter()
-        .any(|symbol| symbol_is_definition(symbol) && name_list_contains(names, &symbol.name))
+        .any(|symbol| symbol_is_definition(symbol) && name_set_contains(names, &symbol.name))
 }
 
 fn collect_unresolved_names(
     objects: &[Object],
-    defined: &[Vec<u8>],
-    roots: &[Vec<u8>],
-) -> Result<Vec<Vec<u8>>, &'static str> {
-    let mut unresolved = Vec::new();
+    defined: &BTreeSet<Vec<u8>>,
+    roots: &BTreeSet<Vec<u8>>,
+) -> Result<BTreeSet<Vec<u8>>, &'static str> {
+    let mut unresolved = BTreeSet::new();
     for root in roots {
-        if !name_list_contains(defined, root) {
-            push_unique_name(&mut unresolved, root);
+        if !name_set_contains(defined, root) {
+            insert_name(&mut unresolved, root);
         }
     }
     for object in objects {
@@ -645,9 +650,8 @@ fn collect_unresolved_names(
                     .symbols
                     .get(sym_index)
                     .ok_or("ristux-ld: relocation symbol index outside symtab")?;
-                if symbol_is_strong_undefined(symbol) && !name_list_contains(defined, &symbol.name)
-                {
-                    push_unique_name(&mut unresolved, &symbol.name);
+                if symbol_is_strong_undefined(symbol) && !name_set_contains(defined, &symbol.name) {
+                    insert_name(&mut unresolved, &symbol.name);
                 }
             }
         }
@@ -655,7 +659,12 @@ fn collect_unresolved_names(
     Ok(unresolved)
 }
 
-fn mark_section(objects: &mut [Object], object_index: usize, section_index: usize, work: &mut Vec<(usize, usize)>) {
+fn mark_section(
+    objects: &mut [Object],
+    object_index: usize,
+    section_index: usize,
+    work: &mut Vec<(usize, usize)>,
+) {
     let Some(section) = objects
         .get_mut(object_index)
         .and_then(|object| object.sections.get_mut(section_index))
@@ -669,11 +678,11 @@ fn mark_section(objects: &mut [Object], object_index: usize, section_index: usiz
     work.push((object_index, section_index));
 }
 
-fn find_defined_symbol_section(objects: &[Object], name: &[u8]) -> Option<(usize, usize)> {
-    let mut weak_match = None;
+fn collect_defined_symbol_sections(objects: &[Object]) -> BTreeMap<Vec<u8>, (usize, usize, bool)> {
+    let mut out = BTreeMap::new();
     for (object_index, object) in objects.iter().enumerate() {
         for symbol in &object.symbols {
-            if !symbol_is_definition(symbol) || symbol.name != name || symbol.shndx == SHN_ABS {
+            if !symbol_is_definition(symbol) || symbol.shndx == SHN_ABS {
                 continue;
             }
             let section_index = symbol.shndx as usize;
@@ -683,23 +692,32 @@ fn find_defined_symbol_section(objects: &[Object], name: &[u8]) -> Option<(usize
             if !is_loadable_section(section) {
                 continue;
             }
-            if symbol.info >> 4 == STB_GLOBAL {
-                return Some((object_index, section_index));
+            let strong = symbol.info >> 4 == STB_GLOBAL;
+            match out.get(&symbol.name) {
+                Some((_, _, existing_strong)) if *existing_strong || !strong => {}
+                _ => {
+                    out.insert(symbol.name.clone(), (object_index, section_index, strong));
+                }
             }
-            weak_match = Some((object_index, section_index));
         }
     }
-    weak_match
+    out
 }
 
-fn mark_symbol_by_name(objects: &mut [Object], name: &[u8], work: &mut Vec<(usize, usize)>) {
-    if let Some((object_index, section_index)) = find_defined_symbol_section(objects, name) {
-        mark_section(objects, object_index, section_index, work);
+fn mark_symbol_by_name(
+    objects: &mut [Object],
+    defined_sections: &BTreeMap<Vec<u8>, (usize, usize, bool)>,
+    name: &[u8],
+    work: &mut Vec<(usize, usize)>,
+) {
+    if let Some((object_index, section_index, _)) = defined_sections.get(name) {
+        mark_section(objects, *object_index, *section_index, work);
     }
 }
 
 fn mark_relocation_target(
     objects: &mut [Object],
+    defined_sections: &BTreeMap<Vec<u8>, (usize, usize, bool)>,
     source_object_index: usize,
     symbol_index: usize,
     work: &mut Vec<(usize, usize)>,
@@ -721,13 +739,14 @@ fn mark_relocation_target(
     if info >> 4 == STB_WEAK {
         return Ok(());
     }
-    mark_symbol_by_name(objects, &name, work);
+    mark_symbol_by_name(objects, defined_sections, &name, work);
     Ok(())
 }
 
 fn mark_live_sections(objects: &mut [Object], entry_name: &[u8]) -> Result<(), &'static str> {
+    let defined_sections = collect_defined_symbol_sections(objects);
     let mut work = Vec::new();
-    mark_symbol_by_name(objects, entry_name, &mut work);
+    mark_symbol_by_name(objects, &defined_sections, entry_name, &mut work);
     while let Some((object_index, live_section_index)) = work.pop() {
         let mut symbol_indices = Vec::new();
         {
@@ -755,7 +774,13 @@ fn mark_live_sections(objects: &mut [Object], entry_name: &[u8]) -> Result<(), &
             }
         }
         for symbol_index in symbol_indices {
-            mark_relocation_target(objects, object_index, symbol_index, &mut work)?;
+            mark_relocation_target(
+                objects,
+                &defined_sections,
+                object_index,
+                symbol_index,
+                &mut work,
+            )?;
         }
     }
     Ok(())
@@ -810,6 +835,53 @@ fn build_segments(objects: &[Object]) -> Result<Vec<Segment>, &'static str> {
         });
     }
     Ok(segments)
+}
+
+fn report_undefined_symbols(objects: &[Object], globals: &[Global]) -> Result<(), &'static str> {
+    let global_names = collect_global_names(globals);
+    let mut undefined = BTreeSet::new();
+    for object in objects {
+        for section in &object.sections {
+            if section.typ != SHT_RELA {
+                continue;
+            }
+            let target = object
+                .sections
+                .get(section.info as usize)
+                .ok_or("ristux-ld: relocation target section missing")?;
+            if target.segment.is_none() {
+                continue;
+            }
+            let rela_data = section_bytes(object, section)?;
+            for rela in rela_data.chunks(section.entsize.max(24) as usize) {
+                if rela.len() < 16 {
+                    break;
+                }
+                let r_info = u64::from_le_bytes([
+                    rela[8], rela[9], rela[10], rela[11], rela[12], rela[13], rela[14], rela[15],
+                ]);
+                if (r_info & 0xffff_ffff) as u32 == R_X86_64_NONE {
+                    continue;
+                }
+                let symbol = object
+                    .symbols
+                    .get((r_info >> 32) as usize)
+                    .ok_or("ristux-ld: relocation symbol index outside symtab")?;
+                if symbol_is_strong_undefined(symbol)
+                    && !name_set_contains(&global_names, &symbol.name)
+                {
+                    insert_name(&mut undefined, &symbol.name);
+                }
+            }
+        }
+    }
+    if undefined.is_empty() {
+        return Ok(());
+    }
+    for name in &undefined {
+        print_err_with_bytes(b"ristux-ld: undefined symbol: ", name);
+    }
+    Err("ristux-ld: undefined symbols")
 }
 
 fn segment_mut(segments: &mut [Segment], kind: SegmentKind) -> Option<&mut Segment> {
@@ -898,9 +970,7 @@ fn apply_relocations(
                 let p = target.out_addr.saturating_add(r_offset) as i128;
                 let value = match reloc_type {
                     R_X86_64_64 => reloc_base + a,
-                    R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL => {
-                        reloc_base + a - p
-                    }
+                    R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL => reloc_base + a - p,
                     R_X86_64_32 | R_X86_64_32S => reloc_base + a,
                     _ => return Err("ristux-ld: unsupported relocation type"),
                 };
@@ -915,10 +985,7 @@ fn apply_relocations(
                             .ok_or("ristux-ld: relocation patch outside segment")?;
                         bytes.copy_from_slice(&(value as i64 as u64).to_le_bytes());
                     }
-                    R_X86_64_PC32
-                    | R_X86_64_PLT32
-                    | R_X86_64_GOTPCREL
-                    | R_X86_64_32
+                    R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL | R_X86_64_32
                     | R_X86_64_32S => {
                         let bytes = segment
                             .bytes
@@ -1032,7 +1099,10 @@ fn parse_archive_members(bytes: &[u8], out: &mut Vec<ArchiveMember>) -> Result<(
     Ok(())
 }
 
-fn select_link_objects(inputs: Vec<Vec<u8>>, entry_name: &[u8]) -> Result<Vec<Object>, &'static str> {
+fn select_link_objects(
+    inputs: Vec<Vec<u8>>,
+    entry_name: &[u8],
+) -> Result<Vec<Object>, &'static str> {
     let mut objects = Vec::new();
     let mut archive_members = Vec::new();
     for input in inputs {
@@ -1046,10 +1116,10 @@ fn select_link_objects(inputs: Vec<Vec<u8>>, entry_name: &[u8]) -> Result<Vec<Ob
         return Err("ristux-ld: no linkable object inputs");
     }
 
-    let mut roots = Vec::new();
-    push_unique_name(&mut roots, entry_name);
+    let mut roots = BTreeSet::new();
+    insert_name(&mut roots, entry_name);
     if entry_name == b"_start" {
-        push_unique_name(&mut roots, b"main");
+        insert_name(&mut roots, b"main");
     }
 
     loop {
@@ -1089,6 +1159,7 @@ fn link_objects(inputs: Vec<Vec<u8>>, entry_name: &[u8]) -> Result<Vec<u8>, &'st
     let globals = collect_globals(&objects)?;
     let entry = find_entry(&globals, entry_name)?;
     let mut segments = build_segments(&objects)?;
+    report_undefined_symbols(&objects, &globals)?;
     apply_relocations(&objects, &globals, &mut segments)?;
     if segments.is_empty() {
         return Err("ristux-ld: no loadable sections");
@@ -1108,7 +1179,27 @@ fn is_ignored_flag(arg: &[u8]) -> bool {
             | b"--no-gc-sections"
             | b"-static"
             | b"--no-dynamic-linker"
-    )
+    ) || arg.starts_with(b"-O")
+}
+
+fn is_ignored_wl_flag(arg: &[u8]) -> bool {
+    if !arg.starts_with(b"-Wl,") {
+        return false;
+    }
+
+    let mut parts = arg[4..].split(|byte| *byte == b',');
+    while let Some(part) = parts.next() {
+        match part {
+            b"" | b"--as-needed" | b"--no-as-needed" | b"--gc-sections" | b"--no-gc-sections"
+            | b"--eh-frame-hdr" => {}
+            b"-z" | b"-rpath" | b"-rpath-link" | b"--dynamic-linker" => {
+                let _ = parts.next();
+            }
+            _ if part.starts_with(b"-O") => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn option_value_name(arg: &[u8]) -> Option<&'static str> {
@@ -1142,7 +1233,7 @@ fn parse_args<'a>(
             entry = *args
                 .get(index)
                 .ok_or("ristux-ld: missing entry symbol after -e")?;
-        } else if is_ignored_flag(arg) {
+        } else if is_ignored_flag(arg) || is_ignored_wl_flag(arg) {
             // rustc emits GNU linker mode flags even for our static-only
             // linker. They do not change the current Ristux output model.
         } else if let Some(option) = option_value_name(arg) {
