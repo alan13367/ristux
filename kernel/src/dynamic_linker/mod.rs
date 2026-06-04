@@ -176,9 +176,10 @@ fn align_up(value: usize, align: usize) -> usize {
 }
 
 fn self_test() {
-    let rustc = fs::read_file("/bin/rustc").expect("/bin/rustc missing from VFS");
-    if rustc.get(0..4) != Some(b"\x7fELF") {
-        panic!("/bin/rustc is not an ELF image");
+    let package_index =
+        fs::read_file("/pkg/packages.txt").expect("/pkg/packages.txt missing from VFS");
+    if !package_index.starts_with(b"# name version path checksum\n") {
+        panic!("package index fixture is invalid");
     }
 
     let mut linker = DynamicLinker::new();

@@ -7,7 +7,7 @@ GRUB_MKIMAGE ?= $(shell command -v grub-mkimage 2>/dev/null || command -v i686-e
 GRUB_BIOS_DIR ?= $(shell for d in /usr/lib/grub/i386-pc /usr/local/lib/grub/i386-pc /opt/homebrew/lib/grub/i386-pc $$(find /opt/homebrew/Cellar -path '*/lib/*/grub/i386-pc' -type d 2>/dev/null | sort -r); do if test -f "$$d/boot.img"; then printf '%s' "$$d"; break; fi; done)
 QEMU_IMG ?= qemu-img
 QEMU ?= qemu-system-x86_64
-QEMU_FLAGS ?= -m 1024M -smp 4
+QEMU_FLAGS ?= -m 2048M -smp 4
 QEMU_DISPLAY ?= $(shell if $(QEMU) -display help 2>/dev/null | grep -qx cocoa; then printf '%s' '-display cocoa,zoom-to-fit=on'; fi)
 QEMU_KEYMAP ?= es
 QEMU_WINDOW_BOUNDS ?= 80,80,1360,820
@@ -25,6 +25,7 @@ INSTALLER_ISO_DIR := build/installer-iso
 INSTALLER_INITRD := build/installer/initrd.bin
 INSTALLER_ISO_IMAGE := build/ristux-installer.iso
 INSTALLED_GRUB_CFG := build/install/grub.cfg
+INSTALLED_BOOT_INITRD := build/install/boot-initrd.bin
 INSTALLER_GRUB_CFG := build/installer/grub.cfg
 GRUB_BOOT_IMG := build/grub/boot.img
 GRUB_CORE_IMG := build/grub/core.img
@@ -126,6 +127,7 @@ VM_DISK_BUILDER := build/build_vm_disk
 PACKAGE_TAR_BUILDER := build/build_package_tar
 ROOTFS_MANIFEST := rootfs/manifest.txt
 INSTALLER_ROOTFS_MANIFEST := rootfs/installer-manifest.txt
+INSTALLED_BOOT_INITRD_MANIFEST := rootfs/installed-boot-manifest.txt
 ROOTFS_BASE_PACKAGE_DIR := rootfs/packages/base-files
 ROOTFS_BASE_PACKAGE_INPUTS := $(shell find $(ROOTFS_BASE_PACKAGE_DIR) -type f 2>/dev/null | sort)
 ROOTFS_BASE_PACKAGE_TAR := build/packages/base-files.tar
@@ -315,8 +317,12 @@ $(INSTALLED_GRUB_CFG):
 	  '    boot' \
 	  '}' > $@
 
-$(DISK_IMAGE): $(ISO_KERNEL) $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(INSTALLED_GRUB_CFG) $(ROOTFS_MANIFEST) $(RUST_SYSROOT_STAMP) $(ROOTFS_INPUTS)
-	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST) $(ISO_KERNEL) $(ISO_INITRD) $(INSTALLED_GRUB_CFG)
+$(INSTALLED_BOOT_INITRD): $(ROOTFS_BUILDER) $(INSTALLED_BOOT_INITRD_MANIFEST)
+	mkdir -p $(@D)
+	$(ROOTFS_BUILDER) $@ $(INSTALLED_BOOT_INITRD_MANIFEST)
+
+$(DISK_IMAGE): $(ISO_KERNEL) $(INSTALLED_BOOT_INITRD) $(EXT2_DISK_BUILDER) $(INSTALLED_GRUB_CFG) $(ROOTFS_MANIFEST) $(RUST_SYSROOT_STAMP) $(ROOTFS_INPUTS)
+	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST) $(ISO_KERNEL) $(INSTALLED_BOOT_INITRD) $(INSTALLED_GRUB_CFG)
 
 disk: $(DISK_IMAGE)
 
@@ -338,7 +344,7 @@ $(GRUB_CORE_IMG): $(GRUB_EMBEDDED_CFG)
 	mkdir -p $(@D)
 	$(GRUB_MKIMAGE) -O i386-pc -o $@ -p /boot/grub -c $(GRUB_EMBEDDED_CFG) biosdisk part_msdos ext2 multiboot2
 
-$(INSTALLER_INITRD): $(ROOTFS_BUILDER) $(INSTALLER_ROOTFS_MANIFEST) $(DISK_IMAGE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(ISO_KERNEL) $(ISO_INITRD) $(RUST_SYSROOT_STAMP) $(ROOTFS_INPUTS)
+$(INSTALLER_INITRD): $(ROOTFS_BUILDER) $(INSTALLER_ROOTFS_MANIFEST) $(USERLAND_RS_STAMP) $(DISK_IMAGE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG)
 	mkdir -p $(@D)
 	$(ROOTFS_BUILDER) $@ $(INSTALLER_ROOTFS_MANIFEST)
 

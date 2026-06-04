@@ -18,9 +18,13 @@ make vm-qcow2
 Artifacts:
 
 - `build/ristux-installer.iso`: bootable installer ISO.
-- `build/ristux-blank.raw`: blank 1 GiB raw disk for the installer.
-- `build/ristux-vm.raw`: preinstalled raw disk image.
+- `build/ristux-blank.raw`: blank 4 GiB raw disk for the installer.
+- `build/ristux-vm.raw`: preinstalled raw disk image containing the default rootfs and official Rust 1.96.0 `/bin/rustc`.
 - `build/ristux-vm.qcow2`: optional converted image when `qemu-img` is available.
+
+The installer ISO keeps a compact installer initrd and embeds the installed
+root image under `/install/root.img`; installed boots use a tiny `/boot/initrd.bin`
+and mount `/dev/vda1` as `/`.
 
 ## UTM Setup
 
@@ -34,6 +38,7 @@ Artifacts:
 8. Shut down after the installer completes.
 9. Remove the installer ISO from the VM.
 10. Boot again from the VirtIO disk.
+11. Log in and run `rustc --version` to confirm the installed compiler.
 
 ## v1 Limits
 

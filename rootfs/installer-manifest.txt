@@ -1,7 +1,30 @@
-# Installer initrd manifest.
-include manifest.txt
+# Minimal installer initrd manifest.
+# The installed system image at /install/root.img contains the full default
+# Ristux rootfs, including the official Rust 1.96.0 /bin/rustc package.
+file /bin/init ../build/userland/init.elf
+file /bin/sh ../build/userland/sh.elf
+file /bin/ristux-install ../build/userland/ristux_install.elf
+file /bin/echo ../build/userland/echo.elf
+file /bin/cat ../build/userland/cat.elf
+file /bin/ls ../build/userland/ls.elf
+file /bin/pwd ../build/userland/pwd.elf
+file /bin/mount ../build/userland/mount.elf
+file /bin/fdisk ../build/userland/fdisk.elf
+file /bin/mkfs.ext2 ../build/userland/mkfs_ext2.elf
+file /etc/os-release etc/os-release
 file /install/root.img ../build/disk.img
 file /install/grub-boot.img ../build/grub/boot.img
 file /install/grub-core.img ../build/grub/core.img
-file /install/ristux.elf ../iso/boot/ristux.elf
-file /install/initrd.bin ../iso/boot/initrd.bin
+package init 0.1.0 /bin/init
+package sh 0.1.0 /bin/sh
+package ristux-install 0.1.0 /bin/ristux-install
+package echo 0.1.0 /bin/echo
+package cat 0.1.0 /bin/cat
+package ls 0.1.0 /bin/ls
+package pwd 0.1.0 /bin/pwd
+package mount 0.1.0 /bin/mount
+package fdisk 0.1.0 /bin/fdisk
+package mkfs.ext2 0.1.0 /bin/mkfs.ext2
+package installer-root 0.1.0 /install/root.img
+package grub 2.12 /install/grub-boot.img
+package grub 2.12 /install/grub-core.img

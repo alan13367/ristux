@@ -8,7 +8,7 @@ use std::{
 mod package_archive;
 
 const BLOCK_SIZE: usize = 1024;
-const DISK_SIZE: usize = 2 * 1024 * 1024 * 1024;
+const DISK_SIZE: usize = 768 * 1024 * 1024;
 const BLOCKS_COUNT: u32 = (DISK_SIZE / BLOCK_SIZE) as u32;
 const BLOCKS_PER_GROUP: u32 = 8192;
 const INODES_PER_GROUP: u32 = 512;

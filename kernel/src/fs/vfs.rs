@@ -488,7 +488,11 @@ fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
     const TERMIOS_CC: usize = 17;
     let byte = *termios.get(TERMIOS_CC + index)?;
-    if byte == 0 { None } else { Some(byte) }
+    if byte == 0 {
+        None
+    } else {
+        Some(byte)
+    }
 }
 
 fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {
@@ -3047,6 +3051,7 @@ fn map_ext2_error(err: ext2::Ext2Error) -> VfsError {
         ext2::Ext2Error::AlreadyExists => VfsError::AlreadyExists,
         ext2::Ext2Error::TooManyLinks => VfsError::TooManyLinks,
         ext2::Ext2Error::NoSpace | ext2::Ext2Error::DirectoryFull => VfsError::NoSpace,
+        ext2::Ext2Error::OutOfMemory => VfsError::OutOfMemory,
         ext2::Ext2Error::InvalidSuperblock
         | ext2::Ext2Error::IoError
         | ext2::Ext2Error::Unsupported => VfsError::BadFd,
@@ -3551,17 +3556,23 @@ pub fn self_test() {
         panic!("PTY self-test failed");
     }
 
-    if read_file("/bin/init").is_none()
-        || read_file("/bin/rustc").is_none()
-        || read_file("/bin/cargo").is_none()
-        || read_file("/bin/rustdoc").is_none()
-        || read_file("/usr/lib/rustlib/rust-1.96.0-manifest.toml").is_none()
-        || read_file("/usr/lib/rustlib/x86_64-unknown-ristux/target.json").is_none()
-        || read_file("/etc/os-release").is_none()
-        || read_file("/pkg/packages.txt").is_none()
-        || read_file("/tmp/message.txt").is_none()
-    {
+    if read_file("/pkg/packages.txt").is_none() || read_file("/tmp/message.txt").is_none() {
         panic!("VFS path resolution self-test failed");
+    }
+    let root_device = crate::boot_config::value("root").unwrap_or("/dev/vda");
+    let full_initrd_root =
+        root_device == "/dev/vda" && !crate::boot_config::contains("ristux.mode=install");
+    if full_initrd_root {
+        if read_file("/bin/init").is_none()
+            || read_file("/bin/rustc").is_none()
+            || read_file("/bin/cargo").is_none()
+            || read_file("/bin/rustdoc").is_none()
+            || read_file("/usr/lib/rustlib/rust-1.96.0-manifest.toml").is_none()
+            || read_file("/usr/lib/rustlib/x86_64-unknown-ristux/target.json").is_none()
+            || read_file("/etc/os-release").is_none()
+        {
+            panic!("VFS full initrd path resolution self-test failed");
+        }
     }
     if list_paths("/dev").len() < 5 {
         panic!("devfs mount self-test failed");

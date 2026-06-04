@@ -1,0 +1,5 @@
+# Tiny Multiboot initrd used by GRUB after installation.
+#
+# The kernel currently requires a syntactically valid initrd module at boot.
+# Installed systems mount /dev/vda1 as / before launching /bin/init, so the
+# full OS rootfs does not need to be duplicated inside /boot/initrd.bin.

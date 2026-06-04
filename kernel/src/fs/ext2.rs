@@ -28,6 +28,7 @@ pub enum Ext2Error {
     TooManyLinks,
     NoSpace,
     DirectoryFull,
+    OutOfMemory,
     IoError,
     Unsupported,
 }
@@ -776,9 +777,16 @@ impl Ext2Fs {
     }
 
     fn read_inode_data(&self, inode: &Inode) -> Result<Vec<u8>, Ext2Error> {
+        let total_len = inode.size as usize;
+        if total_len as u64 != inode.size {
+            return Err(Ext2Error::Unsupported);
+        }
         let mut out = Vec::new();
-        let mut remaining = inode.size as usize;
-        if remaining == 0 {
+        out.try_reserve_exact(total_len)
+            .map_err(|_| Ext2Error::OutOfMemory)?;
+        out.resize(total_len, 0);
+        let mut written = 0;
+        if total_len == 0 {
             return Ok(out);
         }
 
@@ -787,13 +795,13 @@ impl Ext2Fs {
             .copied()
             .filter(|block| *block != 0)
         {
-            self.append_data_block(block, &mut remaining, &mut out)?;
-            if remaining == 0 {
+            self.read_data_block(block, &mut written, &mut out)?;
+            if written == total_len {
                 return Ok(out);
             }
         }
 
-        if remaining > 0 && inode.blocks[12] != 0 {
+        if written < total_len && inode.blocks[12] != 0 {
             let mut indirect = vec![0u8; self.block_size];
             self.read_block_sized(inode.blocks[12] as u64, &mut indirect)?;
             for offset in (0..self.block_size).step_by(4) {
@@ -801,28 +809,28 @@ impl Ext2Fs {
                 if block == 0 {
                     continue;
                 }
-                self.append_data_block(block, &mut remaining, &mut out)?;
-                if remaining == 0 {
+                self.read_data_block(block, &mut written, &mut out)?;
+                if written == total_len {
                     return Ok(out);
                 }
             }
         }
-        if remaining > 0 && inode.blocks[13] != 0 {
+        if written < total_len && inode.blocks[13] != 0 {
             for indirect in self.read_indirect_blocks(inode.blocks[13])? {
                 for block in self.read_indirect_blocks(indirect)? {
-                    self.append_data_block(block, &mut remaining, &mut out)?;
-                    if remaining == 0 {
+                    self.read_data_block(block, &mut written, &mut out)?;
+                    if written == total_len {
                         return Ok(out);
                     }
                 }
             }
         }
-        if remaining > 0 && inode.blocks[14] != 0 {
+        if written < total_len && inode.blocks[14] != 0 {
             for double_indirect in self.read_indirect_blocks(inode.blocks[14])? {
                 for indirect in self.read_indirect_blocks(double_indirect)? {
                     for block in self.read_indirect_blocks(indirect)? {
-                        self.append_data_block(block, &mut remaining, &mut out)?;
-                        if remaining == 0 {
+                        self.read_data_block(block, &mut written, &mut out)?;
+                        if written == total_len {
                             return Ok(out);
                         }
                     }
@@ -830,24 +838,34 @@ impl Ext2Fs {
             }
         }
 
-        if remaining == 0 {
+        if written == total_len {
             Ok(out)
         } else {
             Err(Ext2Error::Unsupported)
         }
     }
 
-    fn append_data_block(
+    fn read_data_block(
         &self,
         block: u32,
-        remaining: &mut usize,
-        out: &mut Vec<u8>,
+        written: &mut usize,
+        out: &mut [u8],
     ) -> Result<(), Ext2Error> {
-        let mut data = vec![0u8; self.block_size];
-        self.read_block_sized(block as u64, &mut data)?;
-        let count = (*remaining).min(self.block_size);
-        out.extend_from_slice(&data[..count]);
-        *remaining -= count;
+        if *written >= out.len() {
+            return Ok(());
+        }
+        let count = (out.len() - *written).min(self.block_size);
+        if count == self.block_size {
+            self.read_block_sized(block as u64, &mut out[*written..*written + count])?;
+        } else {
+            let mut data = Vec::new();
+            data.try_reserve_exact(self.block_size)
+                .map_err(|_| Ext2Error::OutOfMemory)?;
+            data.resize(self.block_size, 0);
+            self.read_block_sized(block as u64, &mut data)?;
+            out[*written..*written + count].copy_from_slice(&data[..count]);
+        }
+        *written += count;
         Ok(())
     }
 
@@ -1269,10 +1287,9 @@ fn read_block_sized(
         return Err(Ext2Error::IoError);
     }
     let sector = start_sector + block * (block_size / 512) as u64;
-    let mut bounce = [0u8; 1024];
-    virtio_blk::read_sectors(sector, 1, &mut bounce[..512]).map_err(|_| Ext2Error::IoError)?;
-    virtio_blk::read_sectors(sector + 1, 1, &mut bounce[512..]).map_err(|_| Ext2Error::IoError)?;
-    output[..block_size].copy_from_slice(&bounce[..block_size]);
+    virtio_blk::read_sectors(sector, 1, &mut output[..512]).map_err(|_| Ext2Error::IoError)?;
+    virtio_blk::read_sectors(sector + 1, 1, &mut output[512..1024])
+        .map_err(|_| Ext2Error::IoError)?;
     Ok(())
 }
 

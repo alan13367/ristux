@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
+        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -3367,14 +3367,18 @@ fn map_elf_segment(
 
 fn self_test() {
     let parent = 1;
-    let child = fork(parent).expect("fork self-test failed");
-    if !exec(child, "/bin/echo") {
-        panic!("exec self-test failed");
-    }
-    clear_current();
-    exit(child, 0);
-    if wait(parent, child) != Some(0) {
-        panic!("wait self-test failed");
+    if fs::read_file("/bin/echo").is_some() {
+        let child = fork(parent).expect("fork self-test failed");
+        if !exec(child, "/bin/echo") {
+            panic!("exec self-test failed");
+        }
+        clear_current();
+        exit(child, 0);
+        if wait(parent, child) != Some(0) {
+            panic!("wait self-test failed");
+        }
+    } else {
+        crate::println!("Process exec self-test deferred until mounted root is available.");
     }
 
     let child = fork(parent).expect("reparent self-test child fork failed");
