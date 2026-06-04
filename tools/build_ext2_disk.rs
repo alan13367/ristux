@@ -8,7 +8,7 @@ use std::{
 mod package_archive;
 
 const BLOCK_SIZE: usize = 1024;
-const DISK_SIZE: usize = 64 * 1024 * 1024;
+const DISK_SIZE: usize = 1024 * 1024 * 1024;
 const BLOCKS_COUNT: u32 = (DISK_SIZE / BLOCK_SIZE) as u32;
 const BLOCKS_PER_GROUP: u32 = 8192;
 const INODES_PER_GROUP: u32 = 512;
@@ -19,6 +19,21 @@ const INODE_TABLE_BLOCKS: u32 = (INODES_PER_GROUP * INODE_SIZE as u32) / BLOCK_S
 const ROOT_INODE: u32 = 2;
 const FIRST_NORMAL_INODE: u32 = 11;
 const POINTERS_PER_BLOCK: usize = BLOCK_SIZE / 4;
+const POINTERS_PER_DOUBLE: usize = POINTERS_PER_BLOCK * POINTERS_PER_BLOCK;
+
+fn group_descriptor_blocks() -> u32 {
+    ((GROUP_COUNT as usize * 32).div_ceil(BLOCK_SIZE)) as u32
+}
+
+fn group_metadata_blocks(group: u32) -> (u32, u32, u32) {
+    if group == 0 {
+        let block_bitmap = 2 + group_descriptor_blocks();
+        (block_bitmap, block_bitmap + 1, block_bitmap + 2)
+    } else {
+        let first = group * BLOCKS_PER_GROUP;
+        (first, first + 1, first + 2)
+    }
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EntryKind {
@@ -36,6 +51,7 @@ struct Entry {
     data_blocks: Vec<u32>,
     indirect_block: Option<u32>,
     double_indirect_block: Option<u32>,
+    triple_indirect_block: Option<u32>,
 }
 
 impl Entry {
@@ -50,6 +66,7 @@ impl Entry {
             data_blocks: Vec::new(),
             indirect_block: None,
             double_indirect_block: None,
+            triple_indirect_block: None,
         }
     }
 
@@ -64,6 +81,7 @@ impl Entry {
             data_blocks: Vec::new(),
             indirect_block: None,
             double_indirect_block: None,
+            triple_indirect_block: None,
         }
     }
 }
@@ -73,6 +91,7 @@ struct Builder {
     entries: BTreeMap<String, Entry>,
     block_used: Vec<bool>,
     inode_used: Vec<bool>,
+    next_free_block: usize,
 }
 
 struct PackageEntry {
@@ -90,6 +109,7 @@ impl Builder {
             entries: BTreeMap::new(),
             block_used: vec![false; BLOCKS_COUNT as usize],
             inode_used: vec![false; INODES_COUNT as usize],
+            next_free_block: 0,
         };
         builder.reserve_metadata();
         for inode in 1..FIRST_NORMAL_INODE {
@@ -103,20 +123,24 @@ impl Builder {
 
     fn reserve_metadata(&mut self) {
         self.mark_block(0);
+        let desc_blocks = group_descriptor_blocks();
         for group in 0..GROUP_COUNT {
-            let first = group * BLOCKS_PER_GROUP;
             if group == 0 {
                 self.mark_block(1);
-                self.mark_block(2);
-                self.mark_block(3);
-                self.mark_block(4);
-                for block in 5..5 + INODE_TABLE_BLOCKS {
+                for block in 2..2 + desc_blocks {
+                    self.mark_block(block);
+                }
+                let (block_bitmap, inode_bitmap, inode_table) = group_metadata_blocks(group);
+                self.mark_block(block_bitmap);
+                self.mark_block(inode_bitmap);
+                for block in inode_table..inode_table + INODE_TABLE_BLOCKS {
                     self.mark_block(block);
                 }
             } else {
-                self.mark_block(first);
-                self.mark_block(first + 1);
-                for block in first + 2..first + 2 + INODE_TABLE_BLOCKS {
+                let (block_bitmap, inode_bitmap, inode_table) = group_metadata_blocks(group);
+                self.mark_block(block_bitmap);
+                self.mark_block(inode_bitmap);
+                for block in inode_table..inode_table + INODE_TABLE_BLOCKS {
                     self.mark_block(block);
                 }
             }
@@ -205,14 +229,18 @@ impl Builder {
                 None
             };
             let double_start = 12 + indirect_count;
-            let double_indirect = if blocks.len() > double_start {
+            let double_count = blocks
+                .len()
+                .saturating_sub(double_start)
+                .min(POINTERS_PER_DOUBLE);
+            let double_indirect = if double_count > 0 {
                 let double_indirect = self.alloc_block();
                 let mut double_data = [0u8; BLOCK_SIZE];
-                for (index, chunk) in blocks[double_start..].chunks(POINTERS_PER_BLOCK).enumerate()
+                let double_end = double_start + double_count;
+                for (index, chunk) in blocks[double_start..double_end]
+                    .chunks(POINTERS_PER_BLOCK)
+                    .enumerate()
                 {
-                    if index >= POINTERS_PER_BLOCK {
-                        panic!("file {} too large for double-indirect ext2 builder", path);
-                    }
                     let indirect = self.alloc_block();
                     let mut indirect_data = [0u8; BLOCK_SIZE];
                     for (block_index, block) in chunk.iter().enumerate() {
@@ -228,6 +256,41 @@ impl Builder {
             } else {
                 None
             };
+            let triple_start = double_start + double_count;
+            let triple_indirect = if blocks.len() > triple_start {
+                let triple_indirect = self.alloc_block();
+                let mut triple_data = [0u8; BLOCK_SIZE];
+                for (double_index, double_chunk) in blocks[triple_start..]
+                    .chunks(POINTERS_PER_DOUBLE)
+                    .enumerate()
+                {
+                    if double_index >= POINTERS_PER_BLOCK {
+                        panic!("file {} too large for triple-indirect ext2 builder", path);
+                    }
+                    let double_indirect = self.alloc_block();
+                    let mut double_data = [0u8; BLOCK_SIZE];
+                    for (indirect_index, chunk) in
+                        double_chunk.chunks(POINTERS_PER_BLOCK).enumerate()
+                    {
+                        let indirect = self.alloc_block();
+                        let mut indirect_data = [0u8; BLOCK_SIZE];
+                        for (block_index, block) in chunk.iter().enumerate() {
+                            let offset = block_index * 4;
+                            indirect_data[offset..offset + 4].copy_from_slice(&block.to_le_bytes());
+                        }
+                        self.write_block(indirect, &indirect_data);
+                        let offset = indirect_index * 4;
+                        double_data[offset..offset + 4].copy_from_slice(&indirect.to_le_bytes());
+                    }
+                    self.write_block(double_indirect, &double_data);
+                    let offset = double_index * 4;
+                    triple_data[offset..offset + 4].copy_from_slice(&double_indirect.to_le_bytes());
+                }
+                self.write_block(triple_indirect, &triple_data);
+                Some(triple_indirect)
+            } else {
+                None
+            };
             let entry = self.entries.get_mut(&path).expect("entry vanished");
             if kind == EntryKind::Directory {
                 entry.data = data;
@@ -235,6 +298,7 @@ impl Builder {
             entry.data_blocks = blocks;
             entry.indirect_block = indirect;
             entry.double_indirect_block = double_indirect;
+            entry.triple_indirect_block = triple_indirect;
         }
     }
 
@@ -301,12 +365,20 @@ impl Builder {
     }
 
     fn alloc_block(&mut self) -> u32 {
-        let block = self
+        while self
             .block_used
-            .iter()
-            .position(|used| !*used)
-            .expect("disk image ran out of blocks") as u32;
+            .get(self.next_free_block)
+            .copied()
+            .unwrap_or(true)
+        {
+            self.next_free_block += 1;
+        }
+        if self.next_free_block >= self.block_used.len() {
+            panic!("disk image ran out of blocks");
+        }
+        let block = self.next_free_block as u32;
         self.mark_block(block);
+        self.next_free_block += 1;
         block
     }
 
@@ -358,15 +430,12 @@ impl Builder {
     }
 
     fn write_group_descriptors(&mut self) {
-        let mut gdt = [0u8; BLOCK_SIZE];
+        let desc_blocks = group_descriptor_blocks();
+        let mut gdt = vec![0u8; desc_blocks as usize * BLOCK_SIZE];
         for group in 0..GROUP_COUNT {
             let desc = group as usize * 32;
             let first = group * BLOCKS_PER_GROUP;
-            let (block_bitmap, inode_bitmap, inode_table) = if group == 0 {
-                (3, 4, 5)
-            } else {
-                (first, first + 1, first + 2)
-            };
+            let (block_bitmap, inode_bitmap, inode_table) = group_metadata_blocks(group);
             let block_start = first as usize;
             let block_end = block_start + BLOCKS_PER_GROUP as usize;
             let free_blocks = self.block_used[block_start..block_end]
@@ -395,17 +464,17 @@ impl Builder {
             put_u16(&mut gdt, desc + 14, free_inodes);
             put_u16(&mut gdt, desc + 16, used_dirs);
         }
-        self.write_block(2, &gdt);
+        for (index, chunk) in gdt.chunks(BLOCK_SIZE).enumerate() {
+            let mut block = [0u8; BLOCK_SIZE];
+            block[..chunk.len()].copy_from_slice(chunk);
+            self.write_block(2 + index as u32, &block);
+        }
     }
 
     fn write_bitmaps(&mut self) {
         for group in 0..GROUP_COUNT {
             let first = group * BLOCKS_PER_GROUP;
-            let (block_bitmap, inode_bitmap) = if group == 0 {
-                (3, 4)
-            } else {
-                (first, first + 1)
-            };
+            let (block_bitmap, inode_bitmap, _) = group_metadata_blocks(group);
 
             let mut blocks = [0u8; BLOCK_SIZE];
             for index in 0..BLOCKS_PER_GROUP as usize {
@@ -430,13 +499,8 @@ impl Builder {
         for (path, entry) in &self.entries {
             let group = (entry.inode - 1) / INODES_PER_GROUP;
             let index = (entry.inode - 1) % INODES_PER_GROUP;
-            let table_block = if group == 0 {
-                5
-            } else {
-                group * BLOCKS_PER_GROUP + 2
-            };
-            let offset =
-                table_block as usize * BLOCK_SIZE + index as usize * INODE_SIZE;
+            let (_, _, table_block) = group_metadata_blocks(group);
+            let offset = table_block as usize * BLOCK_SIZE + index as usize * INODE_SIZE;
             let type_bits = match entry.kind {
                 EntryKind::File => 0o100000,
                 EntryKind::Directory => 0o040000,
@@ -453,6 +517,7 @@ impl Builder {
             let data_blocks = entry.data_blocks.clone();
             let indirect_block = entry.indirect_block;
             let double_indirect_block = entry.double_indirect_block;
+            let triple_indirect_block = entry.triple_indirect_block;
 
             let inode = &mut self.image[offset..offset + INODE_SIZE];
             put_u16(inode, 0, mode);
@@ -472,6 +537,9 @@ impl Builder {
             }
             if let Some(double_indirect) = double_indirect_block {
                 put_u32(inode, 40 + 13 * 4, double_indirect);
+            }
+            if let Some(triple_indirect) = triple_indirect_block {
+                put_u32(inode, 40 + 14 * 4, triple_indirect);
             }
         }
     }
@@ -604,8 +672,7 @@ fn main() {
     }
     builder.add_file(
         "/etc/passwd",
-        b"root:x:0:0:root:/root:/bin/sh\nalice:x:1000:1000:Alice:/home/alice:/bin/sh\n"
-            .to_vec(),
+        b"root:x:0:0:root:/root:/bin/sh\nalice:x:1000:1000:Alice:/home/alice:/bin/sh\n".to_vec(),
         0o644,
         0,
         0,
@@ -745,10 +812,18 @@ fn collect_tree_files_inner(
 fn metadata_block_count(entry: &Entry) -> usize {
     let indirect_data = entry.data_blocks.len().saturating_sub(12);
     let single = usize::from(entry.indirect_block.is_some());
-    let double_data = indirect_data.saturating_sub(POINTERS_PER_BLOCK);
+    let double_data = indirect_data
+        .saturating_sub(POINTERS_PER_BLOCK)
+        .min(POINTERS_PER_DOUBLE);
     let double = usize::from(entry.double_indirect_block.is_some());
     let double_children = double_data.div_ceil(POINTERS_PER_BLOCK);
-    single + double + double_children
+    let triple_data = indirect_data
+        .saturating_sub(POINTERS_PER_BLOCK)
+        .saturating_sub(POINTERS_PER_DOUBLE);
+    let triple = usize::from(entry.triple_indirect_block.is_some());
+    let triple_double_children = triple_data.div_ceil(POINTERS_PER_DOUBLE);
+    let triple_indirect_children = triple_data.div_ceil(POINTERS_PER_BLOCK);
+    single + double + double_children + triple + triple_double_children + triple_indirect_children
 }
 
 fn parse_package_options(options: &[&str]) -> (Vec<String>, String) {
@@ -818,7 +893,13 @@ fn add_package_metadata(builder: &mut Builder, packages: &[PackageEntry]) {
             0,
             0,
         );
-        builder.add_file(&format!("{}/files", base), file_list.into_bytes(), 0o644, 0, 0);
+        builder.add_file(
+            &format!("{}/files", base),
+            file_list.into_bytes(),
+            0o644,
+            0,
+            0,
+        );
         builder.add_file(
             &format!("{}/dependencies", base),
             dependency_list.into_bytes(),
@@ -839,9 +920,12 @@ fn add_package_metadata(builder: &mut Builder, packages: &[PackageEntry]) {
 fn package_index(packages: &[PackageEntry], files: &BTreeMap<String, Vec<u8>>) -> String {
     let mut output = String::from("# name version path checksum\n");
     for package in packages {
-        let data = files
-            .get(&package.path)
-            .unwrap_or_else(|| panic!("package {} references missing {}", package.name, package.path));
+        let data = files.get(&package.path).unwrap_or_else(|| {
+            panic!(
+                "package {} references missing {}",
+                package.name, package.path
+            )
+        });
         output.push_str(&format!(
             "{} {} {} {:016x}\n",
             package.name,

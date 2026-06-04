@@ -79,13 +79,13 @@ make run
 Equivalent QEMU command:
 
 ```sh
-qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -smp 4 -no-reboot -no-shutdown
+qemu-system-x86_64 -cdrom build/ristux.iso -m 1024M -smp 4 -no-reboot -no-shutdown
 ```
 
 For a headless serial log:
 
 ```sh
-qemu-system-x86_64 -cdrom build/ristux.iso -m 256M -smp 4 -display none -no-reboot \
+qemu-system-x86_64 -cdrom build/ristux.iso -m 1024M -smp 4 -display none -no-reboot \
   -serial file:/tmp/ristux-serial.log -monitor stdio
 ```
 
@@ -97,9 +97,63 @@ Convenience scripts:
 scripts/build_iso.sh
 scripts/run_qemu.sh --headless
 scripts/debug_qemu.sh
+make rust-std-probe-current
+make rust-official-target-probe
+make rust-official-bootstrap-std
+make rust-official-bootstrap-stage2
+make rust-official-std-probe
+scripts/quick_fixture.sh rust-std
 ```
 
 `scripts/debug_qemu.sh` starts QEMU paused with the GDB stub on port `1234`.
+`make rust-std-probe-current` runs a host-side upstream Rust
+`-Zbuild-std=std,panic_abort` probe for `x86_64-unknown-ristux`. The probe
+applies the maintained Ristux Rust 1.96.0 overlay sources from
+`toolchain/rust-overlays/rust-1.96.0`, keeps C runtime linkage out of the
+graph, patches upstream `std` with Ristux `std::os`, futex sync, single-thread
+TLS, a `brk`-backed allocator, raw syscall libc ABI shims, and abort-only
+unwind stubs, opts the small probe crate into `restricted_std`, builds and runs
+a host-mode pure Rust `ristux-ld` from the same source as `/bin/ristux-ld`, and
+links a static Ristux `ET_EXEC` hello binary. `scripts/quick_fixture.sh
+rust-std` packages that binary as `/bin/rust_std_probe`, boots Ristux, executes
+it, and expects `hello from Ristux std`. The overlay source package is installed
+at `/usr/lib/rustlib/src/ristux-overlays`, and the overlay-built `std` rlibs
+and rmetas are installed in `/usr/lib/rustlib/x86_64-unknown-ristux/lib` as
+`rust-std-libs`. Replacing the bootstrap `rustc`/Cargo frontends with the real
+upstream `rustc_driver` and Cargo binaries is the next toolchain step.
+`make rust-official-target-probe` applies the maintained `rustc_target` overlay
+to a temporary official Rust 1.96.0 source tree, adds `Os::Ristux`, registers
+`x86_64-unknown-ristux` as a built-in hosted tier-3 target, patches Rust
+bootstrap's Cranelift target allowlist for the temporary tree, runs
+`cargo +1.96.0 check -p rustc_target` and a bootstrap crate check, applies the
+Ristux `std` and vendored `libc` overlays inside that official source tree, and
+dry-runs the no-LLVM/no-LLD stage2 Ristux `rustc_driver`, Cranelift, and Cargo
+build plan. The dry-run uses `BOOTSTRAP_SKIP_TARGET_SANITY=1` because the
+external stage0 compiler cannot know the newly added built-in target until
+stage1 exists.
+`make rust-official-bootstrap-std` takes that prepared official Rust source
+tree and runs a real non-dry-run stage1 bootstrap build of
+`library/std` for `x86_64-unknown-ristux` with the Cranelift-only Ristux
+bootstrap config. This proves that the official Rust 1.96.0 source can build
+the Ristux hosted `std` artifacts through Rust bootstrap without adding LLVM,
+LLD, TinyCC, Newlib, Dropbear, or C runtime artifacts to Ristux. The remaining
+compiler work is the stage2 Ristux-hosted `rustc_driver`, Cranelift backend,
+Cargo binary, and package/install replacement for the current frontends.
+`make rust-official-bootstrap-stage2` performs the next compiler-host probe:
+it prebuilds the official stage1 Ristux `std` boundary, builds a host-runnable
+pure Rust `ristux-ld`, patches the temporary official compiler so
+`rustc-main` links Cranelift statically instead of loading a dynamic backend,
+and runs the real stage2 Ristux-hosted Cargo bootstrap path. The current
+expected blocker is now Cargo's C-backed transport and compression graph:
+`curl-sys`, `libgit2-sys`, `libssh2-sys`, and `libz-sys` still enter the
+Ristux Cargo build and try to compile C. Those need to be target-gated out or
+replaced with pure Rust registry, Git, compression, and package database paths
+before the real `/bin/rustc` and `/bin/cargo` can be packaged.
+`make rust-official-std-probe` uses the official Rust 1.96.0 source tarball and
+checks the current expected blocker: direct standalone `build-std` reaches core
+intrinsics/lang-item mismatches because the official source needs Rust's
+stage1 bootstrap compiler before it can be used for the real host compiler
+build.
 
 ## Smoke Test Checklist
 
@@ -165,7 +219,13 @@ ring-3 ELF sequence, logs keyboard scancodes from the injected keys, assembles
 - Includes a RAM-disk storage layer, permission checks, signals, and TTY line discipline tests.
 - Exercises a VirtIO-net-style queue model with Ethernet receive/transmit, ARP, IPv4, ICMP echo, and UDP sockets.
 - Reads CMOS RTC time, tracks monotonic uptime, supports timer queues, exposes `time()`, and timestamps VFS files.
-- Packages `/lib/libc.so` into the initrd and resolves shared-library symbols for a PIE-style user program through the dynamic linker.
+- Ships the Rust toolchain package surface (`rustc`, `cargo`, `rustdoc`,
+  `ristux-ld`, and Rust sysroot metadata) without libc/TinyCC/Newlib/Dropbear
+  payloads in the default image, plus a packaged upstream-std execution probe
+  at `/bin/rust_std_probe` and maintained Ristux Rust overlay sources at
+  `/usr/lib/rustlib/src/ristux-overlays`.
+- Packages overlay-built Ristux `std` sysroot artifacts in
+  `/usr/lib/rustlib/x86_64-unknown-ristux/lib`.
 - Initializes an SMP topology model with per-CPU state, IPI queues, shared-lock audit, and multi-CPU scheduler dispatch.
 - Boots QEMU application processors through a low-memory trampoline and verifies APs reach Rust entry.
 - Requests a GRUB linear framebuffer, maps it, draws a double-buffered boot scene with a tiny bitmap font, and exposes `/dev/fb0`.

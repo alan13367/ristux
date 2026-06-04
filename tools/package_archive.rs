@@ -120,7 +120,10 @@ fn verify_checksum(source: &Path, header: &[u8], offset: usize) {
 }
 
 fn read_tar_string(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     std::str::from_utf8(&bytes[..end])
         .unwrap_or_else(|_| panic!("tar path is not utf-8"))
         .trim()
@@ -128,7 +131,10 @@ fn read_tar_string(bytes: &[u8]) -> String {
 }
 
 fn read_tar_octal(bytes: &[u8]) -> usize {
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     let text = std::str::from_utf8(&bytes[..end])
         .unwrap_or_else(|_| panic!("tar octal field is not utf-8"))
         .trim();

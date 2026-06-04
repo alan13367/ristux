@@ -28,6 +28,37 @@ pub const FD_CLOEXEC: u32 = 1;
 pub const SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
 pub const SIGNAL_FLAG_RESTART: u32 = 2;
 const MAX_WAKE_PIDS: usize = MAX_FDS;
+const SYSCALL_TRAMPOLINE_BASE: usize = 0x4000_0000;
+const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
+const SYSCALL_TRAMPOLINE_STUBS: [&[u8]; 7] = [
+    // extern "C" fn(nr) -> isize
+    &[0x48, 0x89, 0xf8, 0x0f, 0x05, 0xc3],
+    // extern "C" fn(nr, a0) -> isize
+    &[0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x0f, 0x05, 0xc3],
+    // extern "C" fn(nr, a0, a1) -> isize
+    &[
+        0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 0x0f, 0x05, 0xc3,
+    ],
+    // extern "C" fn(nr, a0, a1, a2) -> isize
+    &[
+        0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xca, 0x0f, 0x05, 0xc3,
+    ],
+    // extern "C" fn(nr, a0, a1, a2, a3) -> isize
+    &[
+        0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xca, 0x4d, 0x89, 0xc2,
+        0x0f, 0x05, 0xc3,
+    ],
+    // extern "C" fn(nr, a0, a1, a2, a3, a4) -> isize
+    &[
+        0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xca, 0x4d, 0x89, 0xc2,
+        0x4d, 0x89, 0xc8, 0x0f, 0x05, 0xc3,
+    ],
+    // extern "C" fn(nr, a0, a1, a2, a3, a4, a5) -> isize
+    &[
+        0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xca, 0x4d, 0x89, 0xc2,
+        0x4d, 0x89, 0xc8, 0x4c, 0x8b, 0x4c, 0x24, 0x08, 0x0f, 0x05, 0xc3,
+    ],
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
@@ -794,6 +825,11 @@ impl Process {
             self.address_space.activate();
             new_space.destroy();
             return Err(ExecError::OutOfMemory);
+        }
+        if let Err(err) = map_syscall_trampoline(&mut new_space) {
+            self.address_space.activate();
+            new_space.destroy();
+            return Err(err);
         }
         let Ok(entry) = usize::try_from(checked_entry) else {
             self.address_space.activate();
@@ -1808,6 +1844,10 @@ pub fn set_user_fs_base(pid: Pid, base: u64) -> bool {
         process.user_fs_base = base;
         true
     })
+}
+
+pub fn current_user_fs_base() -> Option<u64> {
+    with_current_read(|process| process.user_fs_base)
 }
 
 pub fn exec(pid: Pid, path: &str) -> bool {
@@ -3208,6 +3248,39 @@ pub fn stats() -> ProcessStats {
             .map(|p| p.fds.len() + p.pid as usize)
             .sum(),
     })
+}
+
+fn map_syscall_trampoline(address_space: &mut AddressSpace) -> Result<(), ExecError> {
+    if address_space.is_user_mapped(SYSCALL_TRAMPOLINE_BASE) {
+        return Err(ExecError::InvalidImage);
+    }
+
+    let frame = frame_allocator::allocate_frame().ok_or(ExecError::OutOfMemory)?;
+    unsafe {
+        ptr::write_bytes(frame.start as *mut u8, 0xcc, FRAME_SIZE);
+        for (index, stub) in SYSCALL_TRAMPOLINE_STUBS.iter().enumerate() {
+            let offset = index * SYSCALL_TRAMPOLINE_STRIDE;
+            if offset + stub.len() > FRAME_SIZE {
+                frame_allocator::free_frame(frame);
+                return Err(ExecError::InvalidImage);
+            }
+            ptr::copy_nonoverlapping(stub.as_ptr(), (frame.start + offset) as *mut u8, stub.len());
+        }
+        if let Err(err) = address_space.map_owned_user_page(
+            SYSCALL_TRAMPOLINE_BASE,
+            frame,
+            UserProtection::ReadExecute,
+        ) {
+            frame_allocator::free_frame(frame);
+            return match err {
+                paging::PagingError::OutOfFrames
+                | paging::PagingError::RefcountOverflow
+                | paging::PagingError::RefcountUnavailable => Err(ExecError::OutOfMemory),
+                _ => Err(ExecError::InvalidImage),
+            };
+        }
+    }
+    Ok(())
 }
 
 fn map_elf_segment(

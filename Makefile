@@ -6,7 +6,7 @@ GRUB_MKIMAGE ?= $(shell command -v grub-mkimage 2>/dev/null || command -v i686-e
 GRUB_BIOS_DIR ?= $(shell for d in /usr/lib/grub/i386-pc /usr/local/lib/grub/i386-pc /opt/homebrew/lib/grub/i386-pc $$(find /opt/homebrew/Cellar -path '*/lib/*/grub/i386-pc' -type d 2>/dev/null | sort -r); do if test -f "$$d/boot.img"; then printf '%s' "$$d"; break; fi; done)
 QEMU_IMG ?= qemu-img
 QEMU ?= qemu-system-x86_64
-QEMU_FLAGS ?= -m 256M -smp 4
+QEMU_FLAGS ?= -m 1024M -smp 4
 QEMU_DISPLAY ?= $(shell if $(QEMU) -display help 2>/dev/null | grep -qx cocoa; then printf '%s' '-display cocoa,zoom-to-fit=on'; fi)
 QEMU_KEYMAP ?= es
 QEMU_WINDOW_BOUNDS ?= 80,80,1360,820
@@ -37,12 +37,13 @@ USERLAND_RS_OUT := userland/target/$(USERLAND_RS_TARGET)/release
 USERLAND_RS_SRC := \
 	Makefile \
 	userland/Cargo.toml \
+	userland/.cargo/config.toml \
 	userland/linker.ld \
 	$(wildcard userland/src/*.rs) \
 	$(wildcard userland/src/bin/*.rs) \
 	$(wildcard userland/src/bin/probes/*.rs) \
 	targets/x86_64-unknown-ristux.json
-USERLAND_RS_BINS := init sh cat echo true false touch mount login ristux_install fdisk mkfs_ext2 id su sleep shutdown ping ip curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain rustc ristux_ld stty cp mv ls mkdir rm chmod kill pwd udp grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps cc_hello cc_cred cc_passwd cc_session cc_dev cc_dns cc_http cc_fcntl cc_file_sync cc_futex cc_cow cc_mmap cc_path cc_poll cc_select cc_socket cc_tcp cc_uio cc_stack cc_tty cc_pty cc_fs cc_signal cc_links cc_libc_compat cc_ext2 cc_proc cc_procfs cc_statfs cc_sse cc_libc_hosted
+USERLAND_RS_BINS := init sh cat echo true false touch mount login ristux_install fdisk mkfs_ext2 id su sleep shutdown ping ip curl_lite loopback_check ssh_banner pty_shell_check sig_demo edit ansi_demo tar pkg ar pkgconf make toolchain rustc cargo rustdoc ristux_ld rust_host_probe stty cp mv ls mkdir rm chmod kill pwd udp grep printf test ln readlink wc head tail tee sort uniq basename dirname install env cut find xargs sed uname hostname tr date which cmp dd df seq expr yes diff awk patch gzip xz stat chown uptime free ps cc_hello cc_cred cc_passwd cc_session cc_dev cc_dns cc_http cc_fcntl cc_file_sync cc_futex cc_cow cc_mmap cc_path cc_poll cc_select cc_socket cc_tcp cc_uio cc_stack cc_tty cc_pty cc_fs cc_signal cc_links cc_libc_compat cc_ext2 cc_proc cc_procfs cc_statfs cc_sse cc_libc_hosted
 USERLAND_RS_STAMP := build/userland/.rust-stamp
 USER_INIT_ELF := build/userland/init.elf
 USER_SH_ELF := build/userland/sh.elf
@@ -134,9 +135,17 @@ ROOTFS_SOURCEPKG_DIR := rootfs/testdata/sourcepkg
 ROOTFS_SOURCEPKG_INPUTS := $(shell find $(ROOTFS_SOURCEPKG_DIR) -type f 2>/dev/null | sort)
 ROOTFS_SOURCEPKG_TAR := build/testdata/ristuxpkg-0.1.tar
 ROOTFS_SOURCEPKG_ARCHIVE := build/testdata/ristuxpkg-0.1.tar.gz
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE)
+RUST_SYSROOT_TREE := build/rustlib
+RUST_SYSROOT_LIBDIR := $(RUST_SYSROOT_TREE)/x86_64-unknown-ristux/lib
+RUST_SYSROOT_STAMP := build/rustlib.stamp
+RUST_STD_PROBE_ELF := build/userland/rust_std_probe.elf
+RUST_STD_SYSROOT_TREE := build/rust-std-sysroot
+RUST_STD_SYSROOT_STAMP := build/rust-std-sysroot.stamp
+RUST_OVERLAY_TREE := toolchain/rust-overlays/rust-1.96.0
+RUST_OVERLAY_INPUTS := $(shell find $(RUST_OVERLAY_TREE) -type f 2>/dev/null)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
 
-.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% debug test clean
+.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% rust-std-probe rust-std-probe-current rust-std-probe-current-blocker rust-std-probe-binary rust-std-sysroot rust-official-target-probe rust-official-bootstrap-std rust-official-bootstrap-stage2 rust-official-std-probe debug test clean
 
 all: build
 
@@ -153,6 +162,25 @@ $(USERLAND_RS_STAMP): $(USERLAND_RS_SRC)
 		cp $(USERLAND_RS_OUT)/$$bin build/userland/$$bin.elf; \
 	done
 	touch $@
+
+$(RUST_SYSROOT_STAMP): $(USERLAND_RS_STAMP)
+	rm -rf $(RUST_SYSROOT_TREE)
+	mkdir -p $(RUST_SYSROOT_LIBDIR)
+	@for crate in core alloc compiler_builtins; do \
+		rlib=$$(ls -t $(USERLAND_RS_OUT)/deps/lib$$crate-*.rlib 2>/dev/null | head -n 1); \
+		test -n "$$rlib" || { echo "missing Rust sysroot artifact for $$crate" >&2; exit 1; }; \
+		cp "$$rlib" "$(RUST_SYSROOT_LIBDIR)/"; \
+		rmeta="$${rlib%.rlib}.rmeta"; \
+		test -f "$$rmeta" && cp "$$rmeta" "$(RUST_SYSROOT_LIBDIR)/" || true; \
+	done
+	touch $@
+
+$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS)
+	RISTUX_STD_PROBE_OUTPUT=$(RUST_STD_PROBE_ELF) RISTUX_STD_SYSROOT_OUTPUT=$(RUST_STD_SYSROOT_TREE) scripts/probe_rust_std.sh --expect-std-link-success
+	touch $@
+
+$(RUST_STD_PROBE_ELF): $(RUST_STD_SYSROOT_STAMP)
+	@test -f $@
 
 $(USER_INIT_ELF): $(USERLAND_RS_STAMP)
 $(USER_SH_ELF): $(USERLAND_RS_STAMP)
@@ -262,14 +290,7 @@ $(ROOTFS_SOURCEPKG_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_SOURCEPKG_INPUTS)
 $(ROOTFS_SOURCEPKG_ARCHIVE): $(ROOTFS_SOURCEPKG_TAR)
 	gzip -n -c $< > $@
 
-$(ROOTFS_NATIVEPKG_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_NATIVEPKG_INPUTS)
-	mkdir -p build/testdata
-	$(PACKAGE_TAR_BUILDER) $@ $(ROOTFS_NATIVEPKG_DIR)
-
-$(ROOTFS_NATIVEPKG_ARCHIVE): $(ROOTFS_NATIVEPKG_TAR)
-	gzip -n -c $< > $@
-
-$(ISO_INITRD): $(USERLAND_RS_STAMP) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
+$(ISO_INITRD): $(USERLAND_RS_STAMP) $(RUST_SYSROOT_STAMP) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)
 	$(ROOTFS_BUILDER) $(ISO_INITRD) $(ROOTFS_MANIFEST)
 
 rootfs: $(ISO_INITRD)
@@ -287,7 +308,7 @@ $(INSTALLED_GRUB_CFG):
 	  '    boot' \
 	  '}' > $@
 
-$(DISK_IMAGE): $(ISO_KERNEL) $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(INSTALLED_GRUB_CFG) $(ROOTFS_MANIFEST) $(ROOTFS_INPUTS)
+$(DISK_IMAGE): $(ISO_KERNEL) $(ISO_INITRD) $(EXT2_DISK_BUILDER) $(INSTALLED_GRUB_CFG) $(ROOTFS_MANIFEST) $(RUST_SYSROOT_STAMP) $(ROOTFS_INPUTS)
 	$(EXT2_DISK_BUILDER) $(DISK_IMAGE) $(ROOTFS_MANIFEST) $(ISO_KERNEL) $(ISO_INITRD) $(INSTALLED_GRUB_CFG)
 
 disk: $(DISK_IMAGE)
@@ -310,7 +331,7 @@ $(GRUB_CORE_IMG): $(GRUB_EMBEDDED_CFG)
 	mkdir -p $(@D)
 	$(GRUB_MKIMAGE) -O i386-pc -o $@ -p /boot/grub -c $(GRUB_EMBEDDED_CFG) biosdisk part_msdos ext2 multiboot2
 
-$(INSTALLER_INITRD): $(ROOTFS_BUILDER) $(INSTALLER_ROOTFS_MANIFEST) $(DISK_IMAGE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(ISO_KERNEL) $(ISO_INITRD) $(ROOTFS_INPUTS)
+$(INSTALLER_INITRD): $(ROOTFS_BUILDER) $(INSTALLER_ROOTFS_MANIFEST) $(DISK_IMAGE) $(GRUB_BOOT_IMG) $(GRUB_CORE_IMG) $(ISO_KERNEL) $(ISO_INITRD) $(RUST_SYSROOT_STAMP) $(ROOTFS_INPUTS)
 	mkdir -p $(@D)
 	$(ROOTFS_BUILDER) $@ $(INSTALLER_ROOTFS_MANIFEST)
 
@@ -372,6 +393,30 @@ quick:
 
 quick-%:
 	scripts/quick_fixture.sh $*
+
+rust-std-probe:
+	scripts/probe_rust_std.sh
+
+rust-std-probe-current:
+	scripts/probe_rust_std.sh --expect-std-link-success
+
+rust-std-probe-current-blocker: rust-std-probe-current
+
+rust-std-probe-binary: $(RUST_STD_PROBE_ELF)
+
+rust-std-sysroot: $(RUST_STD_SYSROOT_STAMP)
+
+rust-official-target-probe: scripts/probe_rust_target.sh $(RUST_OVERLAY_TREE)/rust-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_ristux.rs
+	scripts/probe_rust_target.sh
+
+rust-official-bootstrap-std: scripts/probe_rust_bootstrap_std.sh scripts/probe_rust_target.sh $(RUST_OVERLAY_INPUTS)
+	scripts/probe_rust_bootstrap_std.sh
+
+rust-official-bootstrap-stage2: scripts/probe_rust_bootstrap_stage2.sh scripts/probe_rust_target.sh userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS)
+	scripts/probe_rust_bootstrap_stage2.sh
+
+rust-official-std-probe:
+	scripts/probe_rust_std.sh --expect-official-stage1-blocker
 
 debug: iso
 	scripts/debug_qemu.sh

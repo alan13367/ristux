@@ -11,6 +11,7 @@ file /bin/chmod ../build/userland/chmod.elf
 file /bin/chown ../build/userland/chown.elf
 file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
+file /bin/cargo ../build/userland/cargo.elf
 file /bin/cut ../build/userland/cut.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
 file /bin/cc_cow ../build/userland/cc_cow.elf
@@ -91,8 +92,11 @@ file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
 file /bin/ristux-ld ../build/userland/ristux_ld.elf
+file /bin/rust_host_probe ../build/userland/rust_host_probe.elf
+file /bin/rust_std_probe ../build/userland/rust_std_probe.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/rustc ../build/userland/rustc.elf
+file /bin/rustdoc ../build/userland/rustdoc.elf
 file /bin/sed ../build/userland/sed.elf
 file /bin/seq ../build/userland/seq.elf
 file /bin/sig_demo ../build/userland/sig_demo.elf
@@ -125,7 +129,11 @@ file /bin/yes ../build/userland/yes.elf
 file /etc/os-release etc/os-release
 file /etc/resolv.conf etc/resolv.conf
 file /usr/lib/pkgconfig/ristux.pc usr/lib/pkgconfig/ristux.pc
+file /usr/lib/rustlib/rust-1.96.0-manifest.toml usr/lib/rustlib/rust-1.96.0-manifest.toml
 file /usr/lib/rustlib/x86_64-unknown-ristux/target.json ../targets/x86_64-unknown-ristux.json
+package-tree rust-core-libs 1.96.0 ../build/rustlib /usr/lib/rustlib deps=rustc
+package-tree rust-std-libs 1.96.0 ../build/rust-std-sysroot /usr/lib/rustlib deps=rustc,ristux-ld,rust-ristux-overlays
+package-tree rust-ristux-overlays 1.96.0 ../toolchain/rust-overlays/rust-1.96.0 /usr/lib/rustlib/src/ristux-overlays deps=rustc,ristux-ld
 file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
 file /usr/share/testdata/ristuxpkg-0.1.tar.gz ../build/testdata/ristuxpkg-0.1.tar.gz
 file /usr/share/testdata/ristuxpkg.patch testdata/ristuxpkg.patch
@@ -134,6 +142,7 @@ package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
 package awk 0.1.0 /bin/awk
 package basename 0.1.0 /bin/basename
+package cargo 1.96.0 /bin/cargo deps=rustc
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow
@@ -219,10 +228,14 @@ package ps 0.1.0 /bin/ps
 package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
 package readlink 0.1.0 /bin/readlink
-package ristux-ld 0.0.0-bootstrap /bin/ristux-ld
+package ristux-ld 0.3.0-bootstrap /bin/ristux-ld
 package rm 0.1.0 /bin/rm
-package rustc 0.0.0-bootstrap /bin/rustc deps=ristux-ld
-package rustc 0.0.0-bootstrap /usr/lib/rustlib/x86_64-unknown-ristux/target.json deps=ristux-ld
+package rust-host-probe 0.1.0 /bin/rust_host_probe deps=rustc,cargo,rustdoc,ristux-ld
+package rust-std-probe 0.1.0 /bin/rust_std_probe deps=rustc,ristux-ld
+package rustc 1.96.0 /bin/rustc deps=ristux-ld
+package rustc 1.96.0 /usr/lib/rustlib/rust-1.96.0-manifest.toml deps=ristux-ld
+package rustc 1.96.0 /usr/lib/rustlib/x86_64-unknown-ristux/target.json deps=ristux-ld
+package rustdoc 1.96.0 /bin/rustdoc deps=rustc
 package sed 0.1.0 /bin/sed
 package seq 0.1.0 /bin/seq
 package sh 0.1.0 /bin/sh

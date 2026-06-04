@@ -7,7 +7,7 @@ ISO_IMAGE="${ISO_IMAGE:-build/ristux.iso}"
 DISK_IMAGE="${DISK_IMAGE:-build/disk.img}"
 QEMU_FLAGS="${QEMU_FLAGS:-}"
 if [[ -z "$QEMU_FLAGS" ]]; then
-  QEMU_FLAGS="-m 256M -smp 4"
+  QEMU_FLAGS="-m 1024M -smp 4"
 fi
 HEADLESS=0
 ENABLE_NET="${RISTUX_ENABLE_NET:-0}"

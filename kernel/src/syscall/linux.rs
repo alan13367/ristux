@@ -49,6 +49,7 @@ pub const NR_pipe: u64 = 22;
 pub const NR_select: u64 = 23;
 pub const NR_sched_yield: u64 = 24;
 pub const NR_msync: u64 = 26;
+pub const NR_madvise: u64 = 28;
 pub const NR_dup: u64 = 32;
 pub const NR_dup2: u64 = 33;
 pub const NR_nanosleep: u64 = 35;
@@ -94,6 +95,7 @@ pub const NR_umask: u64 = 95;
 pub const NR_gettimeofday: u64 = 96;
 pub const NR_getrlimit: u64 = 97;
 pub const NR_getrusage: u64 = 98;
+pub const NR_sysinfo: u64 = 99;
 pub const NR_times: u64 = 100;
 pub const NR_getuid: u64 = 102;
 pub const NR_getgid: u64 = 104;
@@ -115,6 +117,7 @@ pub const NR_rt_sigpending: u64 = 127;
 pub const NR_utime: u64 = 132;
 pub const NR_statfs: u64 = 137;
 pub const NR_fstatfs: u64 = 138;
+pub const NR_arch_prctl: u64 = 158;
 pub const NR_setrlimit: u64 = 160;
 pub const NR_mount: u64 = 165;
 pub const NR_reboot: u64 = 169;
@@ -122,8 +125,12 @@ pub const NR_sethostname: u64 = 170;
 pub const NR_gettid: u64 = 186;
 pub const NR_time: u64 = 201;
 pub const NR_futex: u64 = 202;
+pub const NR_sched_getaffinity: u64 = 204;
 pub const NR_getdents64: u64 = 217;
+pub const NR_set_tid_address: u64 = 218;
+pub const NR_fadvise64: u64 = 221;
 pub const NR_clock_gettime: u64 = 228;
+pub const NR_clock_getres: u64 = 229;
 pub const NR_utimes: u64 = 235;
 pub const NR_openat: u64 = 257;
 pub const NR_mkdirat: u64 = 258;
@@ -137,10 +144,17 @@ pub const NR_symlinkat: u64 = 266;
 pub const NR_readlinkat: u64 = 267;
 pub const NR_fchmodat: u64 = 268;
 pub const NR_faccessat: u64 = 269;
+pub const NR_set_robust_list: u64 = 273;
+pub const NR_get_robust_list: u64 = 274;
 pub const NR_utimensat: u64 = 280;
 pub const NR_dup3: u64 = 292;
 pub const NR_pipe2: u64 = 293;
+pub const NR_prlimit64: u64 = 302;
+pub const NR_getcpu: u64 = 309;
+pub const NR_renameat2: u64 = 316;
 pub const NR_getrandom: u64 = 318;
+pub const NR_copy_file_range: u64 = 326;
+pub const NR_statx: u64 = 332;
 
 const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
@@ -181,6 +195,7 @@ const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
 const AT_EACCESS: i32 = 0x200;
 const AT_REMOVEDIR: i32 = 0x200;
 const AT_SYMLINK_FOLLOW: i32 = 0x400;
+const AT_NO_AUTOMOUNT: i32 = 0x800;
 const AT_EMPTY_PATH: i32 = 0x1000;
 const ACCESS_R_OK: i32 = 4;
 const ACCESS_W_OK: i32 = 2;
@@ -251,6 +266,13 @@ const FUTEX_CMD_MASK: i32 = 0x7f;
 const FUTEX_PRIVATE_FLAG: i32 = 0x80;
 const HOSTNAME_MAX: usize = 64;
 const RUSAGE_SIZE: usize = 144;
+const SYSINFO_SIZE: usize = 112;
+const ARCH_SET_GS: i32 = 0x1001;
+const ARCH_SET_FS: i32 = 0x1002;
+const ARCH_GET_FS: i32 = 0x1003;
+const ARCH_GET_GS: i32 = 0x1004;
+const RENAME_NOREPLACE: u32 = 1;
+const ROBUST_LIST_HEAD_SIZE: usize = 24;
 
 struct HostnameState {
     bytes: [u8; HOSTNAME_MAX],
@@ -325,6 +347,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         ),
         NR_sched_yield => linux_sched_yield(frame),
         NR_msync => linux_msync(a0 as usize, a1 as usize, a2 as i32),
+        NR_madvise => linux_madvise(a0 as usize, a1 as usize, a2 as i32),
         NR_dup => linux_dup(a0 as usize),
         NR_dup2 => linux_dup2(a0 as usize, a1 as usize),
         NR_dup3 => linux_dup3(a0 as usize, a1 as usize, a2 as u32),
@@ -411,6 +434,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_umask => Ok(process::set_current_umask(a0 as u16) as u64),
         NR_getrlimit => linux_getrlimit(a0 as i32, a1 as usize),
         NR_getrusage => linux_getrusage(a0 as i32, a1 as usize),
+        NR_sysinfo => linux_sysinfo(a0 as usize),
         NR_times => linux_times(a0 as usize),
         NR_brk => linux_brk(a0 as usize),
         NR_ioctl => linux_ioctl(a0 as usize, a1 as u64, a2 as usize),
@@ -430,6 +454,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_lstat => linux_lstat(a0 as usize, a1 as usize),
         NR_statfs => linux_statfs(a0 as usize, a1 as usize),
         NR_fstatfs => linux_fstatfs(a0 as usize, a1 as usize),
+        NR_arch_prctl => linux_arch_prctl(a0 as i32, a1 as usize),
         NR_mount => linux_mount(a0 as usize, a1 as usize, a2 as usize),
         NR_kill => linux_kill(a0 as i64, a1),
         NR_getuid => Ok(process::current_uid() as u64),
@@ -439,6 +464,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_time => linux_time(a0 as usize),
         NR_gettimeofday => linux_gettimeofday(a0 as usize, a1 as usize),
         NR_clock_gettime => linux_clock_gettime(a0 as i32, a1 as usize),
+        NR_clock_getres => linux_clock_getres(a0 as i32, a1 as usize),
         NR_utimes => linux_utimes(a0 as usize, a1 as usize),
         NR_getrandom => linux_getrandom(a0 as usize, a1 as usize, a2 as u32),
         NR_openat => linux_openat(a0 as i32, a1 as usize, a2 as i32, a3 as u32),
@@ -446,8 +472,10 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_fchownat => linux_fchownat(a0 as i32, a1 as usize, a2, a3, a4 as i32),
         NR_futimesat => linux_futimesat(a0 as i32, a1 as usize, a2 as usize),
         NR_newfstatat => linux_newfstatat(a0 as i32, a1 as usize, a2 as usize, a3 as i32),
+        NR_statx => linux_statx(a0 as i32, a1 as usize, a2 as i32, a3 as u32, a4 as usize),
         NR_unlinkat => linux_unlinkat(a0 as i32, a1 as usize, a2 as i32),
         NR_renameat => linux_renameat(a0 as i32, a1 as usize, a2 as i32, a3 as usize),
+        NR_renameat2 => linux_renameat2(a0 as i32, a1 as usize, a2 as i32, a3 as usize, a4 as u32),
         NR_linkat => linux_linkat(a0 as i32, a1 as usize, a2 as i32, a3 as usize, a4 as i32),
         NR_symlinkat => linux_symlinkat(a0 as usize, a1 as i32, a2 as usize),
         NR_readlinkat => linux_readlinkat(a0 as i32, a1 as usize, a2 as usize, a3 as usize),
@@ -467,6 +495,21 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_utime => linux_utime(a0 as usize, a1 as usize),
         NR_rt_sigreturn => linux_rt_sigreturn(frame, a0 as usize),
         NR_setrlimit => linux_setrlimit(a0 as i32, a1 as usize),
+        NR_sched_getaffinity => linux_sched_getaffinity(a0 as i64, a1 as usize, a2 as usize),
+        NR_set_tid_address => linux_set_tid_address(a0 as usize),
+        NR_fadvise64 => linux_fadvise64(a0 as usize, a1 as i64, a2 as usize, a3 as i32),
+        NR_set_robust_list => linux_set_robust_list(a0 as usize, a1 as usize),
+        NR_get_robust_list => linux_get_robust_list(a0 as i64, a1 as usize, a2 as usize),
+        NR_prlimit64 => linux_prlimit64(a0 as i64, a1 as i32, a2 as usize, a3 as usize),
+        NR_getcpu => linux_getcpu(a0 as usize, a1 as usize),
+        NR_copy_file_range => linux_copy_file_range(
+            a0 as usize,
+            a1 as usize,
+            a2 as usize,
+            a3 as usize,
+            a4 as usize,
+            a5 as u32,
+        ),
         NR_reboot => linux_reboot(a0 as u32, a1 as u32, a2 as u32),
         NR_sethostname => linux_sethostname(a0 as usize, a1 as usize),
         NR_gettid => Ok(process::current_pid().unwrap_or(0)),
@@ -790,6 +833,132 @@ fn linux_pwrite64(
     let result = linux_write(frame, fd, buf, len);
     let _ = fs::lseek(vfs_fd, original as isize, 0);
     result
+}
+
+fn linux_copy_file_range(
+    fd_in: usize,
+    off_in_ptr: usize,
+    fd_out: usize,
+    off_out_ptr: usize,
+    len: usize,
+    flags: u32,
+) -> Result<u64, i64> {
+    if flags != 0 {
+        return Err(EINVAL);
+    }
+    let in_vfs = process::user_vfs_fd(fd_in).ok_or(EBADF)?;
+    let out_vfs = process::user_vfs_fd(fd_out).ok_or(EBADF)?;
+    if len == 0 {
+        return Ok(0);
+    }
+
+    let explicit_in = off_in_ptr != 0;
+    let explicit_out = off_out_ptr != 0;
+    let mut in_offset = if explicit_in {
+        read_user_i64(off_in_ptr)?
+    } else {
+        i64::try_from(fs::lseek(in_vfs, 0, 1).map_err(map_vfs_error)?).map_err(|_| EINVAL)?
+    };
+    let mut out_offset = if explicit_out {
+        read_user_i64(off_out_ptr)?
+    } else {
+        i64::try_from(fs::lseek(out_vfs, 0, 1).map_err(map_vfs_error)?).map_err(|_| EINVAL)?
+    };
+    let saved_in = if explicit_in {
+        Some(fs::lseek(in_vfs, 0, 1).map_err(map_vfs_error)?)
+    } else {
+        None
+    };
+    let saved_out = if explicit_out {
+        Some(fs::lseek(out_vfs, 0, 1).map_err(map_vfs_error)?)
+    } else {
+        None
+    };
+
+    let result = copy_file_range_inner(
+        in_vfs,
+        &mut in_offset,
+        explicit_in,
+        out_vfs,
+        &mut out_offset,
+        explicit_out,
+        len,
+    );
+
+    if let Some(pos) = saved_in {
+        let _ = fs::lseek(in_vfs, pos as isize, 0);
+    }
+    if let Some(pos) = saved_out {
+        let _ = fs::lseek(out_vfs, pos as isize, 0);
+    }
+
+    let copied = result?;
+    if explicit_in {
+        write_user_i64(off_in_ptr, in_offset)?;
+    }
+    if explicit_out {
+        write_user_i64(off_out_ptr, out_offset)?;
+    }
+    Ok(copied)
+}
+
+fn copy_file_range_inner(
+    in_vfs: usize,
+    in_offset: &mut i64,
+    explicit_in: bool,
+    out_vfs: usize,
+    out_offset: &mut i64,
+    explicit_out: bool,
+    len: usize,
+) -> Result<u64, i64> {
+    if *in_offset < 0 || *out_offset < 0 {
+        return Err(EINVAL);
+    }
+    let mut buffer = [0u8; FRAME_SIZE];
+    let mut copied = 0usize;
+    while copied < len {
+        let chunk_len = (len - copied).min(buffer.len());
+        fs::lseek(in_vfs, seek_from_i64(*in_offset)?, 0).map_err(map_vfs_error)?;
+        let read = match fs::read(in_vfs, &mut buffer[..chunk_len]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(fs::vfs::VfsError::WouldBlock) if copied > 0 => break,
+            Err(err) => return Err(map_read_vfs_error(err)),
+        };
+
+        fs::lseek(out_vfs, seek_from_i64(*out_offset)?, 0).map_err(map_vfs_error)?;
+        let mut written = 0usize;
+        while written < read {
+            match fs::write(out_vfs, &buffer[written..read]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    written += n;
+                    *in_offset = in_offset.checked_add(n as i64).ok_or(EINVAL)?;
+                    *out_offset = out_offset.checked_add(n as i64).ok_or(EINVAL)?;
+                    copied = copied.checked_add(n).ok_or(EINVAL)?;
+                }
+                Err(fs::vfs::VfsError::WouldBlock) if copied > 0 => break,
+                Err(err) => return Err(map_write_vfs_error(err)),
+            }
+        }
+        if written < read {
+            break;
+        }
+    }
+    if explicit_in {
+        fs::lseek(in_vfs, seek_from_i64(*in_offset)?, 0).map_err(map_vfs_error)?;
+    }
+    if explicit_out {
+        fs::lseek(out_vfs, seek_from_i64(*out_offset)?, 0).map_err(map_vfs_error)?;
+    }
+    Ok(copied as u64)
+}
+
+fn seek_from_i64(offset: i64) -> Result<isize, i64> {
+    if offset < 0 {
+        return Err(EINVAL);
+    }
+    isize::try_from(offset).map_err(|_| EINVAL)
 }
 
 fn linux_write_bytes(fd: usize, bytes: &[u8]) -> Result<usize, i64> {
@@ -2350,6 +2519,73 @@ fn linux_reboot(magic1: u32, magic2: u32, cmd: u32) -> Result<u64, i64> {
         .map_err(|_| EINVAL)
 }
 
+fn linux_arch_prctl(code: i32, addr: usize) -> Result<u64, i64> {
+    match code {
+        ARCH_SET_FS => {
+            validate_fs_base(addr)?;
+            let pid = process::current_pid().ok_or(ESRCH)?;
+            if !process::set_user_fs_base(pid, addr as u64) {
+                return Err(ESRCH);
+            }
+            crate::arch::x86_64::set_user_fs_base(addr as u64);
+            Ok(0)
+        }
+        ARCH_GET_FS => {
+            let base = process::current_user_fs_base().ok_or(ESRCH)?;
+            write_user_u64(addr, base)?;
+            Ok(0)
+        }
+        ARCH_GET_GS => {
+            write_user_u64(addr, 0)?;
+            Ok(0)
+        }
+        ARCH_SET_GS => Err(EINVAL),
+        _ => Err(EINVAL),
+    }
+}
+
+fn validate_fs_base(base: usize) -> Result<(), i64> {
+    if base == 0 {
+        return Ok(());
+    }
+    if base >= USER_ADDRESS_TOP {
+        return Err(EINVAL);
+    }
+    if !process::is_user_readable(base, 1) {
+        return Err(EFAULT);
+    }
+    Ok(())
+}
+
+fn linux_set_tid_address(tidptr: usize) -> Result<u64, i64> {
+    if tidptr != 0 {
+        process::write_user_buffer(tidptr, core::mem::size_of::<u32>()).ok_or(EFAULT)?;
+    }
+    Ok(process::current_pid().unwrap_or(0))
+}
+
+fn linux_set_robust_list(head: usize, len: usize) -> Result<u64, i64> {
+    if len != ROBUST_LIST_HEAD_SIZE {
+        return Err(EINVAL);
+    }
+    if head != 0 {
+        process::read_user(head, 1).ok_or(EFAULT)?;
+    }
+    Ok(0)
+}
+
+fn linux_get_robust_list(pid: i64, head_ptr: usize, len_ptr: usize) -> Result<u64, i64> {
+    if pid < 0 {
+        return Err(EINVAL);
+    }
+    if pid != 0 && Some(pid as u64) != process::current_pid() {
+        return Err(ESRCH);
+    }
+    write_user_u64(head_ptr, 0)?;
+    write_user_u64(len_ptr, ROBUST_LIST_HEAD_SIZE as u64)?;
+    Ok(0)
+}
+
 fn linux_clone(
     frame: &mut SyscallInterruptFrame,
     flags: u64,
@@ -2690,6 +2926,23 @@ fn write_user_u32(ptr: usize, value: u32) -> Result<(), i64> {
     Ok(())
 }
 
+fn write_user_u64(ptr: usize, value: u64) -> Result<(), i64> {
+    let out = process::write_user_buffer(ptr, core::mem::size_of::<u64>()).ok_or(EFAULT)?;
+    out.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn read_user_i64(ptr: usize) -> Result<i64, i64> {
+    let input = process::read_user(ptr, core::mem::size_of::<i64>()).ok_or(EFAULT)?;
+    Ok(i64::from_le_bytes(input.try_into().map_err(|_| EFAULT)?))
+}
+
+fn write_user_i64(ptr: usize, value: i64) -> Result<(), i64> {
+    let out = process::write_user_buffer(ptr, core::mem::size_of::<i64>()).ok_or(EFAULT)?;
+    out.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
 fn linux_setgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
     if size > 8 {
         return Err(EINVAL);
@@ -2722,12 +2975,91 @@ fn linux_getgroups(size: usize, list_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_getrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
-    let (cur, max) = match resource {
-        RLIMIT_CORE => (0, 0),
-        RLIMIT_NOFILE => process::current_nofile_limit().ok_or(ESRCH)?,
-        _ => return Err(EINVAL),
-    };
+    let (cur, max) = current_rlimit(resource)?;
     write_rlimit(rlim_ptr, cur, max)?;
+    Ok(0)
+}
+
+fn linux_prlimit64(
+    pid: i64,
+    resource: i32,
+    new_rlim_ptr: usize,
+    old_rlim_ptr: usize,
+) -> Result<u64, i64> {
+    if pid < 0 {
+        return Err(EINVAL);
+    }
+    if pid != 0 && Some(pid as u64) != process::current_pid() {
+        return Err(ESRCH);
+    }
+    let (old_cur, old_max) = current_rlimit(resource)?;
+    if old_rlim_ptr != 0 {
+        write_rlimit(old_rlim_ptr, old_cur, old_max)?;
+    }
+    if new_rlim_ptr != 0 {
+        let (cur, max) = read_rlimit(new_rlim_ptr)?;
+        set_rlimit_value(resource, cur, max)?;
+    }
+    Ok(0)
+}
+
+fn linux_sched_getaffinity(pid: i64, cpusetsize: usize, mask_ptr: usize) -> Result<u64, i64> {
+    const CPUSET_BYTES: usize = core::mem::size_of::<u64>();
+
+    if pid < 0 || cpusetsize < CPUSET_BYTES {
+        return Err(EINVAL);
+    }
+    if pid != 0 && Some(pid as u64) != process::current_pid() {
+        return Err(ESRCH);
+    }
+
+    let out = process::write_user_buffer(mask_ptr, CPUSET_BYTES).ok_or(EFAULT)?;
+    out.fill(0);
+    let cpu_count = crate::sched::user_scheduler_cpu_count().clamp(1, 64);
+    let mask = if cpu_count == 64 {
+        u64::MAX
+    } else {
+        (1u64 << cpu_count) - 1
+    };
+    out.copy_from_slice(&mask.to_le_bytes());
+    Ok(CPUSET_BYTES as u64)
+}
+
+fn linux_getcpu(cpu_ptr: usize, node_ptr: usize) -> Result<u64, i64> {
+    if cpu_ptr != 0 {
+        write_user_u32(cpu_ptr, 0)?;
+    }
+    if node_ptr != 0 {
+        write_user_u32(node_ptr, 0)?;
+    }
+    Ok(0)
+}
+
+fn linux_fadvise64(fd: usize, offset: i64, _len: usize, advice: i32) -> Result<u64, i64> {
+    const POSIX_FADV_NORMAL: i32 = 0;
+    const POSIX_FADV_NOREUSE: i32 = 5;
+
+    if !(POSIX_FADV_NORMAL..=POSIX_FADV_NOREUSE).contains(&advice) || offset < 0 {
+        return Err(EINVAL);
+    }
+    process::user_vfs_fd(fd).ok_or(EBADF)?;
+    Ok(0)
+}
+
+fn linux_sysinfo(info_ptr: usize) -> Result<u64, i64> {
+    let out = process::write_user_buffer(info_ptr, SYSINFO_SIZE).ok_or(EFAULT)?;
+    out.fill(0);
+
+    let memory = crate::memory::stats();
+    let total_ram = memory.frames.total_frames.saturating_mul(FRAME_SIZE);
+    let free_ram = memory.frames.free_frames.saturating_mul(FRAME_SIZE);
+    let uptime = (crate::time::uptime_millis() / 1000) as i64;
+
+    out[0..8].copy_from_slice(&uptime.to_le_bytes());
+    out[32..40].copy_from_slice(&(total_ram as u64).to_le_bytes());
+    out[40..48].copy_from_slice(&(free_ram as u64).to_le_bytes());
+    out[80..82].copy_from_slice(&1u16.to_le_bytes());
+    out[104..108].copy_from_slice(&1u32.to_le_bytes());
     Ok(0)
 }
 
@@ -2766,22 +3098,27 @@ fn linux_times(buf_ptr: usize) -> Result<u64, i64> {
 }
 
 fn linux_setrlimit(resource: i32, rlim_ptr: usize) -> Result<u64, i64> {
-    if !matches!(resource, RLIMIT_CORE | RLIMIT_NOFILE) {
-        return Err(EINVAL);
-    }
     let (cur, max) = read_rlimit(rlim_ptr)?;
+    set_rlimit_value(resource, cur, max)
+}
+
+fn current_rlimit(resource: i32) -> Result<(u64, u64), i64> {
     match resource {
-        RLIMIT_CORE => {
-            if cur != 0 || max != 0 {
-                return Err(EINVAL);
-            }
-        }
-        RLIMIT_NOFILE => {
-            process::set_current_nofile_limit(cur, max).map_err(|_| EINVAL)?;
-        }
-        _ => return Err(EINVAL),
+        RLIMIT_CORE => Ok((0, 0)),
+        RLIMIT_NOFILE => process::current_nofile_limit().ok_or(ESRCH),
+        _ => Err(EINVAL),
     }
-    Ok(0)
+}
+
+fn set_rlimit_value(resource: i32, cur: u64, max: u64) -> Result<u64, i64> {
+    match resource {
+        RLIMIT_CORE if cur == 0 && max == 0 => Ok(0),
+        RLIMIT_CORE => Err(EINVAL),
+        RLIMIT_NOFILE => process::set_current_nofile_limit(cur, max)
+            .map(|_| 0)
+            .map_err(|_| EINVAL),
+        _ => Err(EINVAL),
+    }
 }
 
 fn read_rlimit(rlim_ptr: usize) -> Result<(u64, u64), i64> {
@@ -2856,6 +3193,29 @@ fn linux_renameat(
 ) -> Result<u64, i64> {
     let old_path = resolve_at_path(old_dirfd, old_ptr, 0)?;
     let new_path = resolve_at_path(new_dirfd, new_ptr, 0)?;
+    process::user_rename(&old_path, &new_path)
+        .map(|_| 0)
+        .map_err(map_vfs_error)
+}
+
+fn linux_renameat2(
+    old_dirfd: i32,
+    old_ptr: usize,
+    new_dirfd: i32,
+    new_ptr: usize,
+    flags: u32,
+) -> Result<u64, i64> {
+    if flags == 0 {
+        return linux_renameat(old_dirfd, old_ptr, new_dirfd, new_ptr);
+    }
+    if flags != RENAME_NOREPLACE {
+        return Err(EINVAL);
+    }
+    let old_path = resolve_at_path(old_dirfd, old_ptr, 0)?;
+    let new_path = resolve_at_path(new_dirfd, new_ptr, 0)?;
+    if fs::stat(&new_path).is_ok() || fs::lstat(&new_path).is_ok() {
+        return Err(EEXIST);
+    }
     process::user_rename(&old_path, &new_path)
         .map(|_| 0)
         .map_err(map_vfs_error)
@@ -3142,6 +3502,26 @@ fn linux_msync(addr: usize, len: usize, flags: i32) -> Result<u64, i64> {
         .map_err(map_mmap_error)
 }
 
+fn linux_madvise(addr: usize, len: usize, advice: i32) -> Result<u64, i64> {
+    const MADV_NORMAL: i32 = 0;
+    const MADV_POPULATE_WRITE: i32 = 23;
+
+    if addr % FRAME_SIZE != 0 || !(MADV_NORMAL..=MADV_POPULATE_WRITE).contains(&advice) {
+        return Err(EINVAL);
+    }
+    if len == 0 {
+        return Ok(0);
+    }
+    let length = page_aligned_len(len)?;
+    let end = addr.checked_add(length).ok_or(EINVAL)?;
+    if addr >= USER_ADDRESS_TOP || end > USER_ADDRESS_TOP {
+        return Err(ENOMEM);
+    }
+    // Ristux has no page-cache or swapping policy for user mappings yet.
+    // Valid advice is accepted as a no-op so hosted runtimes can probe it.
+    Ok(0)
+}
+
 fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
     if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
         return Err(EINVAL);
@@ -3268,6 +3648,22 @@ fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
     let out = process::write_user_buffer(tp, 16).ok_or(EFAULT)?;
     out[0..8].copy_from_slice(&(sec as i64).to_le_bytes());
     out[8..16].copy_from_slice(&(nsec as i64).to_le_bytes());
+    Ok(0)
+}
+
+fn linux_clock_getres(clock_id: i32, tp: usize) -> Result<u64, i64> {
+    const CLOCK_REALTIME: i32 = 0;
+    const CLOCK_MONOTONIC: i32 = 1;
+    if !matches!(clock_id, CLOCK_REALTIME | CLOCK_MONOTONIC) {
+        return Err(EINVAL);
+    }
+    if tp != 0 {
+        let hz = crate::config::PIT_TARGET_HZ as u64;
+        let nsec = 1_000_000_000u64 / hz.max(1);
+        let out = process::write_user_buffer(tp, 16).ok_or(EFAULT)?;
+        out[0..8].copy_from_slice(&0i64.to_le_bytes());
+        out[8..16].copy_from_slice(&(nsec as i64).to_le_bytes());
+    }
     Ok(0)
 }
 
@@ -3668,6 +4064,36 @@ fn linux_newfstatat(dirfd: i32, path_ptr: usize, buf_ptr: usize, flags: i32) -> 
     )
 }
 
+fn linux_statx(
+    dirfd: i32,
+    path_ptr: usize,
+    flags: i32,
+    _mask: u32,
+    buf_ptr: usize,
+) -> Result<u64, i64> {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_SYMLINK_FOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT) != 0
+        || flags & AT_SYMLINK_NOFOLLOW != 0 && flags & AT_SYMLINK_FOLLOW != 0
+    {
+        return Err(EINVAL);
+    }
+    let path = resolve_at_path(dirfd, path_ptr, flags)?;
+    let meta = if flags & AT_SYMLINK_NOFOLLOW != 0 {
+        fs::lstat(&path)
+    } else {
+        fs::stat(&path)
+    }
+    .map_err(map_vfs_error)?;
+    write_linux_statx(
+        buf_ptr,
+        meta.owner,
+        meta.group,
+        meta.size,
+        linux_stat_mode(meta.kind, meta.mode),
+        meta.nlink,
+        meta.mtime,
+    )
+}
+
 fn linux_fstat(fd: usize, buf_ptr: usize) -> Result<u64, i64> {
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let meta = fs::fstat(vfs_fd).map_err(|_| EBADF)?;
@@ -3722,6 +4148,42 @@ fn write_linux_stat(
     out[88..96].copy_from_slice(&mtime.to_le_bytes()); // st_mtime
     out[104..112].copy_from_slice(&mtime.to_le_bytes()); // st_ctime
     Ok(0)
+}
+
+fn write_linux_statx(
+    buf_ptr: usize,
+    owner: u32,
+    group: u32,
+    size: u64,
+    mode: u32,
+    nlink: u64,
+    mtime: u64,
+) -> Result<u64, i64> {
+    const STATX_SIZE: usize = 256;
+    const STATX_BASIC_STATS: u32 = 0x0000_07ff;
+    const STATX_BLOCK_SIZE: u32 = 512;
+
+    let out = process::write_user_buffer(buf_ptr, STATX_SIZE).ok_or(EFAULT)?;
+    out.fill(0);
+    out[0..4].copy_from_slice(&STATX_BASIC_STATS.to_le_bytes()); // stx_mask
+    out[4..8].copy_from_slice(&STATX_BLOCK_SIZE.to_le_bytes()); // stx_blksize
+    out[16..20].copy_from_slice(&(nlink as u32).to_le_bytes()); // stx_nlink
+    out[20..24].copy_from_slice(&owner.to_le_bytes()); // stx_uid
+    out[24..28].copy_from_slice(&group.to_le_bytes()); // stx_gid
+    out[28..30].copy_from_slice(&(mode as u16).to_le_bytes()); // stx_mode
+    out[32..40].copy_from_slice(&1u64.to_le_bytes()); // stx_ino
+    out[40..48].copy_from_slice(&size.to_le_bytes()); // stx_size
+    let blocks = size.saturating_add(511) / 512;
+    out[48..56].copy_from_slice(&blocks.to_le_bytes()); // stx_blocks
+    write_statx_timestamp(out, 64, mtime); // stx_atime
+    write_statx_timestamp(out, 96, mtime); // stx_ctime
+    write_statx_timestamp(out, 112, mtime); // stx_mtime
+    Ok(0)
+}
+
+fn write_statx_timestamp(out: &mut [u8], offset: usize, sec: u64) {
+    out[offset..offset + 8].copy_from_slice(&(sec as i64).to_le_bytes());
+    out[offset + 8..offset + 12].copy_from_slice(&0u32.to_le_bytes());
 }
 
 fn linux_statfs(path_ptr: usize, buf_ptr: usize) -> Result<u64, i64> {

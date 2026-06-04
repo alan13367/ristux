@@ -19,11 +19,16 @@ part of the supported contract today.
 The canonical in-tree Rust user target is `x86_64-unknown-ristux` and uses:
 
 - `targets/x86_64-unknown-ristux.json`
+- installed linker: `/bin/ristux-ld`
 - `-C relocation-model=static`
 - `-C link-arg=-T../userland/linker.ld`
 - `-C link-arg=-nostdlib`
 - `-C link-arg=--no-dynamic-linker`
 - `-C link-arg=-static`
+
+During the external host bootstrap, `userland/.cargo/config.toml` may override
+the linker so today's developer machine can still build the Ristux userland.
+That override is not part of the installed Ristux target contract.
 
 ## Process Startup
 
@@ -262,10 +267,94 @@ toolchain bootstrap:
   editor over the ANSI console. It uses raw termios input, displays the file
   buffer, supports normal/insert/command modes, and accepts commands such as
   `:w`, `:q`, `:q!`, and `:wq` on the bottom command line.
-- Build tools: `/bin/rustc` and `/bin/ristux-ld` are present in the default
-  image as the Rust toolchain package surface. The current binaries expose
-  version/target metadata and package integration; native code generation and
-  static ELF linking still require the Cranelift/std bootstrap work.
+- Build tools: `/bin/rustc`, `/bin/cargo`, `/bin/rustdoc`, and
+  `/bin/ristux-ld` are present in the default image as the Rust Stable 1.96.0
+  toolchain package surface. The current binaries expose version, sysroot,
+  target, Cargo/Rustdoc, and package integration metadata. The canonical
+  `x86_64-unknown-ristux` target declares `target_os = "ristux"` and
+  `target_family = "unix"` so upstream Rust `std` selects the Unix host
+  module family while the Ristux-owned port fills the OS-specific pieces. The
+  host-side `make rust-std-probe-current` check builds with the maintained
+  Ristux Rust 1.96.0 overlay sources from
+  `toolchain/rust-overlays/rust-1.96.0`, without C runtime linkage. That probe
+  compiles patched upstream `std`, adds Ristux futex sync, single-thread TLS,
+  a `brk`-backed allocator, raw syscall libc ABI shims, and abort-only unwind
+  stubs, then links a restricted-std hello program to a static Ristux `ET_EXEC`
+  through a host-mode pure Rust `ristux-ld` built from the same source as
+  `/bin/ristux-ld`. `scripts/quick_fixture.sh rust-std` packages that binary as
+  `/bin/rust_std_probe`, boots Ristux, executes it, and verifies
+  `hello from Ristux std`. The overlay source package is installed at
+  `/usr/lib/rustlib/src/ristux-overlays`. The overlay-built `std`, `libc`,
+  `panic_abort`, and supporting rlib/rmeta artifacts are packaged as
+  `rust-std-libs` in `/usr/lib/rustlib/x86_64-unknown-ristux/lib`.
+  `make rust-official-target-probe` applies the maintained official-source
+  `rustc_target` overlay to a temporary Rust 1.96.0 source tree, registers
+  `Os::Ristux` and the built-in hosted tier-3
+  `x86_64-unknown-ristux` target, patches Rust bootstrap's Cranelift target
+  allowlist for the temporary tree, checks the compiler target crate and
+  bootstrap crate with the Rust 1.96.0 stage0 bootstrap environment, applies
+  the Ristux `std` and vendored `libc` overlays inside that official source
+  tree, and dry-runs the no-LLVM/no-LLD bootstrap plan. The accepted dry-run
+  builds a stage1 compiler for the external build machine, then plans Ristux
+  `std`, stage2 Ristux `rustc_driver`, stage2 Cranelift, and stage2 Cargo. The
+  dry-run uses `BOOTSTRAP_SKIP_TARGET_SANITY=1` because the external stage0
+  compiler cannot list the new built-in target before stage1 exists. This moves
+  the real compiler path from a JSON-only target toward an official-source
+  built-in target, hosted `std` overlay, and concrete Cranelift/Cargo bootstrap
+  shape.
+  `make rust-official-bootstrap-std` performs the next non-dry-run boundary:
+  it prepares the patched official Rust 1.96.0 source tree and builds stage1
+  `library/std` for `x86_64-unknown-ristux` with the Cranelift-only bootstrap
+  config. That proves the official source can produce Ristux hosted `std`
+  artifacts through Rust bootstrap. The target currently avoids stack-probe
+  and x86 runtime-feature inline assembly for the no-C/no-LLVM bootstrap path;
+  Ristux user processes receive a fixed kernel-mapped syscall trampoline for
+  the Rust `std`/libc syscall shims.
+  `make rust-official-bootstrap-stage2` then prebuilds that stage1 boundary,
+  builds a host-runnable pure Rust `ristux-ld`, patches the temporary official
+  compiler so `rustc-main` links Cranelift statically, skips dynamic backend
+  component installation, and runs the real stage2 Ristux-hosted Cargo
+  bootstrap path. That probe now gets past the previous `rustc_driver`
+  dylib-output and Cranelift component-format blockers and reaches Cargo
+  C-backed dependency blockers: `curl-sys`, `libgit2-sys`, `libssh2-sys`, and
+  `libz-sys` still enter the build and try to compile C for Ristux. These need
+  target-gating or pure Rust replacements for registry transport, Git,
+  compression, and package database support.
+  `make rust-official-std-probe` separately verifies the current official
+  Rust 1.96.0 source boundary: direct standalone `build-std` against the
+  official source reaches the expected stage1-bootstrap blocker, so the real
+  native compiler path must build/use Rust's stage1 `rustc` before producing
+  the Ristux-hosted `rustc_driver`.
+  `rust-core-libs` package installs the real cross-built `core`, `alloc`, and
+  `compiler_builtins` rlib/rmeta artifacts under
+  `/usr/lib/rustlib/x86_64-unknown-ristux/lib`.
+  `/bin/ristux-ld` links ELF64 x86_64 relocatable objects, including object
+  members extracted from Unix archives and Rust rlibs, into static Ristux
+  `ET_EXEC` images for the relocation subset used by the bootstrap linker
+  self-tests, and accepts the static GNU-style mode flags that rustc emits
+  (`--as-needed`, `-Bstatic`, `-Bdynamic`, `--eh-frame-hdr`, `-z noexecstack`,
+  `-L`, and `--gc-sections`); duplicate weak symbols are tolerated with the
+  usual strong-symbol preference. Full native Rust program builds still require
+  completing the stage2 Ristux-hosted `rustc` package and making Cargo's
+  transport and package database graph build without C-backed artifacts.
+  `/bin/rust_host_probe` is the
+  packaged acceptance probe for the host surface and exercises toolchain
+  metadata, package visibility, environment vectors, file I/O, fd flags,
+  std-oriented filesystem and descriptor syscalls (`stat`/`fstat`/`lstat`,
+  `openat`, `newfstatat`, `statx`, `access`/`faccessat`,
+  `pread64`/`pwrite64`, `readv`/`writev`, `pipe2`, `dup3`, `utimensat`,
+  `getrandom`, resource limits, `getrusage`, and `times`), Cargo-shaped
+  filesystem operations
+  (`fsync`, `truncate`/`ftruncate`, `mkdirat`, `rename`/`renameat`,
+  `renameat2`, `copy_file_range`, `link`/`linkat`, `symlinkat`,
+  `readlink`/`readlinkat`, `fchmod`/`fchmodat`, `fchown`/`fchownat`,
+  `unlinkat`, and `umask`), `gettid` plus `rt_sigprocmask`, x86_64 TLS
+  setup via `arch_prctl` `ARCH_SET_FS`/`ARCH_GET_FS`, hosted runtime probes
+  (`set_tid_address`, `set_robust_list`, `get_robust_list`, `getcpu`, and
+  `fadvise64`), hosted platform probes (`madvise`, `clock_getres`,
+  `sched_getaffinity`, `sysinfo`, and `prlimit64`),
+  directory traversal, sysroot libraries, fork/exec/wait with pipe capture,
+  anonymous `mmap`/`mprotect`/`munmap`, clocks, and futex.
 - Networking: IPv4 sockets support the QEMU user-network address `10.0.2.2`
   and in-kernel loopback over `127.0.0.1`; TCP loopback can connect a local
   client and listener through the normal `socket`/`bind`/`listen`/`connect`/

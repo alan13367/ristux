@@ -3553,6 +3553,9 @@ pub fn self_test() {
 
     if read_file("/bin/init").is_none()
         || read_file("/bin/rustc").is_none()
+        || read_file("/bin/cargo").is_none()
+        || read_file("/bin/rustdoc").is_none()
+        || read_file("/usr/lib/rustlib/rust-1.96.0-manifest.toml").is_none()
         || read_file("/usr/lib/rustlib/x86_64-unknown-ristux/target.json").is_none()
         || read_file("/etc/os-release").is_none()
         || read_file("/pkg/packages.txt").is_none()

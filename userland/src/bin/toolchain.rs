@@ -59,7 +59,9 @@ fn basename(path: &[u8]) -> &[u8] {
 fn append_frontend_args(out: &mut Vec<Vec<u8>>, mode: &[u8], args: &[&[u8]]) -> bool {
     out.push(b"rustc".to_vec());
     match mode {
+        b"cargo" => out[0] = b"cargo".to_vec(),
         b"ld" => out[0] = b"ristux-ld".to_vec(),
+        b"rustdoc" => out[0] = b"rustdoc".to_vec(),
         b"rustc" => {}
         _ => return false,
     }
@@ -76,7 +78,7 @@ fn run_frontend(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         .unwrap_or(b"toolchain");
     let mut owned_args = Vec::new();
     if !append_frontend_args(&mut owned_args, mode, args.get(1..).unwrap_or(&[])) {
-        write_all(2, b"toolchain: C frontends removed; use rustc or ristux-ld\n");
+        write_all(2, b"toolchain: C frontends removed; use rustc, cargo, rustdoc, or ristux-ld\n");
         return 2;
     }
 
@@ -84,10 +86,11 @@ fn run_frontend(args: &[&[u8]], inherited_env: &[Vec<u8>]) -> i32 {
         .first()
         .map(|arg| arg.as_slice())
         .unwrap_or(b"rustc");
-    let path = if program == b"ristux-ld" {
-        cstr(b"/bin/ristux-ld")
-    } else {
-        cstr(b"/bin/rustc")
+    let path = match program {
+        b"cargo" => cstr(b"/bin/cargo"),
+        b"ristux-ld" => cstr(b"/bin/ristux-ld"),
+        b"rustdoc" => cstr(b"/bin/rustdoc"),
+        _ => cstr(b"/bin/rustc"),
     };
     let c_args: Vec<Vec<u8>> = owned_args.iter().map(|arg| cstr(arg)).collect();
     let mut argv: Vec<*const u8> = c_args.iter().map(|arg| arg.as_ptr()).collect();

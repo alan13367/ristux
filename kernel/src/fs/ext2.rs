@@ -553,8 +553,11 @@ impl Ext2Fs {
         self.free_inode_blocks(inode)?;
         let blocks_needed = data.len().div_ceil(self.block_size);
         let pointers_per_block = self.block_size / 4;
-        let max_blocks =
-            EXT2_DIRECT_BLOCKS + pointers_per_block + pointers_per_block * pointers_per_block;
+        let pointers_per_double = pointers_per_block * pointers_per_block;
+        let max_blocks = EXT2_DIRECT_BLOCKS
+            + pointers_per_block
+            + pointers_per_double
+            + pointers_per_double * pointers_per_block;
         if blocks_needed > max_blocks {
             return Err(Ext2Error::Unsupported);
         }
@@ -591,10 +594,15 @@ impl Ext2Fs {
             inode.blocks[12] = indirect;
         }
         let double_start = EXT2_DIRECT_BLOCKS + indirect_count;
-        if data_blocks.len() > double_start {
+        let double_count = data_blocks
+            .len()
+            .saturating_sub(double_start)
+            .min(pointers_per_double);
+        if double_count > 0 {
             let double_indirect = self.allocate_block()?;
             let mut double_data = vec![0u8; self.block_size];
-            for (index, chunk) in data_blocks[double_start..]
+            let double_end = double_start + double_count;
+            for (index, chunk) in data_blocks[double_start..double_end]
                 .chunks(pointers_per_block)
                 .enumerate()
             {
@@ -608,6 +616,31 @@ impl Ext2Fs {
             }
             self.write_block_sized(double_indirect as u64, &double_data)?;
             inode.blocks[13] = double_indirect;
+        }
+        let triple_start = double_start + double_count;
+        if data_blocks.len() > triple_start {
+            let triple_indirect = self.allocate_block()?;
+            let mut triple_data = vec![0u8; self.block_size];
+            for (double_index, double_chunk) in data_blocks[triple_start..]
+                .chunks(pointers_per_double)
+                .enumerate()
+            {
+                let double_indirect = self.allocate_block()?;
+                let mut double_data = vec![0u8; self.block_size];
+                for (indirect_index, chunk) in double_chunk.chunks(pointers_per_block).enumerate() {
+                    let indirect = self.allocate_block()?;
+                    let mut indirect_data = vec![0u8; self.block_size];
+                    for (block_index, block) in chunk.iter().enumerate() {
+                        put_u32(&mut indirect_data, block_index * 4, *block);
+                    }
+                    self.write_block_sized(indirect as u64, &indirect_data)?;
+                    put_u32(&mut double_data, indirect_index * 4, indirect);
+                }
+                self.write_block_sized(double_indirect as u64, &double_data)?;
+                put_u32(&mut triple_data, double_index * 4, double_indirect);
+            }
+            self.write_block_sized(triple_indirect as u64, &triple_data)?;
+            inode.blocks[14] = triple_indirect;
         }
         inode.size = data.len() as u64;
         let now = current_ext2_time();
@@ -784,6 +817,18 @@ impl Ext2Fs {
                 }
             }
         }
+        if remaining > 0 && inode.blocks[14] != 0 {
+            for double_indirect in self.read_indirect_blocks(inode.blocks[14])? {
+                for indirect in self.read_indirect_blocks(double_indirect)? {
+                    for block in self.read_indirect_blocks(indirect)? {
+                        self.append_data_block(block, &mut remaining, &mut out)?;
+                        if remaining == 0 {
+                            return Ok(out);
+                        }
+                    }
+                }
+            }
+        }
 
         if remaining == 0 {
             Ok(out)
@@ -899,6 +944,22 @@ impl Ext2Fs {
                 }
             }
         }
+        if inode.blocks[14] != 0 {
+            blocks += 1;
+            if let Ok(triple_indirect) = self.read_indirect_blocks(inode.blocks[14]) {
+                for double_indirect_block in triple_indirect {
+                    blocks += 1;
+                    if let Ok(double_indirect) = self.read_indirect_blocks(double_indirect_block) {
+                        for indirect_block in double_indirect {
+                            blocks += 1;
+                            if let Ok(indirect) = self.read_indirect_blocks(indirect_block) {
+                                blocks += indirect.len();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         (blocks * (self.block_size / 512)) as u32
     }
 
@@ -937,6 +998,18 @@ impl Ext2Fs {
                 self.free_block(indirect)?;
             }
             self.free_block(inode.blocks[13])?;
+        }
+        if inode.blocks[14] != 0 {
+            for double_indirect in self.read_indirect_blocks(inode.blocks[14])? {
+                for indirect in self.read_indirect_blocks(double_indirect)? {
+                    for block in self.read_indirect_blocks(indirect)? {
+                        self.free_block(block)?;
+                    }
+                    self.free_block(indirect)?;
+                }
+                self.free_block(double_indirect)?;
+            }
+            self.free_block(inode.blocks[14])?;
         }
         Ok(())
     }

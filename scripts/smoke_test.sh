@@ -11,7 +11,7 @@ QEMU_FLAGS="${QEMU_FLAGS:-}"
 REBUILD="${RISTUX_SMOKE_REBUILD:-1}"
 SLEEP_SCALE="${RISTUX_SMOKE_SLEEP_SCALE:-1}"
 if [[ -z "$QEMU_FLAGS" ]]; then
-  QEMU_FLAGS="-m 256M -smp 4"
+  QEMU_FLAGS="-m 1024M -smp 4"
 fi
 
 rm -f "$SERIAL_LOG" "$REBOOT_SERIAL_LOG"
@@ -160,7 +160,51 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "rustc --print sysroot"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "rustc --print target-libdir"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cargo --version"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "rustdoc --version"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "ristux-ld --self-test"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "ristux-ld --self-test-archive"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "rust_host_probe"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 4
   send_text "pkg info rustc"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info cargo"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info rustdoc"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info rust-host-probe"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info rust-core-libs"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -474,13 +518,61 @@ grep -q "ristux package archive path online" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustc --version" "$SERIAL_LOG"
-grep -q "rustc 0.0.0-ristux-bootstrap" "$SERIAL_LOG"
+grep -q "rustc 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
 grep -q "x86_64-unknown-ristux" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --print sysroot" "$SERIAL_LOG"
+grep -q "/usr" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --print target-libdir" "$SERIAL_LOG"
+grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cargo --version" "$SERIAL_LOG"
+grep -q "cargo 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustdoc --version" "$SERIAL_LOG"
+grep -q "rustdoc 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: ristux-ld --self-test" "$SERIAL_LOG"
+grep -q "ristux-ld: self-test linked static ELF64 ET_EXEC" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: ristux-ld --self-test-archive" "$SERIAL_LOG"
+grep -q "ristux-ld: self-test linked archive/rlib input" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rust_host_probe" "$SERIAL_LOG"
+grep -q "rust_host_probe: toolchain files ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: manifest ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: target spec ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: package index ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: environment ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: fd flags ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: file io ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: std syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: cargo fs syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: process signal syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: tls syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: host runtime syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: host platform syscalls ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: dir traversal ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: sysroot libs ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: process capture ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: memory map ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: clocks ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: synchronization ok" "$SERIAL_LOG"
+grep -q "rust_host_probe: done" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: pkg info rustc" "$SERIAL_LOG"
 grep -q "name: rustc" "$SERIAL_LOG"
 grep -q "  ristux-ld" "$SERIAL_LOG"
 grep -q "  /bin/rustc" "$SERIAL_LOG"
+grep -q "  /usr/lib/rustlib/rust-1.96.0-manifest.toml" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info cargo" "$SERIAL_LOG"
+grep -q "name: cargo" "$SERIAL_LOG"
+grep -q "  /bin/cargo" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info rustdoc" "$SERIAL_LOG"
+grep -q "name: rustdoc" "$SERIAL_LOG"
+grep -q "  /bin/rustdoc" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info rust-host-probe" "$SERIAL_LOG"
+grep -q "name: rust-host-probe" "$SERIAL_LOG"
+grep -q "  /bin/rust_host_probe" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info rust-core-libs" "$SERIAL_LOG"
+grep -q "name: rust-core-libs" "$SERIAL_LOG"
+grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/libcore-.*\\.rlib" "$SERIAL_LOG"
+grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/liballoc-.*\\.rlib" "$SERIAL_LOG"
+grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/libcompiler_builtins-.*\\.rlib" "$SERIAL_LOG"
 if grep -Eq " (tcc|dropbear|dbclient|libc|libc-dev) " "$SERIAL_LOG"; then
   echo "unexpected C toolchain package in $SERIAL_LOG" >&2
   exit 1
