@@ -323,7 +323,10 @@ fn check_manifest() -> bool {
             &manifest,
             b"sysroot_libraries = \"core,alloc,std,panic_abort,compiler_builtins\"",
         )
-        || !contains(&manifest, b"std = \"packaged Ristux overlay probe artifacts\"")
+        || !contains(
+            &manifest,
+            b"std = \"packaged Ristux overlay probe artifacts\"",
+        )
         || !contains(
             &manifest,
             b"ristux_overlay_sources = \"/usr/lib/rustlib/src/ristux-overlays\"",
@@ -383,6 +386,10 @@ fn check_package_index() -> bool {
         || !contains(&index, b"rustdoc 1.96.0 /bin/rustdoc")
         || !contains(&index, b"ristux-ld 0.3.0-bootstrap /bin/ristux-ld")
         || !contains(&index, b"rust-host-probe 0.1.0 /bin/rust_host_probe")
+        || !contains(
+            &index,
+            b"rustc-metadata-probe 0.1.0 /bin/rustc_metadata_probe",
+        )
         || !contains(
             &index,
             b"rust-ristux-overlays 1.96.0 /usr/lib/rustlib/src/ristux-overlays/",
@@ -1098,9 +1105,9 @@ fn check_overlay_sources() -> bool {
     ) else {
         return fail(b"overlay sources");
     };
-    let Some(os_mod) =
-        read_file(b"/usr/lib/rustlib/src/ristux-overlays/rust-src/library/std/src/os/ristux/mod.rs")
-    else {
+    let Some(os_mod) = read_file(
+        b"/usr/lib/rustlib/src/ristux-overlays/rust-src/library/std/src/os/ristux/mod.rs",
+    ) else {
         return fail(b"overlay sources");
     };
 

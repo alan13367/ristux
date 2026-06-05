@@ -1004,6 +1004,8 @@ if { grep -q 'Building stage2 tool cargo' "$LOG" \
     || grep -q 'could not compile `libz-sys`' "$LOG" \
     || grep -q 'could not compile `curl-sys`' "$LOG" \
     || grep -q 'could not compile `libgit2-sys`' "$LOG" \
+    || grep -q 'could not compile `libssh2-sys`' "$LOG" \
+    || grep -q 'could not compile `openssl-sys`' "$LOG" \
     || grep -q 'fatal error: .*file not found' "$LOG" \
     || grep -q 'error occurred in cc-rs' "$LOG" \
     || grep -q 'command did not execute successfully.*--target=x86_64-unknown-ristux.*"-c".*\\.c' "$LOG" \

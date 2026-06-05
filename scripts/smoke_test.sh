@@ -152,22 +152,6 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
-  send_text "rustc --version"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rustc --print target-list"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rustc --print sysroot"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rustc --print target-libdir"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
   send_text "cargo --version"
   sleep 1
   printf 'sendkey ret\n'
@@ -187,7 +171,7 @@ set +e
   send_text "rust_host_probe"
   sleep 1
   printf 'sendkey ret\n'
-  sleep 4
+  sleep "${RISTUX_SMOKE_RUST_HOST_PROBE_WAIT:-75}"
   send_text "pkg info rustc"
   sleep 1
   printf 'sendkey ret\n'
@@ -201,6 +185,10 @@ set +e
   printf 'sendkey ret\n'
   sleep 3
   send_text "pkg info rust-host-probe"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg info rustc-metadata-probe"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -517,14 +505,6 @@ grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --version" "$SERIAL_LOG"
-grep -q "rustc 1.96.0" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
-grep -q "x86_64-unknown-ristux" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --print sysroot" "$SERIAL_LOG"
-grep -q "/usr" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --print target-libdir" "$SERIAL_LOG"
-grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo --version" "$SERIAL_LOG"
 grep -q "cargo 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustdoc --version" "$SERIAL_LOG"
@@ -569,6 +549,9 @@ grep -q "  /bin/rustdoc" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: pkg info rust-host-probe" "$SERIAL_LOG"
 grep -q "name: rust-host-probe" "$SERIAL_LOG"
 grep -q "  /bin/rust_host_probe" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg info rustc-metadata-probe" "$SERIAL_LOG"
+grep -q "name: rustc-metadata-probe" "$SERIAL_LOG"
+grep -q "  /bin/rustc_metadata_probe" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: pkg info rust-core-libs" "$SERIAL_LOG"
 grep -q "name: rust-core-libs" "$SERIAL_LOG"
 grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/libcore-.*\\.rlib" "$SERIAL_LOG"

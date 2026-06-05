@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
+        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -1402,7 +1402,6 @@ impl ProcessTable {
         let mut child = parent_proc;
         child.pid = pid;
         child.parent = Some(parent);
-        child.state = ProcessState::Ready;
         child.waiters.clear();
         child.exit_status = None;
         child.stop_reported = false;
@@ -1411,6 +1410,23 @@ impl ProcessTable {
         child.pending_signal_status = None;
         child.user_fs_base = tls;
         child.clear_child_tid = clear_child_tid;
+        if clear_child_tid != 0 {
+            let mut address_space = child.address_space.lock();
+            if !address_space.allows_user(
+                clear_child_tid,
+                core::mem::size_of::<u32>(),
+                UserAccess::Write,
+            ) || address_space
+                .ensure_user_writable(clear_child_tid, core::mem::size_of::<u32>())
+                .is_err()
+            {
+                return Err(ForkError::InvalidProcessState);
+            }
+            unsafe {
+                *(clear_child_tid as *mut u32) = pid as u32;
+            }
+        }
+        child.state = ProcessState::Ready;
         child.saved_syscall = Some(SavedSyscallFrame {
             rax: 0,
             rbx: 0,

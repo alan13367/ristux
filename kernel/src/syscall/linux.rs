@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{USER_MMAP_END, USER_MMAP_START, UserProtection},
+        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -2779,11 +2779,6 @@ fn linux_ristux_thread_create(
         clear_child_tid,
     )
     .map_err(map_fork_error)?;
-    if clear_child_tid != 0 {
-        let out = process::write_user_buffer(clear_child_tid, core::mem::size_of::<u32>())
-            .ok_or(EFAULT)?;
-        out.copy_from_slice(&(child as u32).to_le_bytes());
-    }
     Ok(child as u64)
 }
 
@@ -3457,7 +3452,11 @@ fn linux_readlinkat(dirfd: i32, path_ptr: usize, buf: usize, len: usize) -> Resu
 }
 
 fn validate_readlink_len(len: usize) -> Result<(), i64> {
-    if len == 0 { Err(EINVAL) } else { Ok(()) }
+    if len == 0 {
+        Err(EINVAL)
+    } else {
+        Ok(())
+    }
 }
 
 fn linux_readlink_path(path: &str, buf: usize, len: usize) -> Result<u64, i64> {

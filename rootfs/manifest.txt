@@ -93,6 +93,7 @@ file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
 file /bin/ristux-ld ../build/userland/ristux_ld.elf
 file /bin/rust_host_probe ../build/userland/rust_host_probe.elf
+file /bin/rustc_metadata_probe ../build/userland/rustc_metadata_probe.elf
 file /bin/rust_std_probe ../build/userland/rust_std_probe.elf
 file /bin/rm ../build/userland/rm.elf
 file /bin/rustc ../build/official-rust/bin/rustc
@@ -231,6 +232,7 @@ package readlink 0.1.0 /bin/readlink
 package ristux-ld 0.3.0-bootstrap /bin/ristux-ld
 package rm 0.1.0 /bin/rm
 package rust-host-probe 0.1.0 /bin/rust_host_probe deps=rustc,cargo,rustdoc,ristux-ld
+package rustc-metadata-probe 0.1.0 /bin/rustc_metadata_probe deps=rustc,ristux-ld
 package rust-std-probe 0.1.0 /bin/rust_std_probe deps=rustc,ristux-ld
 package rustc 1.96.0 /bin/rustc deps=ristux-ld
 package rustc 1.96.0 /usr/lib/rustlib/rust-1.96.0-manifest.toml deps=ristux-ld
