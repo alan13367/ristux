@@ -1491,6 +1491,34 @@ impl ProcessTable {
         self.exit_with_reason(pid, ExitReason::Exited(status))
     }
 
+    fn exit_group(&mut self, pid: Pid, status: i32) -> WakeList {
+        let mut wake = WakeList::new();
+        let Some(address_space) = self
+            .get(pid)
+            .map(|process| Arc::clone(&process.address_space))
+        else {
+            return wake;
+        };
+        let mut members = Vec::new();
+        for process in &self.processes {
+            if Arc::ptr_eq(&process.address_space, &address_space)
+                && !matches!(process.state, ProcessState::Zombie(_))
+                && members.try_reserve_exact(1).is_ok()
+            {
+                members.push(process.pid);
+            }
+        }
+        members.sort();
+        if let Some(index) = members.iter().position(|member| *member == pid) {
+            let current = members.remove(index);
+            members.push(current);
+        }
+        for member in members {
+            wake.extend(self.exit(member, status));
+        }
+        wake
+    }
+
     fn exit_signaled(&mut self, pid: Pid, signal: u8) -> WakeList {
         self.exit_with_reason(pid, ExitReason::Signaled(signal))
     }
@@ -2407,6 +2435,12 @@ pub fn install_pipe_fds_with_flags(
 
 pub fn exit(pid: Pid, status: i32) {
     let wake = with_table(|table| table.exit(pid, status));
+    wake_io_waiters();
+    wake_processes(wake);
+}
+
+pub fn exit_group(pid: Pid, status: i32) {
+    let wake = with_table(|table| table.exit_group(pid, status));
     wake_io_waiters();
     wake_processes(wake);
 }

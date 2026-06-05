@@ -89,6 +89,7 @@ pub const NR_SET_TID_ADDRESS: usize = 218;
 pub const NR_FADVISE64: usize = 221;
 pub const NR_CLOCK_GETTIME: usize = 228;
 pub const NR_CLOCK_GETRES: usize = 229;
+pub const NR_EXIT_GROUP: usize = 231;
 pub const NR_OPENAT: usize = 257;
 pub const NR_MKDIRAT: usize = 258;
 pub const NR_FCHOWNAT: usize = 260;
@@ -1356,5 +1357,11 @@ pub fn rt_sigreturn(frame: usize) -> isize {
 #[inline]
 pub fn exit(status: i32) -> ! {
     unsafe { syscall1(NR_EXIT, status as usize) };
+    loop {}
+}
+
+#[inline]
+pub fn exit_group(status: i32) -> ! {
+    unsafe { syscall1(NR_EXIT_GROUP, status as usize) };
     loop {}
 }

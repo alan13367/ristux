@@ -13,6 +13,7 @@ const O_WRONLY: i32 = 1;
 const O_CREAT: i32 = 0o100;
 const O_TRUNC: i32 = 0o1000;
 const SEEK_SET: usize = 0;
+const DIRENT64_HEADER: usize = 19;
 const STAT_SIZE: usize = 144;
 const STATX_SIZE: usize = 256;
 const S_IFMT: u32 = 0o170000;
@@ -120,6 +121,68 @@ fn read_file(path: &[u8]) -> Option<Vec<u8>> {
     }
     let _ = sys::close(fd as i32);
     Some(out)
+}
+
+fn is_decimal(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|byte| byte.is_ascii_digit())
+}
+
+fn read_proc_status(pid_name: &[u8]) -> Option<Vec<u8>> {
+    let mut path = Vec::new();
+    path.extend_from_slice(b"/proc/");
+    path.extend_from_slice(pid_name);
+    path.extend_from_slice(b"/status");
+    read_file(&path)
+}
+
+fn count_processes_named(name: &[u8]) -> Option<usize> {
+    let mut needle = Vec::new();
+    needle.extend_from_slice(b"name: ");
+    needle.extend_from_slice(name);
+    needle.push(b'\n');
+
+    let proc_path = cstr(b"/proc");
+    let fd = sys::open(proc_path.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut count = 0usize;
+    let mut storage = [0u8; 1024];
+    loop {
+        let nread = sys::getdents64(fd as i32, &mut storage);
+        if nread < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if nread == 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        while offset + DIRENT64_HEADER <= nread as usize {
+            let reclen = u16::from_le_bytes([storage[offset + 16], storage[offset + 17]]) as usize;
+            if reclen == 0 || offset + reclen > nread as usize {
+                let _ = sys::close(fd as i32);
+                return None;
+            }
+            let name_start = offset + DIRENT64_HEADER;
+            let name_end = storage[name_start..offset + reclen]
+                .iter()
+                .position(|byte| *byte == 0)
+                .map(|pos| name_start + pos)
+                .unwrap_or(offset + reclen);
+            let pid_name = &storage[name_start..name_end];
+            if is_decimal(pid_name)
+                && read_proc_status(pid_name)
+                    .as_ref()
+                    .is_some_and(|status| contains(status, &needle))
+            {
+                count += 1;
+            }
+            offset += reclen;
+        }
+    }
+    let _ = sys::close(fd as i32);
+    Some(count)
 }
 
 fn envp_has(envp: *const *const u8, key: &[u8]) -> bool {
@@ -1306,6 +1369,90 @@ fn check_clear_child_tid_wake() -> bool {
     true
 }
 
+#[repr(C)]
+struct ExitGroupProbe {
+    started: u32,
+}
+
+extern "C" fn exit_group_spin_thread(arg: usize) -> ! {
+    let probe = arg as *mut ExitGroupProbe;
+    unsafe {
+        ptr::write_volatile(&mut (*probe).started, 1);
+    }
+    loop {
+        let _ = sys::sched_yield();
+    }
+}
+
+fn run_exit_group_child() -> ! {
+    const STACK_LEN: usize = 64 * 1024;
+    let stack = sys::mmap(
+        0,
+        STACK_LEN,
+        sys::PROT_READ | sys::PROT_WRITE,
+        sys::MAP_PRIVATE | sys::MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if stack < 0 {
+        sys::exit_group(111);
+    }
+    let stack_top = ((stack as usize + STACK_LEN) & !0xfusize) - core::mem::size_of::<usize>();
+    let mut probe = ExitGroupProbe { started: 0 };
+    let tid = sys::ristux_thread_create(
+        exit_group_spin_thread as *const () as usize,
+        &mut probe as *mut ExitGroupProbe as usize,
+        stack_top,
+        0,
+        ptr::null_mut(),
+    );
+    if tid <= 0 {
+        let _ = sys::munmap(stack as usize, STACK_LEN);
+        sys::exit_group(112);
+    }
+    for _ in 0..256 {
+        if unsafe { ptr::read_volatile(&probe.started) } != 0 {
+            sys::exit_group(0);
+        }
+        let _ = sys::sched_yield();
+    }
+    sys::exit_group(113);
+}
+
+fn check_exit_group_reaps_threads() -> bool {
+    let Some(before) = count_processes_named(b"/bin/rust_host_probe") else {
+        return fail(b"exit group proc baseline");
+    };
+    let pid = sys::fork();
+    if pid < 0 {
+        return fail(b"exit group fork");
+    }
+    if pid == 0 {
+        run_exit_group_child();
+    }
+
+    let mut status = 0i32;
+    if sys::wait4(pid, &mut status as *mut i32, 0, 0) != pid || status != 0 {
+        return fail(b"exit group wait");
+    }
+
+    let nap = sys::Timespec {
+        tv_sec: 0,
+        tv_nsec: 1_000_000,
+    };
+    for _ in 0..16 {
+        let _ = sys::nanosleep(&nap);
+    }
+    let Some(after) = count_processes_named(b"/bin/rust_host_probe") else {
+        return fail(b"exit group proc after");
+    };
+    if after > before {
+        return fail(b"exit group leaked thread");
+    }
+    line(b"rust_host_probe: exit group threads ok");
+    true
+}
+
 fn check_synchronization() -> bool {
     let mut word = 0u32;
     let timeout = sys::Timespec {
@@ -1355,6 +1502,7 @@ fn main(args: &[&[u8]], envp: *const *const u8) -> i32 {
         && check_memory_map()
         && check_clocks()
         && check_clear_child_tid_wake()
+        && check_exit_group_reaps_threads()
         && check_synchronization()
     {
         line(b"rust_host_probe: done");

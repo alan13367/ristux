@@ -131,6 +131,7 @@ pub const NR_set_tid_address: u64 = 218;
 pub const NR_fadvise64: u64 = 221;
 pub const NR_clock_gettime: u64 = 228;
 pub const NR_clock_getres: u64 = 229;
+pub const NR_exit_group: u64 = 231;
 pub const NR_utimes: u64 = 235;
 pub const NR_openat: u64 = 257;
 pub const NR_mkdirat: u64 = 258;
@@ -416,6 +417,16 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
             }
             // exit removes us from the run-queue; finish this syscall by
             // looping into yield until somebody else runs.
+            if !crate::syscall::yield_until_runnable(frame) {
+                return;
+            }
+            Ok(0)
+        }
+        NR_exit_group => {
+            let status = a0 as i32;
+            if let Some(pid) = process::current_pid() {
+                process::exit_group(pid, status);
+            }
             if !crate::syscall::yield_until_runnable(frame) {
                 return;
             }

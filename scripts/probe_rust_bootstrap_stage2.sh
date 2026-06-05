@@ -998,7 +998,7 @@ fi
 
 if { grep -q 'Building stage2 tool cargo' "$LOG" \
     || grep -q 'Building stage2 cargo' "$LOG" \
-    || grep -q 'stage2-tools/x86_64-unknown-ristux' "$LOG"; } \
+    || grep -q 'stage2-tools' "$LOG"; } \
   && { grep -q 'could not compile `zlib-rs`' "$LOG" \
     || grep -q 'could not compile `sha1`' "$LOG" \
     || grep -q 'could not compile `libz-sys`' "$LOG" \
@@ -1006,6 +1006,12 @@ if { grep -q 'Building stage2 tool cargo' "$LOG" \
     || grep -q 'could not compile `libgit2-sys`' "$LOG" \
     || grep -q 'could not compile `libssh2-sys`' "$LOG" \
     || grep -q 'could not compile `openssl-sys`' "$LOG" \
+    || grep -q 'failed to run custom build command for `libz-sys' "$LOG" \
+    || grep -q 'failed to run custom build command for `curl-sys' "$LOG" \
+    || grep -q 'failed to run custom build command for `libgit2-sys' "$LOG" \
+    || grep -q 'failed to run custom build command for `libssh2-sys' "$LOG" \
+    || grep -q 'failed to run custom build command for `openssl-sys' "$LOG" \
+    || grep -q 'Could not find directory of OpenSSL installation' "$LOG" \
     || grep -q 'fatal error: .*file not found' "$LOG" \
     || grep -q 'error occurred in cc-rs' "$LOG" \
     || grep -q 'command did not execute successfully.*--target=x86_64-unknown-ristux.*"-c".*\\.c' "$LOG" \

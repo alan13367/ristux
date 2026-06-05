@@ -946,6 +946,7 @@ case "$SCENARIO" in
       "^rust_host_probe: process capture ok$"
       "^rust_host_probe: memory map ok$"
       "^rust_host_probe: clocks ok$"
+      "^rust_host_probe: exit group threads ok$"
       "^rust_host_probe: synchronization ok$"
       "^rust_host_probe: done$"
       "^name: rustc$"

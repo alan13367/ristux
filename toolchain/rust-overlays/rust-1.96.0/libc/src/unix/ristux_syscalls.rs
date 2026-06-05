@@ -77,6 +77,7 @@ const NR_GETDENTS64: usize = 217;
 const NR_FADVISE64: usize = 221;
 const NR_CLOCK_GETTIME: usize = 228;
 const NR_CLOCK_GETRES: usize = 229;
+const NR_EXIT_GROUP: usize = 231;
 const NR_OPENAT: usize = 257;
 const NR_MKDIRAT: usize = 258;
 const NR_FCHOWNAT: usize = 260;
@@ -1675,7 +1676,7 @@ extern "C" fn pthread_start(arg: *mut c_void) -> ! {
     let start = arg as *mut PthreadStart;
     let record = unsafe { core::ptr::read(start) };
     let _ = (record.start)(record.arg);
-    unsafe { _exit(0) }
+    unsafe { thread_exit(0) }
 }
 
 #[no_mangle]
@@ -1867,7 +1868,7 @@ pub unsafe extern "C" fn pthread_detach(_thread: pthread_t) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_exit(_value: *mut c_void) -> ! {
-    unsafe { _exit(0) }
+    unsafe { thread_exit(0) }
 }
 
 #[no_mangle]
@@ -2180,6 +2181,13 @@ pub unsafe extern "C" fn pthread_kill(_thread: pthread_t, _sig: c_int) -> c_int 
 
 #[no_mangle]
 pub unsafe extern "C" fn _exit(status: c_int) -> ! {
+    let _ = unsafe { syscall1(NR_EXIT_GROUP, status as usize) };
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+unsafe fn thread_exit(status: c_int) -> ! {
     let _ = unsafe { syscall1(NR_EXIT, status as usize) };
     loop {
         core::hint::spin_loop();
