@@ -9,8 +9,10 @@ use core::ptr;
 use ristux_userland::sys;
 
 const O_WRONLY: i32 = 1;
+const O_RDONLY: i32 = 0;
 const O_CREAT: i32 = 0o100;
 const O_TRUNC: i32 = 0o1000;
+const DIRENT64_HEADER: usize = 19;
 const STAT_SIZE: usize = 144;
 const S_IFMT: u32 = 0o170000;
 const S_IFREG: u32 = 0o100000;
@@ -28,6 +30,45 @@ fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
 
 fn line(bytes: &[u8]) {
     let _ = write_all(1, bytes);
+    let _ = write_all(1, b"\n");
+}
+
+fn write_usize(mut value: usize) {
+    let mut digits = [0u8; 20];
+    let mut len = 0usize;
+    if value == 0 {
+        let _ = write_all(1, b"0");
+        return;
+    }
+    while value > 0 {
+        digits[len] = b'0' + (value % 10) as u8;
+        value /= 10;
+        len += 1;
+    }
+    while len > 0 {
+        len -= 1;
+        let _ = write_all(1, &digits[len..len + 1]);
+    }
+}
+
+fn status_line(label: &[u8], value: i32) {
+    let _ = write_all(1, b"rustc_metadata_probe: ");
+    let _ = write_all(1, label);
+    let _ = write_all(1, b" status ");
+    if value < 0 {
+        let _ = write_all(1, b"-");
+        write_usize(value.unsigned_abs() as usize);
+    } else {
+        write_usize(value as usize);
+    }
+    let _ = write_all(1, b"\n");
+}
+
+fn value_line(label: &[u8], value: usize) {
+    let _ = write_all(1, b"rustc_metadata_probe: ");
+    let _ = write_all(1, label);
+    let _ = write_all(1, b" ");
+    write_usize(value);
     let _ = write_all(1, b"\n");
 }
 
@@ -84,6 +125,114 @@ fn regular_file_size(path: &[u8]) -> Option<u64> {
         return None;
     }
     Some(read_le_u64(&stat_buf, 48))
+}
+
+fn read_file(path: &[u8]) -> Option<Vec<u8>> {
+    let path = cstr(path);
+    let fd = sys::open(path.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        let n = sys::read(fd as i32, &mut buf);
+        if n < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n as usize]);
+    }
+    let _ = sys::close(fd as i32);
+    Some(out)
+}
+
+fn is_decimal(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|byte| byte.is_ascii_digit())
+}
+
+fn read_proc_status(pid_name: &[u8]) -> Option<Vec<u8>> {
+    let mut path = Vec::new();
+    path.extend_from_slice(b"/proc/");
+    path.extend_from_slice(pid_name);
+    path.extend_from_slice(b"/status");
+    read_file(&path)
+}
+
+fn count_processes_named(name: &[u8]) -> Option<usize> {
+    let mut needle = Vec::new();
+    needle.extend_from_slice(b"name: ");
+    needle.extend_from_slice(name);
+    needle.push(b'\n');
+
+    let proc_path = cstr(b"/proc");
+    let fd = sys::open(proc_path.as_ptr(), O_RDONLY, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut count = 0usize;
+    let mut storage = [0u8; 1024];
+    loop {
+        let nread = sys::getdents64(fd as i32, &mut storage);
+        if nread < 0 {
+            let _ = sys::close(fd as i32);
+            return None;
+        }
+        if nread == 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        while offset + DIRENT64_HEADER <= nread as usize {
+            let reclen = u16::from_le_bytes([storage[offset + 16], storage[offset + 17]]) as usize;
+            if reclen == 0 || offset + reclen > nread as usize {
+                let _ = sys::close(fd as i32);
+                return None;
+            }
+            let name_start = offset + DIRENT64_HEADER;
+            let name_end = storage[name_start..offset + reclen]
+                .iter()
+                .position(|byte| *byte == 0)
+                .map(|pos| name_start + pos)
+                .unwrap_or(offset + reclen);
+            let pid_name = &storage[name_start..name_end];
+            if is_decimal(pid_name)
+                && read_proc_status(pid_name)
+                    .as_ref()
+                    .is_some_and(|status| contains(status, &needle))
+            {
+                count += 1;
+            }
+            offset += reclen;
+        }
+    }
+    let _ = sys::close(fd as i32);
+    Some(count)
+}
+
+fn free_ram_bytes() -> Option<usize> {
+    let mut info = sys::SysInfo::default();
+    if sys::sysinfo(&mut info as *mut sys::SysInfo) < 0 {
+        return None;
+    }
+    Some(read_le_u64(&info.bytes, 40) as usize)
+}
+
+fn diagnostic_snapshot(label: &[u8]) {
+    let mut free_label = Vec::new();
+    free_label.extend_from_slice(label);
+    free_label.extend_from_slice(b" free");
+    value_line(&free_label, free_ram_bytes().unwrap_or(0));
+
+    let mut rustc_label = Vec::new();
+    rustc_label.extend_from_slice(label);
+    rustc_label.extend_from_slice(b" rustc-procs");
+    value_line(
+        &rustc_label,
+        count_processes_named(b"/bin/rustc").unwrap_or(usize::MAX),
+    );
 }
 
 fn write_file(path: &[u8], bytes: &[u8]) -> bool {
@@ -175,10 +324,10 @@ fn spawn_capture(path: &[u8], argv0: &[u8], args: &[&[u8]]) -> Option<Vec<u8>> {
     Some(output)
 }
 
-fn exec_and_wait(path: &[u8], args: &[&[u8]]) -> Option<i32> {
+fn exec_and_wait(path: &[u8], args: &[&[u8]]) -> i32 {
     let pid = sys::fork();
     if pid < 0 {
-        return None;
+        return pid as i32;
     }
     if pid == 0 {
         let path_c = cstr(path);
@@ -208,20 +357,36 @@ fn exec_and_wait(path: &[u8], args: &[&[u8]]) -> Option<i32> {
     }
 
     let mut status = 0i32;
-    if sys::wait4(pid, &mut status as *mut i32, 0, 0) < 0 {
-        return None;
+    let waited = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    if waited < 0 {
+        return waited as i32;
     }
-    Some(status)
+    status
+}
+
+fn fork_sanity() -> bool {
+    let pid = sys::fork();
+    if pid < 0 {
+        return false;
+    }
+    if pid == 0 {
+        sys::exit(0);
+    }
+
+    let mut status = 0i32;
+    sys::wait4(pid, &mut status as *mut i32, 0, 0) == pid && status == 0
 }
 
 fn main(_args: &[&[u8]]) -> i32 {
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rs").as_ptr());
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rmeta").as_ptr());
+    let _ = sys::unlink(cstr(b"/tmp/rustc-codegen-probe.o").as_ptr());
 
     if regular_file_size(b"/bin/rustc").unwrap_or(0) < 1024 * 1024 {
         return fail(b"official rustc presence");
     }
     line(b"rustc_metadata_probe: official rustc present");
+    diagnostic_snapshot(b"initial");
 
     let Some(version) = spawn_capture(b"/bin/rustc", b"rustc", &[b"--version"]) else {
         return fail(b"rustc version");
@@ -257,7 +422,8 @@ fn main(_args: &[&[u8]]) -> i32 {
             b"/tmp/rustc-metadata-probe.rmeta",
         ],
     );
-    if status != Some(0) {
+    status_line(b"metadata", status);
+    if status != 0 {
         return fail(b"rustc metadata");
     }
 
@@ -266,6 +432,54 @@ fn main(_args: &[&[u8]]) -> i32 {
     }
 
     line(b"rustc_metadata_probe: metadata compile ok");
+    diagnostic_snapshot(b"after-metadata");
+
+    if !fork_sanity() {
+        return fail(b"post-metadata fork");
+    }
+    line(b"rustc_metadata_probe: post-metadata fork ok");
+    diagnostic_snapshot(b"after-fork-sanity");
+
+    let status = exec_and_wait(
+        b"/bin/rustc",
+        &[
+            b"--crate-name",
+            b"ristux_codegen_probe",
+            b"--crate-type",
+            b"lib",
+            b"--target",
+            b"x86_64-unknown-ristux",
+            b"--sysroot",
+            b"/usr",
+            b"--emit",
+            b"obj",
+            b"/tmp/rustc-metadata-probe.rs",
+            b"-o",
+            b"/tmp/rustc-codegen-probe.o",
+        ],
+    );
+    status_line(b"object", status);
+    let object_size = regular_file_size(b"/tmp/rustc-codegen-probe.o").unwrap_or(0);
+    if object_size > 0 {
+        let _ = write_all(1, b"rustc_metadata_probe: object bytes ");
+        write_usize(object_size as usize);
+        let _ = write_all(1, b"\n");
+    }
+    if status != 0 {
+        return fail(b"rustc object");
+    }
+
+    if object_size == 0 {
+        return fail(b"object output");
+    }
+
+    line(b"rustc_metadata_probe: object compile ok");
+
+    if !fork_sanity() {
+        return fail(b"post-object fork");
+    }
+    line(b"rustc_metadata_probe: post-object fork ok");
+
     0
 }
 

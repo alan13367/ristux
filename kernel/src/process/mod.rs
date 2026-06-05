@@ -1508,6 +1508,17 @@ impl ProcessTable {
                 members.push(process.pid);
             }
         }
+        let mut internal_members = Vec::new();
+        for process in &self.processes {
+            if members.contains(&process.pid)
+                && process
+                    .parent
+                    .is_some_and(|parent| members.contains(&parent))
+                && internal_members.try_reserve_exact(1).is_ok()
+            {
+                internal_members.push(process.pid);
+            }
+        }
         members.sort();
         if let Some(index) = members.iter().position(|member| *member == pid) {
             let current = members.remove(index);
@@ -1515,6 +1526,14 @@ impl ProcessTable {
         }
         for member in members {
             wake.extend(self.exit(member, status));
+        }
+        for member in internal_members {
+            if self
+                .get(member)
+                .is_some_and(|process| matches!(process.state, ProcessState::Zombie(_)))
+            {
+                self.reap(member);
+            }
         }
         wake
     }
@@ -1527,6 +1546,7 @@ impl ProcessTable {
         let was_current = current_pid() == Some(pid);
         let mut wake = WakeList::new();
         let parent_pid = self.get(pid).and_then(|p| p.parent);
+        let address_space = self.get(pid).map(|p| Arc::clone(&p.address_space));
         let waiters = {
             let process = match self.get_mut(pid) {
                 Some(p) => p,
@@ -1575,6 +1595,9 @@ impl ProcessTable {
             }
             core::mem::take(&mut process.waiters)
         };
+        if let Some(address_space) = address_space {
+            self.exit_and_reap_same_space_children(pid, &address_space, reason, &mut wake);
+        }
         self.reparent_children_to_init(pid, &mut wake);
         for waiter in waiters {
             self.wake_waiter_for_child(waiter, pid, &mut wake);
@@ -1584,6 +1607,44 @@ impl ProcessTable {
             self.wake_waiter_for_child(parent, pid, &mut wake);
         }
         wake
+    }
+
+    fn exit_and_reap_same_space_children(
+        &mut self,
+        parent: Pid,
+        address_space: &AddressSpaceHandle,
+        reason: ExitReason,
+        wake: &mut WakeList,
+    ) {
+        // Ristux models hosted runtime threads as process-table entries that
+        // share one address space. If the leader exits before those children,
+        // do not adopt them into init as normal processes; their Arcs would
+        // keep compiler-sized address spaces alive until login exits.
+        let mut children = Vec::new();
+        for process in &self.processes {
+            if process.parent == Some(parent)
+                && Arc::ptr_eq(&process.address_space, address_space)
+                && children.try_reserve_exact(1).is_ok()
+            {
+                children.push(process.pid);
+            }
+        }
+        for child in children.iter().copied() {
+            if self
+                .get(child)
+                .is_some_and(|process| !matches!(process.state, ProcessState::Zombie(_)))
+            {
+                wake.extend(self.exit_with_reason(child, reason));
+            }
+        }
+        for child in children {
+            if self
+                .get(child)
+                .is_some_and(|process| matches!(process.state, ProcessState::Zombie(_)))
+            {
+                self.reap(child);
+            }
+        }
     }
 
     fn queue_sigchld(&mut self, parent: Pid, event: SigchldEvent) {
