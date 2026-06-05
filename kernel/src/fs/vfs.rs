@@ -488,11 +488,7 @@ fn commit_pty_line(queue: &mut VecDeque<u8>, line: &mut Vec<u8>, capacity: usize
 fn control_char(termios: &[u8; crate::tty::TERMIOS_SIZE], index: usize) -> Option<u8> {
     const TERMIOS_CC: usize = 17;
     let byte = *termios.get(TERMIOS_CC + index)?;
-    if byte == 0 {
-        None
-    } else {
-        Some(byte)
-    }
+    if byte == 0 { None } else { Some(byte) }
 }
 
 fn queue_pty_signal(pgrp: crate::process::Pid, signal: crate::signal::Signal) {
@@ -1630,17 +1626,11 @@ impl Vfs {
             if !rights.read {
                 return Err(VfsError::BadFd);
             }
-            let data = self
+            let count = self
                 .root_ext2()
                 .ok_or(VfsError::NotFound)?
-                .read_file(&path)
+                .read_file_range(&path, offset, output)
                 .map_err(map_ext2_error)?;
-            if offset >= data.len() {
-                return Ok(0);
-            }
-            let remaining = data.len() - offset;
-            let count = remaining.min(output.len());
-            output[..count].copy_from_slice(&data[offset..offset + count]);
             if let Some(Some(OpenHandle::Ext2File { offset: cursor, .. })) =
                 self.open_files.get_mut(fd)
             {

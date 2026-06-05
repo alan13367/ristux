@@ -155,6 +155,7 @@ pub const NR_renameat2: u64 = 316;
 pub const NR_getrandom: u64 = 318;
 pub const NR_copy_file_range: u64 = 326;
 pub const NR_statx: u64 = 332;
+pub const NR_ristux_thread_create: u64 = 451;
 
 const ESRCH: i64 = -3;
 const EPERM: i64 = -1;
@@ -222,14 +223,20 @@ const O_WRONLY_ACCESS: i32 = 1;
 const O_RDWR_ACCESS: i32 = 2;
 const O_APPEND: u32 = 0o2000;
 const O_NONBLOCK: u32 = 0o4000;
+const O_CREAT: i32 = 0o100;
+const O_EXCL: i32 = 0o200;
+const O_TRUNC: i32 = 0o1000;
 const O_CLOEXEC: u32 = 0o2000000;
 const SETTABLE_STATUS_FLAGS: u32 = O_APPEND | O_NONBLOCK;
 const PROT_READ: i32 = 0x1;
 const PROT_WRITE: i32 = 0x2;
 const PROT_EXEC: i32 = 0x4;
+const RISTUX_PROT_EXEC: i32 = 0x1;
+const RISTUX_PROT_READ: i32 = 0x4;
 const MAP_SHARED: i32 = 0x01;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_FIXED: i32 = 0x10;
+const RISTUX_MAP_FIXED: i32 = 0x04;
 const MAP_ANONYMOUS: i32 = 0x20;
 const USER_ADDRESS_TOP: usize = 0x8000_0000;
 const CLONE_SIGNAL_MASK: u64 = 0xff;
@@ -388,6 +395,13 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_clone => linux_clone(
             frame,
             a0,
+            a1 as usize,
+            a2 as usize,
+            a3 as usize,
+            a4 as usize,
+        ),
+        NR_ristux_thread_create => linux_ristux_thread_create(
+            a0 as usize,
             a1 as usize,
             a2 as usize,
             a3 as usize,
@@ -1189,22 +1203,21 @@ fn linux_pread64(
 }
 
 fn linux_open(path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    let flags = normalize_open_flags(flags);
     validate_open_access_mode(flags)?;
     let path = read_user_cstr_errno(path_ptr)?;
     linux_open_path(&path, flags, mode)
 }
 
 fn linux_openat(dirfd: i32, path_ptr: usize, flags: i32, mode: u32) -> Result<u64, i64> {
+    let flags = normalize_open_flags(flags);
     validate_open_access_mode(flags)?;
     let path = resolve_at_path(dirfd, path_ptr, 0)?;
     linux_open_path(&path, flags, mode)
 }
 
 fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
-    const O_CREAT: i32 = 0o100;
-    const O_EXCL: i32 = 0o200;
-    const O_TRUNC: i32 = 0o1000;
-
+    let flags = normalize_open_flags(flags);
     validate_open_access_mode(flags)?;
     let access = flags & (O_ACCMODE as i32);
     let write = access == O_WRONLY_ACCESS || access == O_RDWR_ACCESS;
@@ -1227,6 +1240,61 @@ fn linux_open_path(path: &str, flags: i32, mode: u32) -> Result<u64, i64> {
     )
     .map(|fd| fd as u64)
     .map_err(map_open_vfs_error)
+}
+
+fn normalize_open_flags(flags: i32) -> i32 {
+    const REDOX_O_ACCMODE: i32 = 0x0003_0000;
+    const REDOX_O_RDONLY: i32 = 0x0001_0000;
+    const REDOX_O_WRONLY: i32 = 0x0002_0000;
+    const REDOX_O_RDWR: i32 = 0x0003_0000;
+    const REDOX_O_NONBLOCK: i32 = 0x0004_0000;
+    const REDOX_O_APPEND: i32 = 0x0008_0000;
+    const REDOX_O_CLOEXEC: i32 = 0x0100_0000;
+    const REDOX_O_CREAT: i32 = 0x0200_0000;
+    const REDOX_O_TRUNC: i32 = 0x0400_0000;
+    const REDOX_O_EXCL: i32 = 0x0800_0000;
+    const REDOX_O_DIRECTORY: i32 = 0x1000_0000;
+    const REDOX_O_NOFOLLOW: i32 = i32::MIN;
+    const REDOX_KNOWN_FLAGS: i32 = REDOX_O_ACCMODE
+        | REDOX_O_NONBLOCK
+        | REDOX_O_APPEND
+        | REDOX_O_CLOEXEC
+        | REDOX_O_CREAT
+        | REDOX_O_TRUNC
+        | REDOX_O_EXCL
+        | REDOX_O_DIRECTORY
+        | REDOX_O_NOFOLLOW;
+
+    if flags & REDOX_KNOWN_FLAGS == 0 {
+        return flags;
+    }
+
+    let mut normalized = flags & !REDOX_KNOWN_FLAGS & !(O_ACCMODE as i32);
+    normalized |= match flags & REDOX_O_ACCMODE {
+        REDOX_O_WRONLY => O_WRONLY_ACCESS,
+        REDOX_O_RDWR => O_RDWR_ACCESS,
+        REDOX_O_RDONLY => O_RDONLY_ACCESS,
+        _ => flags & (O_ACCMODE as i32),
+    };
+    if flags & REDOX_O_NONBLOCK != 0 {
+        normalized |= O_NONBLOCK as i32;
+    }
+    if flags & REDOX_O_APPEND != 0 {
+        normalized |= O_APPEND as i32;
+    }
+    if flags & REDOX_O_CREAT != 0 {
+        normalized |= O_CREAT;
+    }
+    if flags & REDOX_O_TRUNC != 0 {
+        normalized |= O_TRUNC;
+    }
+    if flags & REDOX_O_EXCL != 0 {
+        normalized |= O_EXCL;
+    }
+    if flags & REDOX_O_CLOEXEC != 0 {
+        normalized |= O_CLOEXEC as i32;
+    }
+    normalized
 }
 
 fn validate_open_access_mode(flags: i32) -> Result<(), i64> {
@@ -1457,7 +1525,7 @@ fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
 
 fn futex_wait_key(uaddr: usize, private: bool) -> u64 {
     let owner = if private {
-        process::current_pid().unwrap_or(0) as usize
+        process::current_address_space_key().unwrap_or(0)
     } else {
         0
     };
@@ -2561,7 +2629,7 @@ fn linux_set_tid_address(tidptr: usize) -> Result<u64, i64> {
     if tidptr != 0 {
         process::write_user_buffer(tidptr, core::mem::size_of::<u32>()).ok_or(EFAULT)?;
     }
-    Ok(process::current_pid().unwrap_or(0))
+    process::set_current_clear_child_tid(tidptr).ok_or(ESRCH)
 }
 
 fn linux_set_robust_list(head: usize, len: usize) -> Result<u64, i64> {
@@ -2683,6 +2751,39 @@ fn clone_fork_child(
         ss: frame.ss,
     };
     process::save_syscall_frame(child, &child_frame);
+    Ok(child as u64)
+}
+
+fn linux_ristux_thread_create(
+    entry: usize,
+    arg: usize,
+    child_stack: usize,
+    tls: usize,
+    clear_child_tid: usize,
+) -> Result<u64, i64> {
+    if !process::is_user_executable(entry, 1) {
+        return Err(EFAULT);
+    }
+    let child_rsp = validate_clone_child_stack(0, child_stack)?;
+    let child_fs_base = validate_clone_tls_base(tls)?;
+    if clear_child_tid != 0 {
+        process::write_user_buffer(clear_child_tid, core::mem::size_of::<u32>()).ok_or(EFAULT)?;
+    }
+    let parent = process::current_pid().ok_or(ESRCH)?;
+    let child = process::clone_thread(
+        parent,
+        entry as u64,
+        arg as u64,
+        child_rsp,
+        child_fs_base,
+        clear_child_tid,
+    )
+    .map_err(map_fork_error)?;
+    if clear_child_tid != 0 {
+        let out = process::write_user_buffer(clear_child_tid, core::mem::size_of::<u32>())
+            .ok_or(EFAULT)?;
+        out.copy_from_slice(&(child as u32).to_le_bytes());
+    }
     Ok(child as u64)
 }
 
@@ -3386,7 +3487,7 @@ fn linux_mmap(
     offset: i64,
 ) -> Result<u64, i64> {
     let protection = mmap_protection(prot)?;
-    if flags & !(MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS) != 0 {
+    if flags & !(MAP_SHARED | MAP_PRIVATE | MAP_FIXED | RISTUX_MAP_FIXED | MAP_ANONYMOUS) != 0 {
         return Err(EINVAL);
     }
     let shared = flags & MAP_SHARED != 0;
@@ -3427,11 +3528,13 @@ fn linux_mmap(
     } else {
         protection
     };
-    let mapped = if flags & MAP_FIXED != 0 {
+    let mapped = if mmap_has_fixed(flags) {
         if addr == 0 || addr % FRAME_SIZE != 0 {
             return Err(EINVAL);
         }
         process::mmap_fixed(addr, length, initial_protection).map_err(map_mmap_error)?
+    } else if file_mapping.is_some() {
+        process::mmap_anonymous_eager(addr, length, initial_protection).map_err(map_mmap_error)?
     } else {
         process::mmap_anonymous(addr, length, initial_protection).map_err(map_mmap_error)?
     };
@@ -3523,23 +3626,38 @@ fn linux_madvise(addr: usize, len: usize, advice: i32) -> Result<u64, i64> {
 }
 
 fn mmap_protection(prot: i32) -> Result<UserProtection, i64> {
-    if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
-        return Err(EINVAL);
-    }
-    let writable = prot & PROT_WRITE != 0;
-    let executable = prot & PROT_EXEC != 0;
-    if writable && executable {
+    if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC | RISTUX_PROT_READ | RISTUX_PROT_EXEC) != 0 {
         return Err(EINVAL);
     }
     if prot == 0 {
-        Ok(UserProtection::None)
-    } else if writable {
+        return Ok(UserProtection::None);
+    }
+
+    // Ristux's hosted Rust libc currently inherits Redox protection constants,
+    // where READ and EXEC are swapped from the older Linux-like userland ABI.
+    // Accept both read/write encodings during the host-toolchain transition.
+    let writable = prot & PROT_WRITE != 0;
+    let executable =
+        prot == (PROT_READ | PROT_EXEC) || prot == (PROT_READ | PROT_WRITE | PROT_EXEC);
+    if writable
+        && executable
+        && prot != (PROT_READ | PROT_WRITE)
+        && prot != (RISTUX_PROT_READ | PROT_WRITE)
+    {
+        return Err(EINVAL);
+    }
+
+    if writable {
         Ok(UserProtection::ReadWrite)
     } else if executable {
         Ok(UserProtection::ReadExecute)
     } else {
         Ok(UserProtection::ReadOnly)
     }
+}
+
+fn mmap_has_fixed(flags: i32) -> bool {
+    flags & (MAP_FIXED | RISTUX_MAP_FIXED) != 0
 }
 
 fn page_aligned_len(len: usize) -> Result<usize, i64> {
@@ -3580,23 +3698,18 @@ fn copy_mmap_file_from_vfs(
     validate_mmap_file_range(offset, len)?;
     let offset = isize::try_from(offset).map_err(|_| EINVAL)?;
     fs::lseek(vfs_fd, offset, 0).map_err(map_vfs_error)?;
-    let mut buffer = [0u8; FRAME_SIZE];
-    let mut read = 0usize;
-    while read < len {
-        let chunk_len = (len - read).min(buffer.len());
-        match fs::read(vfs_fd, &mut buffer[..chunk_len]) {
-            Ok(0) => break,
-            Ok(n) => {
-                let target = mapped.checked_add(read).ok_or(EFAULT)?;
-                let out = process::write_user_buffer(target, n).ok_or(EFAULT)?;
-                out.copy_from_slice(&buffer[..n]);
-                read += n;
-            }
-            Err(fs::vfs::VfsError::WouldBlock) => break,
-            Err(err) => return Err(map_vfs_error(err)),
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(len).map_err(|_| ENOMEM)?;
+    buffer.resize(len, 0);
+    match fs::read(vfs_fd, &mut buffer) {
+        Ok(0) | Err(fs::vfs::VfsError::WouldBlock) => Ok(()),
+        Ok(n) => {
+            let out = process::write_user_buffer(mapped, n).ok_or(EFAULT)?;
+            out.copy_from_slice(&buffer[..n]);
+            Ok(())
         }
+        Err(err) => Err(map_vfs_error(err)),
     }
-    Ok(())
 }
 
 fn linux_time(tloc: usize) -> Result<u64, i64> {
@@ -3628,22 +3741,47 @@ fn linux_gettimeofday(tv: usize, tz: usize) -> Result<u64, i64> {
     Ok(0)
 }
 
-fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
+#[derive(Clone, Copy)]
+enum LinuxClockKind {
+    Realtime,
+    Monotonic,
+}
+
+fn linux_clock_kind(clock_id: i32) -> Option<LinuxClockKind> {
     const CLOCK_REALTIME: i32 = 0;
     const CLOCK_MONOTONIC: i32 = 1;
+    const CLOCK_PROCESS_CPUTIME_ID: i32 = 2;
+    const CLOCK_THREAD_CPUTIME_ID: i32 = 3;
+    const CLOCK_MONOTONIC_RAW: i32 = 4;
+    const CLOCK_REALTIME_COARSE: i32 = 5;
+    const CLOCK_MONOTONIC_COARSE: i32 = 6;
+    const CLOCK_BOOTTIME: i32 = 7;
+
+    match clock_id {
+        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => Some(LinuxClockKind::Realtime),
+        CLOCK_MONOTONIC
+        | CLOCK_PROCESS_CPUTIME_ID
+        | CLOCK_THREAD_CPUTIME_ID
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_MONOTONIC_COARSE
+        | CLOCK_BOOTTIME => Some(LinuxClockKind::Monotonic),
+        _ => None,
+    }
+}
+
+fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
     let hz = crate::config::PIT_TARGET_HZ as u64;
-    let (sec, nsec) = match clock_id {
-        CLOCK_REALTIME => {
+    let (sec, nsec) = match linux_clock_kind(clock_id).ok_or(EINVAL)? {
+        LinuxClockKind::Realtime => {
             let ticks = crate::time::monotonic_ticks();
             let sec = crate::time::unix_time();
             let nsec = (ticks % hz).saturating_mul(1_000_000_000) / hz;
             (sec, nsec)
         }
-        CLOCK_MONOTONIC => {
+        LinuxClockKind::Monotonic => {
             let millis = crate::time::uptime_millis();
             (millis / 1000, (millis % 1000) * 1_000_000)
         }
-        _ => return Err(EINVAL),
     };
     let out = process::write_user_buffer(tp, 16).ok_or(EFAULT)?;
     out[0..8].copy_from_slice(&(sec as i64).to_le_bytes());
@@ -3652,11 +3790,7 @@ fn linux_clock_gettime(clock_id: i32, tp: usize) -> Result<u64, i64> {
 }
 
 fn linux_clock_getres(clock_id: i32, tp: usize) -> Result<u64, i64> {
-    const CLOCK_REALTIME: i32 = 0;
-    const CLOCK_MONOTONIC: i32 = 1;
-    if !matches!(clock_id, CLOCK_REALTIME | CLOCK_MONOTONIC) {
-        return Err(EINVAL);
-    }
+    linux_clock_kind(clock_id).ok_or(EINVAL)?;
     if tp != 0 {
         let hz = crate::config::PIT_TARGET_HZ as u64;
         let nsec = 1_000_000_000u64 / hz.max(1);

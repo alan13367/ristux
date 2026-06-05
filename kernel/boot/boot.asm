@@ -32,6 +32,14 @@ setup_page_tables:
     mov dword ptr [p3_table], eax
     mov dword ptr [p3_kernel_table + 510 * 8], eax
 
+    mov eax, offset p2_table_1g
+    or eax, 0x3
+    mov dword ptr [p3_table + 1 * 8], eax
+
+    mov eax, offset p2_kernel_table_1g
+    or eax, 0x3
+    mov dword ptr [p3_kernel_table + 511 * 8], eax
+
     mov ecx, 0
 
 .map_p2_table:
@@ -44,6 +52,23 @@ setup_page_tables:
     inc ecx
     cmp ecx, 512
     jne .map_p2_table
+
+    mov ecx, 0
+
+.map_p2_table_1g:
+    mov eax, 0x200000
+    mul ecx
+    add eax, 0x40000000
+    adc edx, 0
+    or eax, 0x83
+    mov dword ptr [p2_table_1g + ecx * 8], eax
+    mov dword ptr [p2_table_1g + ecx * 8 + 4], edx
+    mov dword ptr [p2_kernel_table_1g + ecx * 8], eax
+    mov dword ptr [p2_kernel_table_1g + ecx * 8 + 4], edx
+
+    inc ecx
+    cmp ecx, 512
+    jne .map_p2_table_1g
 
     ret
 
@@ -109,6 +134,10 @@ p3_table:
 p3_kernel_table:
     .skip 4096
 p2_table:
+    .skip 4096
+p2_table_1g:
+    .skip 4096
+p2_kernel_table_1g:
     .skip 4096
 
 .align 16

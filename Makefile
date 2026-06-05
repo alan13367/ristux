@@ -145,6 +145,8 @@ RUST_STD_PROBE_ELF := build/userland/rust_std_probe.elf
 RUST_STD_SYSROOT_TREE := build/rust-std-sysroot
 RUST_STD_SYSROOT_STAMP := build/rust-std-sysroot.stamp
 RUST_OFFICIAL_RUSTC := build/official-rust/bin/rustc
+RUST_OFFICIAL_SYSROOT_TREE := build/official-rust/rustlib
+RUST_OFFICIAL_SYSROOT_STAMP := build/official-rust/rustlib.stamp
 RUST_OVERLAY_TREE := toolchain/rust-overlays/rust-1.96.0
 RUST_OVERLAY_INPUTS := $(shell find $(RUST_OVERLAY_TREE) -type f 2>/dev/null)
 ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(RUST_OFFICIAL_RUSTC) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
@@ -167,20 +169,17 @@ $(USERLAND_RS_STAMP): $(USERLAND_RS_SRC)
 	done
 	touch $@
 
-$(RUST_SYSROOT_STAMP): $(USERLAND_RS_STAMP)
-	rm -rf $(RUST_SYSROOT_TREE)
-	mkdir -p $(RUST_SYSROOT_LIBDIR)
-	@for crate in core alloc compiler_builtins; do \
-		rlib=$$(ls -t $(USERLAND_RS_OUT)/deps/lib$$crate-*.rlib 2>/dev/null | head -n 1); \
-		test -n "$$rlib" || { echo "missing Rust sysroot artifact for $$crate" >&2; exit 1; }; \
-		cp "$$rlib" "$(RUST_SYSROOT_LIBDIR)/"; \
-		rmeta="$${rlib%.rlib}.rmeta"; \
-		test -f "$$rmeta" && cp "$$rmeta" "$(RUST_SYSROOT_LIBDIR)/" || true; \
-	done
+$(RUST_OFFICIAL_SYSROOT_STAMP): $(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh
+	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_OFFICIAL_SYSROOT_TREE) full
 	touch $@
 
-$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS)
-	RISTUX_STD_PROBE_OUTPUT=$(RUST_STD_PROBE_ELF) RISTUX_STD_SYSROOT_OUTPUT=$(RUST_STD_SYSROOT_TREE) scripts/probe_rust_std.sh --expect-std-link-success
+$(RUST_SYSROOT_STAMP): $(RUST_OFFICIAL_SYSROOT_STAMP) scripts/package_official_rust_sysroot.sh
+	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_SYSROOT_TREE) core
+	touch $@
+
+$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh scripts/package_official_rust_sysroot.sh targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS) $(RUST_OFFICIAL_SYSROOT_STAMP)
+	RISTUX_STD_PROBE_OUTPUT=$(RUST_STD_PROBE_ELF) scripts/probe_rust_std.sh --expect-std-link-success
+	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_STD_SYSROOT_TREE) full
 	touch $@
 
 $(RUST_STD_PROBE_ELF): $(RUST_STD_SYSROOT_STAMP)

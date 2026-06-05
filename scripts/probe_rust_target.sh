@@ -282,7 +282,6 @@ patch_ristux_std() {
   perl -0pi -e 's/    target_os = "linux",\n    target_os = "cygwin",/    target_os = "linux",\n    target_os = "ristux",\n    target_os = "cygwin",/' "$std_dir/sys/paths/unix.rs"
   perl -0pi -e 's/        target_os = "nto",\n    \) => \{/        target_os = "nto",\n        target_os = "ristux",\n    ) => {/' "$std_dir/sys/random/mod.rs"
   perl -0pi -e 's/            target_os = "redox",\n            target_os = "hurd",/            target_os = "redox",\n            target_os = "ristux",\n            target_os = "hurd",/g' "$std_dir/sys/thread/mod.rs"
-  perl -0pi -e 's/        target_os = "trusty",\n        target_os = "vexos",/        target_os = "trusty",\n        target_os = "ristux",\n        target_os = "vexos",/g; s/            target_os = "trusty",\n            target_os = "vexos",/            target_os = "trusty",\n            target_os = "ristux",\n            target_os = "vexos",/g' "$std_dir/sys/thread_local/mod.rs"
   perl -0pi -e 's/    target_os = "redox",\n    target_os = "solaris",/    target_os = "redox",\n    target_os = "ristux",\n    target_os = "solaris",/g; s/    target_os = "redox",\n    target_os = "rtems",/    target_os = "redox",\n    target_os = "ristux",\n    target_os = "rtems",/g; s/        target_os = "redox",\n        target_os = "solaris",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "solaris",/g; s/        target_os = "redox",\n        target_os = "rtems",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "rtems",/g; s/        target_os = "redox",\n        target_os = "aix",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "aix",/g' "$std_dir/sys/fs/unix.rs"
   perl -0pi -e 's/        target_os = "linux",\n        target_os = "android",/        target_os = "linux",\n        target_os = "ristux",\n        target_os = "android",/' "$std_dir/sys/sync/mutex/mod.rs" "$std_dir/sys/sync/condvar/mod.rs" "$std_dir/sys/sync/once/mod.rs" "$std_dir/sys/sync/thread_parking/mod.rs" "$std_dir/sys/sync/rwlock/mod.rs"
   perl -0pi -e 's/        \|\| target_os == "vexos"\n/        || target_os == "vexos"\n        || target_os == "ristux"\n/' "$work_source/library/std/build.rs"
@@ -317,10 +316,10 @@ patch_ristux_std() {
     echo "failed to add Ristux fs support gates to official std" >&2
     exit 1
   }
-  grep -q 'target_os = "ristux"' "$std_dir/sys/thread_local/mod.rs" || {
-    echo "failed to select single-thread TLS for official Ristux std" >&2
+  if grep -A8 'target_os = "trusty"' "$std_dir/sys/thread_local/mod.rs" | grep -q 'target_os = "ristux"'; then
+    echo "failed to keep Ristux on OS-key TLS for official Ristux std" >&2
     exit 1
-  }
+  fi
   grep -q 'target_os = "ristux"' "$std_dir/sys/sync/condvar/mod.rs" || {
     echo "failed to select futex-backed official Ristux std sync" >&2
     exit 1

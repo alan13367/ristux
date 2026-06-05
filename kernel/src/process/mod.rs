@@ -1,11 +1,11 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{cmp, ptr, slice};
 
 use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
+        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -19,6 +19,7 @@ static PROCESS_TABLE: SpinLock<Option<ProcessTable>> = SpinLock::new(None);
 static CURRENT_PID: SpinLock<Option<Pid>> = SpinLock::new(None);
 
 pub type Pid = u64;
+type AddressSpaceHandle = Arc<SpinLock<AddressSpace>>;
 
 const INIT_PID: Pid = 1;
 pub const MAX_FDS: usize = 256;
@@ -182,7 +183,7 @@ pub struct Process {
     signal_action_masks: [u64; 32],
     signal_flags: [u32; 32],
     pub state: ProcessState,
-    pub address_space: AddressSpace,
+    pub address_space: AddressSpaceHandle,
     pub credentials: Credentials,
     pub umask: u16,
     rlimit_nofile_cur: u64,
@@ -205,6 +206,7 @@ pub struct Process {
     saved_syscall: Option<SavedSyscallFrame>,
     interrupted_syscall: bool,
     user_fs_base: u64,
+    clear_child_tid: usize,
     fpu_state: fpu::FpuState,
 }
 
@@ -467,6 +469,16 @@ struct PreparedExec {
     stack: StackSetup,
 }
 
+fn new_address_space_handle(address_space: AddressSpace) -> AddressSpaceHandle {
+    Arc::new(SpinLock::new(address_space))
+}
+
+fn destroy_address_space_handle(address_space: AddressSpaceHandle) {
+    if let Ok(lock) = Arc::try_unwrap(address_space) {
+        lock.into_inner().destroy();
+    }
+}
+
 impl Process {
     fn new_user(pid: Pid, parent: Option<Pid>, name: &str, credentials: Credentials) -> Self {
         let address_space =
@@ -486,7 +498,7 @@ impl Process {
             signal_action_masks: [0; 32],
             signal_flags: [0; 32],
             state: ProcessState::Ready,
-            address_space,
+            address_space: new_address_space_handle(address_space),
             credentials,
             umask: 0o022,
             rlimit_nofile_cur: MAX_FDS as u64,
@@ -509,6 +521,7 @@ impl Process {
             saved_syscall: None,
             interrupted_syscall: false,
             user_fs_base: 0,
+            clear_child_tid: 0,
             fpu_state: fpu::initial_state(),
         }
     }
@@ -768,19 +781,37 @@ impl Process {
     }
 
     fn allows_user_read(&self, addr: usize, len: usize) -> bool {
-        self.address_space.allows_user(addr, len, UserAccess::Read)
+        self.address_space
+            .lock()
+            .allows_user(addr, len, UserAccess::Read)
     }
 
     fn allows_user_execute(&self, addr: usize, len: usize) -> bool {
         self.address_space
+            .lock()
             .allows_user(addr, len, UserAccess::Execute)
     }
 
-    fn prepare_user_write(&mut self, addr: usize, len: usize) -> bool {
-        if !self.address_space.allows_user(addr, len, UserAccess::Write) {
+    fn prepare_user_read(&mut self, addr: usize, len: usize) -> bool {
+        let mut address_space = self.address_space.lock();
+        if address_space
+            .materialize_lazy_range(addr, len, UserAccess::Read)
+            .is_err()
+        {
             return false;
         }
-        self.address_space.ensure_user_writable(addr, len).is_ok()
+        address_space.allows_user(addr, len, UserAccess::Read)
+    }
+
+    fn prepare_user_write(&mut self, addr: usize, len: usize) -> bool {
+        let mut address_space = self.address_space.lock();
+        if address_space
+            .materialize_lazy_range(addr, len, UserAccess::Write)
+            .is_err()
+        {
+            return false;
+        }
+        address_space.ensure_user_writable(addr, len).is_ok()
     }
 
     fn prepare_exec(
@@ -812,32 +843,32 @@ impl Process {
             }
         });
         if let Err(err) = map_result {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(ExecError::from(err));
         }
         if let Some(err) = load_error {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(err);
         }
         if segments != checked_segments || segments == 0 {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(ExecError::OutOfMemory);
         }
         if let Err(err) = map_syscall_trampoline(&mut new_space) {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(err);
         }
         let Ok(entry) = usize::try_from(checked_entry) else {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(ExecError::InvalidImage);
         };
         if !new_space.allows_user(entry, 1, UserAccess::Execute) {
-            self.address_space.activate();
+            self.address_space.lock().activate();
             new_space.destroy();
             return Err(ExecError::InvalidImage);
         }
@@ -845,13 +876,13 @@ impl Process {
         let stack = match Self::setup_stack_in_space(&mut new_space, args, env) {
             Ok(stack) => stack,
             Err(err) => {
-                self.address_space.activate();
+                self.address_space.lock().activate();
                 new_space.destroy();
                 return Err(err);
             }
         };
 
-        self.address_space.activate();
+        self.address_space.lock().activate();
         Ok(PreparedExec {
             address_space: new_space,
             entry: checked_entry,
@@ -867,12 +898,16 @@ impl Process {
         } = prepared;
 
         self.flush_and_close_shared_mappings();
-        let old = core::mem::replace(&mut self.address_space, address_space);
-        self.address_space.activate();
-        old.destroy();
+        let old = core::mem::replace(
+            &mut self.address_space,
+            new_address_space_handle(address_space),
+        );
+        self.address_space.lock().activate();
+        destroy_address_space_handle(old);
         self.timed_wait = None;
         self.fpu_state = fpu::initial_state();
         self.user_fs_base = 0;
+        self.clear_child_tid = 0;
         self.name = name;
         self.entry = entry;
         self.stack_top = stack.stack_top;
@@ -1246,7 +1281,7 @@ impl Process {
         }
         self.fds.clear();
         self.close_socket_handles();
-        self.address_space.destroy();
+        destroy_address_space_handle(self.address_space);
     }
 }
 
@@ -1294,6 +1329,63 @@ impl ProcessTable {
         child.continued_report_pending = false;
         child.pending_signals = 0;
         child.pending_signal_status = None;
+        self.processes.push(child);
+        self.next_pid += 1;
+        crate::sched::on_fork(pid);
+        Ok(pid)
+    }
+
+    fn clone_thread(
+        &mut self,
+        parent: Pid,
+        entry: u64,
+        arg: u64,
+        stack_top: u64,
+        tls: u64,
+        clear_child_tid: usize,
+    ) -> Result<Pid, ForkError> {
+        self.processes
+            .try_reserve_exact(1)
+            .map_err(|_| ForkError::OutOfMemory)?;
+        let parent_proc = self
+            .get(parent)
+            .ok_or(ForkError::NoSuchProcess)?
+            .clone_thread()?;
+        let pid = self.next_pid;
+        let mut child = parent_proc;
+        child.pid = pid;
+        child.parent = Some(parent);
+        child.state = ProcessState::Ready;
+        child.waiters.clear();
+        child.exit_status = None;
+        child.stop_reported = false;
+        child.continued_report_pending = false;
+        child.pending_signals = 0;
+        child.pending_signal_status = None;
+        child.user_fs_base = tls;
+        child.clear_child_tid = clear_child_tid;
+        child.saved_syscall = Some(SavedSyscallFrame {
+            rax: 0,
+            rbx: 0,
+            rcx: 0,
+            rdx: 0,
+            rsi: 0,
+            rdi: arg,
+            rbp: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rip: entry,
+            cs: 0x33,
+            rflags: 0x202,
+            rsp: stack_top,
+            ss: 0x2b,
+        });
         self.processes.push(child);
         self.next_pid += 1;
         crate::sched::on_fork(pid);
@@ -1352,15 +1444,35 @@ impl ProcessTable {
             process.state = ProcessState::Zombie(reason);
             process.exit_status = Some(reason.legacy_status());
             if was_current {
-                process.address_space.activate();
+                process.address_space.lock().activate();
             }
+            if process.clear_child_tid != 0 {
+                let clear_tid = process.clear_child_tid;
+                let mut address_space = process.address_space.lock();
+                if address_space.allows_user(
+                    clear_tid,
+                    core::mem::size_of::<u32>(),
+                    UserAccess::Write,
+                ) && address_space
+                    .ensure_user_writable(clear_tid, core::mem::size_of::<u32>())
+                    .is_ok()
+                {
+                    unsafe {
+                        *(clear_tid as *mut u32) = 0;
+                    }
+                }
+                process.clear_child_tid = 0;
+            }
+            let last_address_space_owner = Arc::strong_count(&process.address_space) == 1;
             process.flush_and_close_shared_mappings();
             for entry in &process.fds {
                 let _ = fs::close(entry.vfs_fd);
             }
             process.fds.clear();
             process.close_socket_handles();
-            process.address_space.clear_user_pages();
+            if last_address_space_owner {
+                process.address_space.lock().clear_user_pages();
+            }
             if was_current {
                 clear_current();
             }
@@ -1730,6 +1842,7 @@ impl Process {
         let cwd = Self::clone_string(&self.cwd)?;
         let address_space = self
             .address_space
+            .lock()
             .clone_full_copy()
             .map_err(map_fork_paging_error)?;
         let fds = match Self::duplicate_fd_entries(&self.fds) {
@@ -1771,7 +1884,7 @@ impl Process {
             signal_action_masks: self.signal_action_masks,
             signal_flags: self.signal_flags,
             state: ProcessState::Ready,
-            address_space,
+            address_space: new_address_space_handle(address_space),
             credentials: self.credentials,
             umask: self.umask,
             rlimit_nofile_cur: self.rlimit_nofile_cur,
@@ -1794,7 +1907,62 @@ impl Process {
             saved_syscall: None,
             interrupted_syscall: false,
             user_fs_base: self.user_fs_base,
+            clear_child_tid: 0,
             fpu_state: self.fpu_state,
+        })
+    }
+
+    fn clone_thread(&self) -> Result<Self, ForkError> {
+        let name = Self::clone_string(&self.name)?;
+        let cwd = Self::clone_string(&self.cwd)?;
+        let fds = Self::duplicate_fd_entries(&self.fds)?;
+        let socket_handles = match Self::duplicate_socket_handles(&self.socket_handles) {
+            Ok(socket_handles) => socket_handles,
+            Err(err) => {
+                Self::close_fd_entries(&fds);
+                return Err(err);
+            }
+        };
+        Ok(Self {
+            pid: self.pid,
+            parent: Some(self.pid),
+            name,
+            cwd,
+            pgrp: self.pgrp,
+            sid: self.sid,
+            controlling_tty: self.controlling_tty,
+            pending_signals: 0,
+            pending_signal_status: None,
+            signal_mask: self.signal_mask,
+            signal_handlers: self.signal_handlers,
+            signal_action_masks: self.signal_action_masks,
+            signal_flags: self.signal_flags,
+            state: ProcessState::Ready,
+            address_space: Arc::clone(&self.address_space),
+            credentials: self.credentials,
+            umask: self.umask,
+            rlimit_nofile_cur: self.rlimit_nofile_cur,
+            rlimit_nofile_max: self.rlimit_nofile_max,
+            fds,
+            socket_handles,
+            shared_mappings: Vec::new(),
+            timed_wait: None,
+            next_fd: self.next_fd,
+            entry: self.entry,
+            stack_top: self.stack_top,
+            argc: self.argc,
+            argv_ptr: self.argv_ptr,
+            envp_ptr: self.envp_ptr,
+            exit_status: None,
+            stop_reported: false,
+            continued_report_pending: false,
+            waiters: Vec::new(),
+            is_user: self.is_user,
+            saved_syscall: None,
+            interrupted_syscall: false,
+            user_fs_base: self.user_fs_base,
+            clear_child_tid: 0,
+            fpu_state: fpu::initial_state(),
         })
     }
 }
@@ -1836,6 +2004,17 @@ pub fn fork(parent: Pid) -> Result<Pid, ForkError> {
     with_table(|table| table.fork(parent))
 }
 
+pub fn clone_thread(
+    parent: Pid,
+    entry: u64,
+    arg: u64,
+    stack_top: u64,
+    tls: u64,
+    clear_child_tid: usize,
+) -> Result<Pid, ForkError> {
+    with_table(|table| table.clone_thread(parent, entry, arg, stack_top, tls, clear_child_tid))
+}
+
 pub fn set_user_fs_base(pid: Pid, base: u64) -> bool {
     with_table(|table| {
         let Some(process) = table.get_mut(pid) else {
@@ -1848,6 +2027,19 @@ pub fn set_user_fs_base(pid: Pid, base: u64) -> bool {
 
 pub fn current_user_fs_base() -> Option<u64> {
     with_current_read(|process| process.user_fs_base)
+}
+
+pub fn current_address_space_key() -> Option<usize> {
+    with_current_read(|process| process.address_space.lock().p4_phys())
+}
+
+pub fn set_current_clear_child_tid(addr: usize) -> Option<Pid> {
+    let pid = current_pid()?;
+    with_table(|table| {
+        let process = table.get_mut(pid)?;
+        process.clear_child_tid = addr;
+        Some(pid)
+    })
 }
 
 pub fn exec(pid: Pid, path: &str) -> bool {
@@ -2468,7 +2660,7 @@ pub fn set_current(pid: Pid) {
         }
         table
             .get(pid)
-            .map(|p| (p.address_space.p4_phys(), p.user_fs_base))
+            .map(|p| (p.address_space.lock().p4_phys(), p.user_fs_base))
     });
     if let Some((p4, user_fs_base)) = context {
         unsafe {
@@ -2557,8 +2749,8 @@ pub fn read_user(addr: usize, len: usize) -> Option<&'static [u8]> {
     if len == 0 {
         return Some(&[]);
     }
-    with_current_read(|p| {
-        if !p.allows_user_read(addr, len) {
+    with_current(|p| {
+        if !p.prepare_user_read(addr, len) {
             return None;
         }
         Some(unsafe { slice::from_raw_parts(addr as *const u8, len) })
@@ -3081,6 +3273,7 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
         let cow_handled = with_current(|process| {
             process
                 .address_space
+                .lock()
                 .ensure_user_writable(fault_addr, 1)
                 .is_ok()
         })
@@ -3099,10 +3292,20 @@ pub fn handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
         if present {
             return false;
         }
-        if process.address_space.can_grow_stack(fault_addr) {
-            process.address_space.grow_stack(fault_addr).is_ok()
+        let mut address_space = process.address_space.lock();
+        if address_space.can_grow_stack(fault_addr) {
+            address_space.grow_stack(fault_addr).is_ok()
         } else {
-            false
+            let access = if write_fault {
+                UserAccess::Write
+            } else if error_code & 0x10 != 0 {
+                UserAccess::Execute
+            } else {
+                UserAccess::Read
+            };
+            address_space
+                .materialize_lazy_range(fault_addr, 1, access)
+                .is_ok()
         }
     })
     .unwrap_or(false)
@@ -3257,14 +3460,15 @@ fn map_syscall_trampoline(address_space: &mut AddressSpace) -> Result<(), ExecEr
 
     let frame = frame_allocator::allocate_frame().ok_or(ExecError::OutOfMemory)?;
     unsafe {
-        ptr::write_bytes(frame.start as *mut u8, 0xcc, FRAME_SIZE);
+        let frame_ptr = paging::phys_to_virt(frame.start) as *mut u8;
+        ptr::write_bytes(frame_ptr, 0xcc, FRAME_SIZE);
         for (index, stub) in SYSCALL_TRAMPOLINE_STUBS.iter().enumerate() {
             let offset = index * SYSCALL_TRAMPOLINE_STRIDE;
             if offset + stub.len() > FRAME_SIZE {
                 frame_allocator::free_frame(frame);
                 return Err(ExecError::InvalidImage);
             }
-            ptr::copy_nonoverlapping(stub.as_ptr(), (frame.start + offset) as *mut u8, stub.len());
+            ptr::copy_nonoverlapping(stub.as_ptr(), frame_ptr.add(offset), stub.len());
         }
         if let Err(err) = address_space.map_owned_user_page(
             SYSCALL_TRAMPOLINE_BASE,
@@ -3334,7 +3538,8 @@ fn map_elf_segment(
         }
         let frame = frame_allocator::allocate_frame().ok_or(ExecError::OutOfMemory)?;
         unsafe {
-            ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+            let frame_ptr = paging::phys_to_virt(frame.start) as *mut u8;
+            ptr::write_bytes(frame_ptr, 0, FRAME_SIZE);
             let page_end = page + FRAME_SIZE;
             let copy_start = cmp::max(page, segment_start);
             let copy_end = cmp::min(page_end, file_end);
@@ -3343,7 +3548,7 @@ fn map_elf_segment(
                 let target_offset = copy_start - page;
                 ptr::copy_nonoverlapping(
                     segment.file_bytes.as_ptr().add(source_offset),
-                    (frame.start + target_offset) as *mut u8,
+                    frame_ptr.add(target_offset),
                     copy_end - copy_start,
                 );
             }
@@ -3457,7 +3662,7 @@ pub fn finish_user_run(pid: Pid) -> (i32, usize) {
     let unmapped = with_table(|table| {
         table
             .get(pid)
-            .map(|p| p.address_space.mapping_count())
+            .map(|p| p.address_space.lock().mapping_count())
             .unwrap_or(0)
     });
     clear_current();
@@ -3669,7 +3874,7 @@ pub fn user_chdir(path: &str) -> Result<(), fs::vfs::VfsError> {
 }
 
 pub fn current_heap_break() -> usize {
-    with_current_read(|p| p.address_space.heap_break).unwrap_or(0)
+    with_current_read(|p| p.address_space.lock().heap_break).unwrap_or(0)
 }
 
 /// Find any waitable child matching `selector`. Zombies are only reported here;
@@ -3789,10 +3994,11 @@ pub fn has_child(parent: Pid, child: Pid) -> bool {
 
 pub fn brk(new_break: usize) -> Result<usize, MmapError> {
     with_current(|p| {
-        p.address_space
+        let mut address_space = p.address_space.lock();
+        address_space
             .grow_heap(new_break)
             .map_err(map_paging_mmap_error)?;
-        Ok(p.address_space.heap_break)
+        Ok(address_space.heap_break)
     })
     .ok_or(MmapError::Invalid)?
 }
@@ -3822,7 +4028,22 @@ pub fn mmap_anonymous(
 ) -> Result<usize, MmapError> {
     with_current(|p| {
         p.address_space
+            .lock()
             .map_anonymous(hint, len, protection)
+            .map_err(map_paging_mmap_error)
+    })
+    .ok_or(MmapError::Invalid)?
+}
+
+pub fn mmap_anonymous_eager(
+    hint: usize,
+    len: usize,
+    protection: UserProtection,
+) -> Result<usize, MmapError> {
+    with_current(|p| {
+        p.address_space
+            .lock()
+            .map_anonymous_eager(hint, len, protection)
             .map_err(map_paging_mmap_error)
     })
     .ok_or(MmapError::Invalid)?
@@ -3835,7 +4056,7 @@ pub fn mmap_fixed(addr: usize, len: usize, protection: UserProtection) -> Result
         let discard = p
             .prepare_shared_mappings_discard(addr, len)
             .map_err(map_shared_mapping_mmap_error)?;
-        if let Err(err) = p.address_space.map_fixed(addr, len, protection) {
+        if let Err(err) = p.address_space.lock().map_fixed(addr, len, protection) {
             discard.close_fragments();
             return Err(map_paging_mmap_error(err));
         }
@@ -3852,7 +4073,7 @@ pub fn munmap(addr: usize, len: usize) -> Result<(), MmapError> {
         let discard = p
             .prepare_shared_mappings_discard(addr, len)
             .map_err(map_shared_mapping_mmap_error)?;
-        if let Err(err) = p.address_space.unmap_user_range(addr, len) {
+        if let Err(err) = p.address_space.lock().unmap_user_range(addr, len) {
             discard.close_fragments();
             return Err(map_paging_mmap_error(err));
         }
@@ -3888,6 +4109,7 @@ pub fn mprotect(addr: usize, len: usize, protection: UserProtection) -> Result<(
                 .map_err(map_shared_mapping_mmap_error)?;
         }
         p.address_space
+            .lock()
             .protect_user_range(addr, len, protection)
             .map_err(map_paging_mmap_error)?;
         if protection.allows_write() {

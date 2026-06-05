@@ -117,6 +117,22 @@ fn main() -> ExitCode {
     "rustc-main static Cranelift entrypoint",
 )
 
+filesearch_rs = root / "compiler/rustc_session/src/filesearch.rs"
+replace(
+    filesearch_rs,
+    '''pub(crate) fn default_sysroot() -> PathBuf {
+    fn default_from_rustc_driver_dll() -> Result<PathBuf, String> {
+''',
+    '''pub(crate) fn default_sysroot() -> PathBuf {
+    if cfg!(target_os = "ristux") {
+        return PathBuf::from("/usr");
+    }
+
+    fn default_from_rustc_driver_dll() -> Result<PathBuf, String> {
+''',
+    "Ristux installed sysroot discovery",
+)
+
 cg_toml = root / "compiler/rustc_codegen_cranelift/Cargo.toml"
 replace(
     cg_toml,
@@ -660,6 +676,63 @@ mod implementation {''',
 
 if patched_ctrlc == 0:
     raise SystemExit("failed to patch vendored ctrlc crates for Ristux non-POSIX-semaphore signal wait")
+
+patched_stacker = 0
+for crate_dir in sorted((root / "vendor").glob("stacker-*")):
+    guard_rs = crate_dir / "src/mmap_stack_restore_guard.rs"
+    if not guard_rs.exists():
+        continue
+    text = guard_rs.read_text()
+    new_text = text.replace(
+        '''            let new_stack = libc::mmap(
+                std::ptr::null_mut(),
+                size_with_guard,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1, // Some implementations assert fd = -1 if MAP_ANON is specified
+                0,
+            );
+''',
+        '''            #[cfg(target_os = "ristux")]
+            let initial_protection = libc::PROT_READ | libc::PROT_WRITE;
+            #[cfg(not(target_os = "ristux"))]
+            let initial_protection = libc::PROT_NONE;
+            let new_stack = libc::mmap(
+                std::ptr::null_mut(),
+                size_with_guard,
+                initial_protection,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1, // Some implementations assert fd = -1 if MAP_ANON is specified
+                0,
+            );
+''',
+    ).replace(
+        '''            #[cfg(not(target_os = "openbsd"))]
+            let result = libc::mprotect(
+                above_guard_page,
+                size_with_guard - 2 * page_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+            );
+            #[cfg(target_os = "openbsd")]
+''',
+        '''            #[cfg(target_os = "ristux")]
+            let result = 0;
+            #[cfg(all(not(target_os = "openbsd"), not(target_os = "ristux")))]
+            let result = libc::mprotect(
+                above_guard_page,
+                size_with_guard - 2 * page_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+            );
+            #[cfg(target_os = "openbsd")]
+''',
+    )
+    if new_text != text:
+        guard_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "src/mmap_stack_restore_guard.rs")
+        patched_stacker += 1
+
+if patched_stacker == 0:
+    raise SystemExit("failed to patch vendored stacker crates for Ristux stack growth")
 
 patched_zlib_rs = 0
 for crate_dir in sorted((root / "vendor").glob("zlib-rs-*")):

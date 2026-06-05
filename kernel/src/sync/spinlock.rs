@@ -22,6 +22,10 @@ impl<T> SpinLock<T> {
         }
     }
 
+    pub fn into_inner(self) -> T {
+        self.value.into_inner()
+    }
+
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
         let irq_enabled = instructions::interrupts_enabled();
         if irq_enabled {

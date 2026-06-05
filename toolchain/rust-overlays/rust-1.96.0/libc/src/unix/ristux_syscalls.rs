@@ -93,6 +93,7 @@ const NR_DUP3: usize = 292;
 const NR_PIPE2: usize = 293;
 const NR_RENAMEAT2: usize = 316;
 const NR_GETRANDOM: usize = 318;
+const NR_RISTUX_THREAD_CREATE: usize = 451;
 const SYSCALL_TRAMPOLINE_BASE: usize = 0x4000_0000;
 const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
 const EAGAIN: c_int = 11;
@@ -107,6 +108,7 @@ const AT_FDCWD: c_int = -100;
 const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
 const KERNEL_SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
 const KERNEL_SIGNAL_FLAG_RESTART: u32 = 2;
+const LIBC_SA_SIGINFO: c_int = 0x0200_0000;
 const LIBC_SA_RESTART: c_int = 0x0800_0000;
 const LIBC_SA_NOCLDSTOP: c_int = 0x4000_0000;
 const SC_CLK_TCK: c_int = 2;
@@ -115,7 +117,11 @@ const SC_PAGESIZE: c_int = 30;
 const SC_NPROCESSORS_CONF: c_int = 57;
 const SC_NPROCESSORS_ONLN: c_int = 58;
 const DEFAULT_PTHREAD_STACK_SIZE: size_t = 2 * 1024 * 1024;
+const MIN_PTHREAD_STACK_SIZE: size_t = 4096;
 const MAX_PTHREAD_KEYS: usize = 64;
+const MAX_PTHREAD_THREADS: usize = 64;
+const RISTUX_PROT_READ_WRITE: c_int = 0x4 | 0x2;
+const RISTUX_MAP_PRIVATE_ANON: c_int = 0x02 | 0x20;
 
 #[repr(C)]
 struct RistuxDir {
@@ -134,10 +140,17 @@ struct KernelSigAction {
     _pad: u32,
 }
 
+#[repr(C)]
+struct PthreadStart {
+    start: extern "C" fn(*mut c_void) -> *mut c_void,
+    arg: *mut c_void,
+}
+
 static mut ERRNO: c_int = 0;
 static mut NEXT_PTHREAD_KEY: pthread_key_t = 1;
-static mut PTHREAD_VALUES: [*const c_void; MAX_PTHREAD_KEYS] =
-    [core::ptr::null(); MAX_PTHREAD_KEYS];
+static mut PTHREAD_THREAD_IDS: [pid_t; MAX_PTHREAD_THREADS] = [0; MAX_PTHREAD_THREADS];
+static mut PTHREAD_VALUES: [[*const c_void; MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS] =
+    [[core::ptr::null(); MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS];
 static mut DIR_STATE: RistuxDir = RistuxDir {
     fd: -1,
     pos: 0,
@@ -365,6 +378,57 @@ unsafe fn init_dir_state(fd: c_int) -> *mut crate::DIR {
     state as *mut RistuxDir as *mut crate::DIR
 }
 
+unsafe fn pthread_thread_slot() -> core::option::Option<usize> {
+    let tid = unsafe { gettid() };
+    if tid <= 0 {
+        return core::option::Option::None;
+    }
+    for index in 0..MAX_PTHREAD_THREADS {
+        let slot_tid = unsafe { PTHREAD_THREAD_IDS[index] };
+        if slot_tid == tid {
+            return core::option::Option::Some(index);
+        }
+    }
+    for index in 0..MAX_PTHREAD_THREADS {
+        if unsafe { PTHREAD_THREAD_IDS[index] } == 0 {
+            unsafe {
+                PTHREAD_THREAD_IDS[index] = tid;
+            }
+            return core::option::Option::Some(index);
+        }
+    }
+    core::option::Option::None
+}
+
+unsafe fn pthread_attr_stack_size(attr: *const pthread_attr_t) -> size_t {
+    if attr.is_null() {
+        return DEFAULT_PTHREAD_STACK_SIZE;
+    }
+    let stored = unsafe { *(attr as *const size_t) };
+    if stored == 0 {
+        DEFAULT_PTHREAD_STACK_SIZE
+    } else {
+        stored
+    }
+}
+
+unsafe fn pthread_attr_set_stack_size_raw(attr: *mut pthread_attr_t, stack_size: size_t) {
+    unsafe {
+        *(attr as *mut size_t) = stack_size;
+    }
+}
+
+fn align_stack_size(stack_size: size_t) -> core::option::Option<size_t> {
+    let stack_size = if stack_size < MIN_PTHREAD_STACK_SIZE {
+        MIN_PTHREAD_STACK_SIZE
+    } else {
+        stack_size
+    };
+    stack_size
+        .checked_add(MIN_PTHREAD_STACK_SIZE - 1)
+        .map(|value| value & !(MIN_PTHREAD_STACK_SIZE - 1))
+}
+
 #[inline]
 fn libc_signal_flags_to_kernel(flags: c_int) -> core::option::Option<u32> {
     let mut out = 0u32;
@@ -376,6 +440,9 @@ fn libc_signal_flags_to_kernel(flags: c_int) -> core::option::Option<u32> {
     if unsupported & LIBC_SA_NOCLDSTOP != 0 {
         out |= KERNEL_SIGNAL_FLAG_NOCLDSTOP;
         unsupported &= !LIBC_SA_NOCLDSTOP;
+    }
+    if unsupported & LIBC_SA_SIGINFO != 0 {
+        unsupported &= !LIBC_SA_SIGINFO;
     }
     if unsupported == 0 {
         core::option::Option::Some(out)
@@ -436,9 +503,82 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
     cvt(unsafe { syscall3(NR_WRITE, fd as usize, buf as usize, count) })
 }
 
+#[inline]
+fn ristux_open_syscall_flags(flags: c_int) -> usize {
+    const KERNEL_O_ACCMODE: c_int = 0o3;
+    const KERNEL_O_WRONLY: c_int = 1;
+    const KERNEL_O_RDWR: c_int = 2;
+    const KERNEL_O_CREAT: c_int = 0o100;
+    const KERNEL_O_EXCL: c_int = 0o200;
+    const KERNEL_O_TRUNC: c_int = 0o1000;
+    const KERNEL_O_APPEND: c_int = 0o2000;
+    const KERNEL_O_NONBLOCK: c_int = 0o4000;
+    const KERNEL_O_CLOEXEC: c_int = 0o2000000;
+
+    const REDOX_O_ACCMODE: c_int = 0x0003_0000;
+    const REDOX_O_RDONLY: c_int = 0x0001_0000;
+    const REDOX_O_WRONLY: c_int = 0x0002_0000;
+    const REDOX_O_RDWR: c_int = 0x0003_0000;
+    const REDOX_O_NONBLOCK: c_int = 0x0004_0000;
+    const REDOX_O_APPEND: c_int = 0x0008_0000;
+    const REDOX_O_CLOEXEC: c_int = 0x0100_0000;
+    const REDOX_O_CREAT: c_int = 0x0200_0000;
+    const REDOX_O_TRUNC: c_int = 0x0400_0000;
+    const REDOX_O_EXCL: c_int = 0x0800_0000;
+    const REDOX_O_DIRECTORY: c_int = 0x1000_0000;
+    const REDOX_O_NOFOLLOW: c_int = c_int::MIN;
+    const REDOX_KNOWN_FLAGS: c_int = REDOX_O_ACCMODE
+        | REDOX_O_NONBLOCK
+        | REDOX_O_APPEND
+        | REDOX_O_CLOEXEC
+        | REDOX_O_CREAT
+        | REDOX_O_TRUNC
+        | REDOX_O_EXCL
+        | REDOX_O_DIRECTORY
+        | REDOX_O_NOFOLLOW;
+
+    if flags & REDOX_KNOWN_FLAGS == 0 {
+        return flags as usize;
+    }
+
+    let mut normalized = flags & !REDOX_KNOWN_FLAGS & !KERNEL_O_ACCMODE;
+    normalized |= match flags & REDOX_O_ACCMODE {
+        REDOX_O_WRONLY => KERNEL_O_WRONLY,
+        REDOX_O_RDWR => KERNEL_O_RDWR,
+        REDOX_O_RDONLY => 0,
+        _ => flags & KERNEL_O_ACCMODE,
+    };
+    if flags & REDOX_O_NONBLOCK != 0 {
+        normalized |= KERNEL_O_NONBLOCK;
+    }
+    if flags & REDOX_O_APPEND != 0 {
+        normalized |= KERNEL_O_APPEND;
+    }
+    if flags & REDOX_O_CREAT != 0 {
+        normalized |= KERNEL_O_CREAT;
+    }
+    if flags & REDOX_O_TRUNC != 0 {
+        normalized |= KERNEL_O_TRUNC;
+    }
+    if flags & REDOX_O_EXCL != 0 {
+        normalized |= KERNEL_O_EXCL;
+    }
+    if flags & REDOX_O_CLOEXEC != 0 {
+        normalized |= KERNEL_O_CLOEXEC;
+    }
+    normalized as usize
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: mode_t) -> c_int {
-    cvt_int(unsafe { syscall3(NR_OPEN, path as usize, flags as usize, mode as usize) })
+    cvt_int(unsafe {
+        syscall3(
+            NR_OPEN,
+            path as usize,
+            ristux_open_syscall_flags(flags),
+            mode as usize,
+        )
+    })
 }
 
 #[no_mangle]
@@ -453,7 +593,7 @@ pub unsafe extern "C" fn openat(
             NR_OPENAT,
             dirfd as usize,
             path as usize,
-            flags as usize,
+            ristux_open_syscall_flags(flags),
             mode as usize,
         )
     })
@@ -1130,14 +1270,25 @@ pub unsafe extern "C" fn gettimeofday(tp: *mut timeval, _tz: *mut c_void) -> c_i
     cvt_int(unsafe { syscall2(NR_GETTIMEOFDAY, tp as usize, 0) })
 }
 
+#[inline]
+fn ristux_clock_syscall_id(clk_id: clockid_t) -> usize {
+    match clk_id as c_int {
+        // libc currently inherits these constants from the Redox module for
+        // target_os = "ristux"; the kernel ABI remains Linux-like.
+        1 => 0, // CLOCK_REALTIME
+        2 | 4 => 1, // CLOCK_PROCESS_CPUTIME_ID and CLOCK_MONOTONIC
+        other => other as usize,
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int {
-    cvt_int(unsafe { syscall2(NR_CLOCK_GETTIME, clk_id as usize, tp as usize) })
+    cvt_int(unsafe { syscall2(NR_CLOCK_GETTIME, ristux_clock_syscall_id(clk_id), tp as usize) })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn clock_getres(clk_id: clockid_t, tp: *mut timespec) -> c_int {
-    cvt_int(unsafe { syscall2(NR_CLOCK_GETRES, clk_id as usize, tp as usize) })
+    cvt_int(unsafe { syscall2(NR_CLOCK_GETRES, ristux_clock_syscall_id(clk_id), tp as usize) })
 }
 
 #[no_mangle]
@@ -1378,7 +1529,7 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> c_long {
         SC_CLK_TCK => 100,
         SC_OPEN_MAX => 256,
         SC_PAGESIZE => 4096,
-        SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => 1,
+        SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => 4,
         _ => {
             set_errno(EINVAL);
             -1
@@ -1520,9 +1671,16 @@ pub unsafe extern "C" fn clearenv() -> c_int {
     0
 }
 
+extern "C" fn pthread_start(arg: *mut c_void) -> ! {
+    let start = arg as *mut PthreadStart;
+    let record = unsafe { core::ptr::read(start) };
+    let _ = (record.start)(record.arg);
+    unsafe { _exit(0) }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_self() -> pthread_t {
-    1usize as pthread_t
+    unsafe { gettid() as usize as pthread_t }
 }
 
 #[no_mangle]
@@ -1532,7 +1690,14 @@ pub unsafe extern "C" fn pthread_equal(left: pthread_t, right: pthread_t) -> c_i
 
 #[no_mangle]
 pub unsafe extern "C" fn pthread_attr_init(attr: *mut pthread_attr_t) -> c_int {
-    unsafe { zero_pthread_object(attr) }
+    let rc = unsafe { zero_pthread_object(attr) };
+    if rc != 0 {
+        return rc;
+    }
+    unsafe {
+        pthread_attr_set_stack_size_raw(attr, DEFAULT_PTHREAD_STACK_SIZE);
+    }
+    0
 }
 
 #[no_mangle]
@@ -1553,7 +1718,7 @@ pub unsafe extern "C" fn pthread_attr_getstacksize(
         return EINVAL;
     }
     unsafe {
-        *stacksize = DEFAULT_PTHREAD_STACK_SIZE;
+        *stacksize = pthread_attr_stack_size(attr);
     }
     0
 }
@@ -1563,7 +1728,39 @@ pub unsafe extern "C" fn pthread_attr_setstacksize(
     attr: *mut pthread_attr_t,
     stack_size: size_t,
 ) -> c_int {
-    if attr.is_null() || stack_size == 0 {
+    let stack_size = match align_stack_size(stack_size) {
+        core::option::Option::Some(stack_size) => stack_size,
+        core::option::Option::None => return EINVAL,
+    };
+    if attr.is_null() {
+        return EINVAL;
+    }
+    unsafe {
+        pthread_attr_set_stack_size_raw(attr, stack_size);
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getguardsize(
+    attr: *const pthread_attr_t,
+    guardsize: *mut size_t,
+) -> c_int {
+    if attr.is_null() || guardsize.is_null() {
+        return EINVAL;
+    }
+    unsafe {
+        *guardsize = 0;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setguardsize(
+    attr: *mut pthread_attr_t,
+    _guardsize: size_t,
+) -> c_int {
+    if attr.is_null() {
         EINVAL
     } else {
         0
@@ -1585,21 +1782,78 @@ pub unsafe extern "C" fn pthread_attr_setdetachstate(
 #[no_mangle]
 pub unsafe extern "C" fn pthread_create(
     tid: *mut pthread_t,
-    _attr: *const pthread_attr_t,
-    _start: extern "C" fn(*mut c_void) -> *mut c_void,
-    _arg: *mut c_void,
+    attr: *const pthread_attr_t,
+    start: extern "C" fn(*mut c_void) -> *mut c_void,
+    arg: *mut c_void,
 ) -> c_int {
-    if !tid.is_null() {
-        unsafe {
-            *tid = core::ptr::null_mut();
-        }
+    if tid.is_null() {
+        return EINVAL;
     }
-    ENOSYS
+    let stack_len = match align_stack_size(unsafe { pthread_attr_stack_size(attr) }) {
+        core::option::Option::Some(stack_len) => stack_len,
+        core::option::Option::None => return EINVAL,
+    };
+    let stack_base = cvt_ptr(unsafe {
+        syscall6(
+            NR_MMAP,
+            0,
+            stack_len,
+            RISTUX_PROT_READ_WRITE as usize,
+            RISTUX_MAP_PRIVATE_ANON as usize,
+            usize::MAX,
+            0,
+        )
+    });
+    if stack_base == !0usize as *mut c_void {
+        return unsafe { ERRNO };
+    }
+
+    let top = stack_base as usize + stack_len;
+    let start_ptr = (top - core::mem::size_of::<PthreadStart>()) & !0xfusize;
+    let start_record = start_ptr as *mut PthreadStart;
+    unsafe {
+        core::ptr::write(start_record, PthreadStart { start, arg });
+    }
+
+    let pid = unsafe {
+        syscall5(
+            NR_RISTUX_THREAD_CREATE,
+            pthread_start as usize,
+            start_record as usize,
+            start_ptr,
+            0,
+            0,
+        )
+    };
+    if is_errno(pid) {
+        let errno = (-pid) as c_int;
+        let _ = unsafe { munmap(stack_base, stack_len) };
+        return errno;
+    }
+    unsafe {
+        *tid = pid as usize as pthread_t;
+    }
+    0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_join(_thread: pthread_t, _value: *mut *mut c_void) -> c_int {
-    ENOSYS
+pub unsafe extern "C" fn pthread_join(thread: pthread_t, value: *mut *mut c_void) -> c_int {
+    if thread.is_null() {
+        return EINVAL;
+    }
+    let mut status = 0;
+    let pid = thread as usize as pid_t;
+    let waited = unsafe { waitpid(pid, &mut status as *mut c_int, 0) };
+    if waited < 0 {
+        unsafe { ERRNO }
+    } else {
+        if !value.is_null() {
+            unsafe {
+                *value = core::ptr::null_mut();
+            }
+        }
+        0
+    }
 }
 
 #[no_mangle]
@@ -1636,8 +1890,10 @@ pub unsafe extern "C" fn pthread_key_delete(key: pthread_key_t) -> c_int {
     if key as usize >= MAX_PTHREAD_KEYS {
         return EINVAL;
     }
-    unsafe {
-        PTHREAD_VALUES[key as usize] = core::ptr::null();
+    for slot in 0..MAX_PTHREAD_THREADS {
+        unsafe {
+            PTHREAD_VALUES[slot][key as usize] = core::ptr::null();
+        }
     }
     0
 }
@@ -1647,7 +1903,11 @@ pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void 
     if key as usize >= MAX_PTHREAD_KEYS {
         core::ptr::null_mut()
     } else {
-        unsafe { PTHREAD_VALUES[key as usize] as *mut c_void }
+        let slot = match unsafe { pthread_thread_slot() } {
+            core::option::Option::Some(slot) => slot,
+            core::option::Option::None => return core::ptr::null_mut(),
+        };
+        unsafe { PTHREAD_VALUES[slot][key as usize] as *mut c_void }
     }
 }
 
@@ -1656,8 +1916,12 @@ pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c
     if key as usize >= MAX_PTHREAD_KEYS {
         return EINVAL;
     }
+    let slot = match unsafe { pthread_thread_slot() } {
+        core::option::Option::Some(slot) => slot,
+        core::option::Option::None => return EAGAIN,
+    };
     unsafe {
-        PTHREAD_VALUES[key as usize] = value;
+        PTHREAD_VALUES[slot][key as usize] = value;
     }
     0
 }

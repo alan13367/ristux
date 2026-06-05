@@ -228,6 +228,19 @@ impl Ext2Fs {
         self.read_inode_data(&inode)
     }
 
+    pub fn read_file_range(
+        &self,
+        path: &str,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<usize, Ext2Error> {
+        let (_ino, inode) = self.lookup_path(path)?;
+        if !inode.is_file() {
+            return Err(Ext2Error::NotFile);
+        }
+        self.read_inode_range(&inode, offset, output)
+    }
+
     pub fn list_dir(&self, path: &str) -> Result<Vec<String>, Ext2Error> {
         let (_ino, inode) = self.lookup_path(path)?;
         if !inode.is_dir() {
@@ -845,6 +858,69 @@ impl Ext2Fs {
         }
     }
 
+    fn read_inode_range(
+        &self,
+        inode: &Inode,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<usize, Ext2Error> {
+        let total_len = inode.size as usize;
+        if total_len as u64 != inode.size {
+            return Err(Ext2Error::Unsupported);
+        }
+        if output.is_empty() || offset >= total_len {
+            return Ok(0);
+        }
+        let target_len = output.len().min(total_len - offset);
+        let target_end = offset
+            .checked_add(target_len)
+            .ok_or(Ext2Error::Unsupported)?;
+        let mut logical_offset = 0usize;
+        let mut copied = 0usize;
+
+        for block in inode.blocks[..EXT2_DIRECT_BLOCKS].iter().copied() {
+            if logical_offset >= target_end || copied == target_len {
+                return Ok(copied);
+            }
+            self.copy_data_block_range(
+                block,
+                logical_offset,
+                offset,
+                target_len,
+                &mut copied,
+                output,
+            )?;
+            logical_offset = logical_offset
+                .checked_add(self.block_size)
+                .ok_or(Ext2Error::Unsupported)?;
+        }
+
+        for (block, level) in [
+            (inode.blocks[12], 1u8),
+            (inode.blocks[13], 2u8),
+            (inode.blocks[14], 3u8),
+        ] {
+            if logical_offset >= target_end || copied == target_len {
+                return Ok(copied);
+            }
+            self.copy_indirect_range(
+                block,
+                level,
+                &mut logical_offset,
+                offset,
+                target_len,
+                &mut copied,
+                output,
+            )?;
+        }
+
+        if copied == target_len {
+            Ok(copied)
+        } else {
+            Err(Ext2Error::Unsupported)
+        }
+    }
+
     fn read_data_block(
         &self,
         block: u32,
@@ -867,6 +943,151 @@ impl Ext2Fs {
         }
         *written += count;
         Ok(())
+    }
+
+    fn copy_indirect_range(
+        &self,
+        block: u32,
+        level: u8,
+        logical_offset: &mut usize,
+        read_offset: usize,
+        target_len: usize,
+        copied: &mut usize,
+        output: &mut [u8],
+    ) -> Result<(), Ext2Error> {
+        if level == 0 {
+            return Err(Ext2Error::Unsupported);
+        }
+        let target_end = read_offset
+            .checked_add(target_len)
+            .ok_or(Ext2Error::Unsupported)?;
+        if *logical_offset >= target_end || *copied == target_len {
+            return Ok(());
+        }
+        if block == 0 {
+            *logical_offset = (*logical_offset)
+                .checked_add(self.indirect_span_bytes(level)?)
+                .ok_or(Ext2Error::Unsupported)?;
+            return Ok(());
+        }
+
+        let entries = self.read_indirect_entries(block)?;
+        for entry in entries {
+            if *logical_offset >= target_end || *copied == target_len {
+                return Ok(());
+            }
+            if level == 1 {
+                self.copy_data_block_range(
+                    entry,
+                    *logical_offset,
+                    read_offset,
+                    target_len,
+                    copied,
+                    output,
+                )?;
+                *logical_offset = (*logical_offset)
+                    .checked_add(self.block_size)
+                    .ok_or(Ext2Error::Unsupported)?;
+            } else if entry == 0 {
+                *logical_offset = (*logical_offset)
+                    .checked_add(self.indirect_span_bytes(level - 1)?)
+                    .ok_or(Ext2Error::Unsupported)?;
+            } else {
+                self.copy_indirect_range(
+                    entry,
+                    level - 1,
+                    logical_offset,
+                    read_offset,
+                    target_len,
+                    copied,
+                    output,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_data_block_range(
+        &self,
+        block: u32,
+        block_start: usize,
+        read_offset: usize,
+        target_len: usize,
+        copied: &mut usize,
+        output: &mut [u8],
+    ) -> Result<(), Ext2Error> {
+        let target_end = read_offset
+            .checked_add(target_len)
+            .ok_or(Ext2Error::Unsupported)?;
+        let block_end = block_start
+            .checked_add(self.block_size)
+            .ok_or(Ext2Error::Unsupported)?;
+        if block_end <= read_offset || block_start >= target_end {
+            return Ok(());
+        }
+
+        let source_start = if read_offset > block_start {
+            read_offset - block_start
+        } else {
+            0
+        };
+        let source_end = if target_end < block_end {
+            target_end - block_start
+        } else {
+            self.block_size
+        };
+        if source_end <= source_start {
+            return Ok(());
+        }
+        let count = source_end - source_start;
+        let output_offset = block_start
+            .checked_add(source_start)
+            .and_then(|absolute| absolute.checked_sub(read_offset))
+            .ok_or(Ext2Error::Unsupported)?;
+        let out = &mut output[output_offset..output_offset + count];
+
+        if block == 0 {
+            for byte in out.iter_mut() {
+                *byte = 0;
+            }
+        } else if source_start == 0 && count == self.block_size {
+            self.read_block_sized(block as u64, out)?;
+        } else {
+            let mut data = Vec::new();
+            data.try_reserve_exact(self.block_size)
+                .map_err(|_| Ext2Error::OutOfMemory)?;
+            data.resize(self.block_size, 0);
+            self.read_block_sized(block as u64, &mut data)?;
+            out.copy_from_slice(&data[source_start..source_end]);
+        }
+
+        *copied = (*copied).checked_add(count).ok_or(Ext2Error::Unsupported)?;
+        Ok(())
+    }
+
+    fn indirect_span_bytes(&self, level: u8) -> Result<usize, Ext2Error> {
+        let entries_per_block = self.block_size / 4;
+        let mut span = self.block_size;
+        for _ in 0..level {
+            span = span
+                .checked_mul(entries_per_block)
+                .ok_or(Ext2Error::Unsupported)?;
+        }
+        Ok(span)
+    }
+
+    fn read_indirect_entries(&self, block: u32) -> Result<Vec<u32>, Ext2Error> {
+        let mut indirect = vec![0u8; self.block_size];
+        self.read_block_sized(block as u64, &mut indirect)?;
+        let entry_count = self.block_size / 4;
+        let mut blocks = Vec::new();
+        blocks
+            .try_reserve_exact(entry_count)
+            .map_err(|_| Ext2Error::OutOfMemory)?;
+        for offset in (0..self.block_size).step_by(4) {
+            blocks.push(le_u32(&indirect, offset));
+        }
+        Ok(blocks)
     }
 
     fn read_dir_entries(&self, inode: &Inode) -> Result<Vec<DirEntry>, Ext2Error> {

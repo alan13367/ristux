@@ -13,6 +13,7 @@ pub struct AddressSpace {
     pub p4: *mut PageTable,
     pub user_mappings: Vec<(usize, Frame)>,
     user_protections: Vec<(usize, UserProtection)>,
+    lazy_mappings: Vec<LazyMapping>,
     pub heap_break: usize,
     pub stack_bottom: usize,
     pub stack_top: usize,
@@ -23,6 +24,13 @@ pub const USER_MMAP_START: usize = 0x5000_0000;
 pub const USER_MMAP_END: usize = 0x5800_0000;
 const USER_MAPPING_START: usize = 0x4000_0000;
 const USER_MAPPING_END: usize = paging::USER_STACK_TOP;
+
+#[derive(Clone, Copy)]
+struct LazyMapping {
+    start: usize,
+    end: usize,
+    protection: UserProtection,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum UserProtection {
@@ -53,6 +61,14 @@ impl UserProtection {
     pub const fn allows_execute(self) -> bool {
         matches!(self, Self::ReadExecute)
     }
+
+    pub const fn allows_access(self, access: UserAccess) -> bool {
+        match access {
+            UserAccess::Read => self.allows_read(),
+            UserAccess::Write => self.allows_write(),
+            UserAccess::Execute => self.allows_execute(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -78,9 +94,10 @@ impl AddressSpace {
         let p4_frame = unsafe { paging::create_p4_table()? };
         Ok(Self {
             p4_frame,
-            p4: p4_frame.start as *mut PageTable,
+            p4: paging::phys_to_virt(p4_frame.start) as *mut PageTable,
             user_mappings: Vec::new(),
             user_protections: Vec::new(),
+            lazy_mappings: Vec::new(),
             heap_break: paging::USER_HEAP_START,
             stack_bottom: paging::USER_STACK_GUARD,
             stack_top: paging::USER_STACK_TOP,
@@ -105,6 +122,7 @@ impl AddressSpace {
         flags: PageFlags,
     ) -> Result<(), PagingError> {
         validate_user_mapping_page(virt)?;
+        unsafe { paging::ensure_page_slot_at(self.p4, virt, PageFlags::user_writable())? };
         unsafe { paging::map_page_at(self.p4, virt, phys, flags) }?;
         Ok(())
     }
@@ -143,9 +161,17 @@ impl AddressSpace {
     ) -> Result<(), PagingError> {
         validate_user_mapping_page(virt)?;
         self.reserve_user_mapping_entries(1)?;
+        self.map_zero_page_reserved(virt, protection)
+    }
+
+    fn map_zero_page_reserved(
+        &mut self,
+        virt: usize,
+        protection: UserProtection,
+    ) -> Result<(), PagingError> {
         let frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
         unsafe {
-            ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+            ptr::write_bytes(paging::phys_to_virt(frame.start) as *mut u8, 0, FRAME_SIZE);
             if let Err(err) = self.map_user_page(virt, frame.start, protection.page_flags()) {
                 frame_allocator::free_frame(frame);
                 return Err(err);
@@ -186,6 +212,7 @@ impl AddressSpace {
             let _ = self.unmap_user_page(virt);
         }
         self.user_protections.clear();
+        self.lazy_mappings.clear();
         self.heap_break = paging::USER_HEAP_START;
         self.stack_bottom = paging::USER_STACK_GUARD;
         self.stack_top = paging::USER_STACK_TOP;
@@ -231,8 +258,28 @@ impl AddressSpace {
         let end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
         let mut page = paging::align_down(addr, FRAME_SIZE);
         let end_page = paging::checked_align_up(end, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
+        let page_count = (end_page - page) / FRAME_SIZE;
+        let writable_pages = self
+            .user_protections
+            .iter()
+            .filter(|(virt, protection)| {
+                *virt >= page && *virt < end_page && *protection == UserProtection::ReadWrite
+            })
+            .count();
+        if writable_pages != page_count {
+            return Err(PagingError::NotMapped);
+        }
         while page < end_page {
-            self.ensure_user_page_writable(page)?;
+            let pte = unsafe { paging::get_pte_mut(self.p4, page).ok_or(PagingError::NotMapped)? };
+            if *pte & paging::PRESENT_FLAG == 0 || *pte & paging::USER_FLAG == 0 {
+                return Err(PagingError::NotMapped);
+            }
+            if *pte & paging::WRITABLE_FLAG == 0 {
+                if *pte & paging::COW_FLAG == 0 {
+                    return Err(PagingError::NotMapped);
+                }
+                self.break_cow_page(page)?;
+            }
             page += FRAME_SIZE;
         }
         Ok(())
@@ -243,6 +290,14 @@ impl AddressSpace {
         if let Err(err) = clone.reserve_user_mapping_entries(self.user_mappings.len()) {
             clone.destroy();
             return Err(err);
+        }
+        if clone
+            .lazy_mappings
+            .try_reserve_exact(self.lazy_mappings.len())
+            .is_err()
+        {
+            clone.destroy();
+            return Err(PagingError::OutOfFrames);
         }
         let mut parent_cow_pages = Vec::new();
         if parent_cow_pages
@@ -304,6 +359,9 @@ impl AddressSpace {
         clone.stack_bottom = self.stack_bottom;
         clone.stack_top = self.stack_top;
         clone.mmap_next = self.mmap_next;
+        for mapping in &self.lazy_mappings {
+            clone.lazy_mappings.push(*mapping);
+        }
         Ok(clone)
     }
 
@@ -342,21 +400,41 @@ impl AddressSpace {
     ) -> Result<usize, PagingError> {
         let len = paging::checked_align_up(len, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
         let base = self.reserve_mmap_addr(hint, len)?;
-        let mut mapped = Vec::new();
-        let page_count = len / FRAME_SIZE;
-        mapped
-            .try_reserve_exact(page_count)
+        let end = base.checked_add(len).ok_or(PagingError::NotMapped)?;
+        self.lazy_mappings
+            .try_reserve_exact(1)
             .map_err(|_| PagingError::OutOfFrames)?;
+        self.lazy_mappings.push(LazyMapping {
+            start: base,
+            end,
+            protection,
+        });
+        self.mmap_next = end.min(USER_MMAP_END);
+        if self.mmap_next >= USER_MMAP_END {
+            self.mmap_next = USER_MMAP_START;
+        }
+        Ok(base)
+    }
+
+    pub fn map_anonymous_eager(
+        &mut self,
+        hint: usize,
+        len: usize,
+        protection: UserProtection,
+    ) -> Result<usize, PagingError> {
+        let len = paging::checked_align_up(len, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
+        let base = self.reserve_mmap_addr(hint, len)?;
+        let page_count = len / FRAME_SIZE;
         self.reserve_user_mapping_entries(page_count)?;
         let end = base.checked_add(len).ok_or(PagingError::NotMapped)?;
         for page in (base..end).step_by(FRAME_SIZE) {
-            if let Err(err) = self.map_zero_page_with_protection(page, protection) {
-                for mapped_page in mapped {
-                    let _ = self.unmap_user_page(mapped_page);
+            if let Err(err) = self.map_zero_page_reserved(page, protection) {
+                let mapped_len = page - base;
+                if mapped_len > 0 {
+                    let _ = self.unmap_user_range(base, mapped_len);
                 }
                 return Err(err);
             }
-            mapped.push(page);
         }
         self.mmap_next = end.min(USER_MMAP_END);
         if self.mmap_next >= USER_MMAP_END {
@@ -397,7 +475,7 @@ impl AddressSpace {
                 return Err(PagingError::OutOfFrames);
             };
             unsafe {
-                ptr::write_bytes(frame.start as *mut u8, 0, FRAME_SIZE);
+                ptr::write_bytes(paging::phys_to_virt(frame.start) as *mut u8, 0, FRAME_SIZE);
             }
             replacement_frames.push(frame);
         }
@@ -449,12 +527,59 @@ impl AddressSpace {
         if start < USER_MMAP_START || end > USER_MMAP_END || start >= end {
             return Err(PagingError::NotMapped);
         }
+
+        let mut unmapped_any = false;
+        for (virt, frame) in self.user_mappings.iter().copied() {
+            if virt < start || virt >= end {
+                continue;
+            }
+            let phys = unsafe { paging::unmap_page_at(self.p4, virt)? };
+            if frame.start != phys {
+                panic!("address space unmap frame mismatch");
+            }
+            unmapped_any = true;
+        }
+
         let mut page = start;
         while page < end {
-            if self.is_user_mapped(page) {
-                self.unmap_user_page(page)?;
+            if unsafe { paging::get_pte_mut(self.p4, page) }
+                .is_some_and(|pte| *pte & paging::PRESENT_FLAG != 0)
+            {
+                unsafe {
+                    paging::unmap_page_at(self.p4, page)?;
+                }
+                unmapped_any = true;
             }
             page += FRAME_SIZE;
+        }
+
+        if unmapped_any {
+            crate::smp::send_tlb_shootdown();
+        }
+
+        self.remove_lazy_range(start, end)?;
+
+        let mut index = 0;
+        while index < self.user_mappings.len() {
+            let (virt, frame) = self.user_mappings[index];
+            if virt >= start && virt < end {
+                self.user_mappings.swap_remove(index);
+                if super::refcount::decrement(frame.start) == 0 {
+                    frame_allocator::free_frame(frame);
+                }
+            } else {
+                index += 1;
+            }
+        }
+
+        index = 0;
+        while index < self.user_protections.len() {
+            let (virt, _) = self.user_protections[index];
+            if virt >= start && virt < end {
+                self.user_protections.swap_remove(index);
+            } else {
+                index += 1;
+            }
         }
         Ok(())
     }
@@ -472,28 +597,46 @@ impl AddressSpace {
             return Err(PagingError::NotMapped);
         }
         let mut page = start;
+        let mut protected_pages = 0usize;
         while page < end {
-            if !self.is_user_mapped(page) {
-                return Err(PagingError::NotMapped);
-            }
-            if self.protection_for_page(page).is_none() {
-                return Err(PagingError::NotMapped);
-            }
-            if unsafe { paging::get_pte_mut(self.p4, page) }
-                .is_none_or(|pte| *pte & paging::PRESENT_FLAG == 0)
-            {
+            let present = unsafe { paging::get_pte_mut(self.p4, page) }
+                .is_some_and(|pte| *pte & paging::PRESENT_FLAG != 0);
+            if present {
+                if self.protection_for_page(page).is_none() {
+                    return Err(PagingError::NotMapped);
+                }
+                protected_pages += 1;
+            } else if self.lazy_protection_for_page(page).is_none() {
                 return Err(PagingError::NotMapped);
             }
             page += FRAME_SIZE;
+        }
+        if protected_pages
+            != self
+                .user_protections
+                .iter()
+                .filter(|(virt, _)| *virt >= start && *virt < end)
+                .count()
+        {
+            return Err(PagingError::NotMapped);
         }
         page = start;
         while page < end {
-            unsafe {
-                self.protect_user_page(page, protection)?;
+            if unsafe { paging::get_pte_mut(self.p4, page) }
+                .is_some_and(|pte| *pte & paging::PRESENT_FLAG != 0)
+            {
+                unsafe {
+                    self.protect_user_page(page, protection)?;
+                }
             }
-            self.set_page_protection(page, protection)?;
             page += FRAME_SIZE;
         }
+        for (virt, page_protection) in &mut self.user_protections {
+            if *virt >= start && *virt < end {
+                *page_protection = protection;
+            }
+        }
+        self.protect_lazy_range(start, end, protection)?;
         crate::smp::send_tlb_shootdown();
         Ok(())
     }
@@ -509,6 +652,35 @@ impl AddressSpace {
         self.map_zero_page(page)?;
         if page < self.stack_bottom {
             self.stack_bottom = page;
+        }
+        Ok(())
+    }
+
+    pub fn materialize_lazy_range(
+        &mut self,
+        addr: usize,
+        len: usize,
+        access: UserAccess,
+    ) -> Result<(), PagingError> {
+        if len == 0 {
+            return Ok(());
+        }
+        let end = addr.checked_add(len).ok_or(PagingError::NotMapped)?;
+        let mut page = paging::align_down(addr, FRAME_SIZE);
+        let end_page = paging::checked_align_up(end, FRAME_SIZE).ok_or(PagingError::NotMapped)?;
+        while page < end_page {
+            let present = unsafe { paging::get_pte_mut(self.p4, page) }
+                .is_some_and(|pte| *pte & paging::PRESENT_FLAG != 0);
+            if !present {
+                let protection = self
+                    .lazy_protection_for_page(page)
+                    .ok_or(PagingError::NotMapped)?;
+                if !protection.allows_access(access) {
+                    return Err(PagingError::NotMapped);
+                }
+                self.map_zero_page_with_protection(page, protection)?;
+            }
+            page += FRAME_SIZE;
         }
         Ok(())
     }
@@ -611,6 +783,9 @@ impl AddressSpace {
         if start < USER_MMAP_START || end > USER_MMAP_END || start >= end {
             return false;
         }
+        if self.lazy_range_overlaps(start, end) {
+            return false;
+        }
         let mut page = start;
         while page < end {
             if self.is_user_mapped(page) {
@@ -696,23 +871,6 @@ impl AddressSpace {
         }
     }
 
-    fn ensure_user_page_writable(&mut self, page: usize) -> Result<(), PagingError> {
-        if self.protection_for_page(page) != Some(UserProtection::ReadWrite) {
-            return Err(PagingError::NotMapped);
-        }
-        let pte = unsafe { paging::get_pte_mut(self.p4, page).ok_or(PagingError::NotMapped)? };
-        if *pte & paging::PRESENT_FLAG == 0 || *pte & paging::USER_FLAG == 0 {
-            return Err(PagingError::NotMapped);
-        }
-        if *pte & paging::WRITABLE_FLAG != 0 {
-            return Ok(());
-        }
-        if *pte & paging::COW_FLAG == 0 {
-            return Err(PagingError::NotMapped);
-        }
-        self.break_cow_page(page)
-    }
-
     fn break_cow_page(&mut self, page: usize) -> Result<(), PagingError> {
         let pte = unsafe { paging::get_pte_mut(self.p4, page).ok_or(PagingError::NotMapped)? };
         let old_frame_phys = (*pte & paging::ADDR_MASK) as usize;
@@ -737,7 +895,11 @@ impl AddressSpace {
 
         let new_frame = frame_allocator::allocate_frame().ok_or(PagingError::OutOfFrames)?;
         unsafe {
-            ptr::copy_nonoverlapping(page as *const u8, new_frame.start as *mut u8, FRAME_SIZE);
+            ptr::copy_nonoverlapping(
+                page as *const u8,
+                paging::phys_to_virt(new_frame.start) as *mut u8,
+                FRAME_SIZE,
+            );
         }
         super::refcount::decrement(old_frame_phys);
         *pte = new_frame.start as u64 | flags;
@@ -757,17 +919,127 @@ impl AddressSpace {
             .map(|(_, protection)| *protection)
     }
 
-    fn set_page_protection(
+    fn lazy_protection_for_page(&self, page: usize) -> Option<UserProtection> {
+        self.lazy_mappings
+            .iter()
+            .find(|mapping| page >= mapping.start && page < mapping.end)
+            .map(|mapping| mapping.protection)
+    }
+
+    fn lazy_range_overlaps(&self, start: usize, end: usize) -> bool {
+        self.lazy_mappings
+            .iter()
+            .any(|mapping| start < mapping.end && end > mapping.start)
+    }
+
+    fn remove_lazy_range(&mut self, start: usize, end: usize) -> Result<(), PagingError> {
+        let mut index = 0;
+        while index < self.lazy_mappings.len() {
+            let mapping = self.lazy_mappings[index];
+            if start >= mapping.end || end <= mapping.start {
+                index += 1;
+                continue;
+            }
+
+            if start <= mapping.start && end >= mapping.end {
+                self.lazy_mappings.swap_remove(index);
+                continue;
+            }
+            if start <= mapping.start {
+                self.lazy_mappings[index].start = end.min(mapping.end);
+                index += 1;
+                continue;
+            }
+            if end >= mapping.end {
+                self.lazy_mappings[index].end = start.max(mapping.start);
+                index += 1;
+                continue;
+            }
+
+            self.lazy_mappings
+                .try_reserve_exact(1)
+                .map_err(|_| PagingError::OutOfFrames)?;
+            self.lazy_mappings[index].end = start;
+            self.lazy_mappings.push(LazyMapping {
+                start: end,
+                end: mapping.end,
+                protection: mapping.protection,
+            });
+            index += 1;
+        }
+        Ok(())
+    }
+
+    fn protect_lazy_range(
         &mut self,
-        page: usize,
+        start: usize,
+        end: usize,
         protection: UserProtection,
     ) -> Result<(), PagingError> {
-        let entry = self
-            .user_protections
-            .iter_mut()
-            .find(|(virt, _)| *virt == page)
-            .ok_or(PagingError::NotMapped)?;
-        entry.1 = protection;
+        let mut index = 0;
+        while index < self.lazy_mappings.len() {
+            let mapping = self.lazy_mappings[index];
+            if start >= mapping.end || end <= mapping.start {
+                index += 1;
+                continue;
+            }
+
+            let overlap_start = start.max(mapping.start);
+            let overlap_end = end.min(mapping.end);
+            if overlap_start == mapping.start && overlap_end == mapping.end {
+                self.lazy_mappings[index].protection = protection;
+                index += 1;
+                continue;
+            }
+
+            if overlap_start == mapping.start {
+                self.lazy_mappings
+                    .try_reserve_exact(1)
+                    .map_err(|_| PagingError::OutOfFrames)?;
+                self.lazy_mappings[index] = LazyMapping {
+                    start: overlap_start,
+                    end: overlap_end,
+                    protection,
+                };
+                self.lazy_mappings.push(LazyMapping {
+                    start: overlap_end,
+                    end: mapping.end,
+                    protection: mapping.protection,
+                });
+                index += 1;
+                continue;
+            }
+
+            if overlap_end == mapping.end {
+                self.lazy_mappings
+                    .try_reserve_exact(1)
+                    .map_err(|_| PagingError::OutOfFrames)?;
+                self.lazy_mappings[index].end = overlap_start;
+                self.lazy_mappings.push(LazyMapping {
+                    start: overlap_start,
+                    end: overlap_end,
+                    protection,
+                });
+                index += 1;
+                continue;
+            }
+
+            self.lazy_mappings
+                .try_reserve_exact(2)
+                .map_err(|_| PagingError::OutOfFrames)?;
+            self.lazy_mappings[index].end = overlap_start;
+            self.lazy_mappings.push(LazyMapping {
+                start: overlap_start,
+                end: overlap_end,
+                protection,
+            });
+            self.lazy_mappings.push(LazyMapping {
+                start: overlap_end,
+                end: mapping.end,
+                protection: mapping.protection,
+            });
+            index += 1;
+        }
         Ok(())
     }
 }
@@ -824,6 +1096,7 @@ pub fn self_test() {
     assert_user_mapping_bounds(&mut space_a);
     assert_parent_cow_restore(&space_a, VIRT);
     assert_mprotect_metadata_failure_is_atomic(&mut space_a);
+    assert_mprotect_allows_no_access_mappings(&mut space_a);
 
     space_b.activate();
     let value_b = unsafe { ptr::read_volatile(VIRT as *mut u64) };
@@ -931,6 +1204,25 @@ fn assert_mprotect_metadata_failure_is_atomic(space: &mut AddressSpace) {
     }
     assert_user_page_writable(space, BASE, true, "mprotect atomic first page");
     assert_user_page_writable(space, second, true, "mprotect atomic second page");
+}
+
+fn assert_mprotect_allows_no_access_mappings(space: &mut AddressSpace) {
+    const BASE: usize = 0x4100_0000;
+    space
+        .map_zero_page_with_protection(BASE, UserProtection::None)
+        .expect("address space PROT_NONE map failed");
+    if space.allows_user(BASE, 1, UserAccess::Read) {
+        panic!("address space PROT_NONE mapping allowed read access");
+    }
+    space
+        .protect_user_range(BASE, FRAME_SIZE, UserProtection::ReadWrite)
+        .expect("address space PROT_NONE mprotect failed");
+    if !space.allows_user(BASE, 1, UserAccess::Write) {
+        panic!("address space PROT_NONE mprotect did not enable write access");
+    }
+    space
+        .unmap_user_page(BASE)
+        .expect("address space PROT_NONE cleanup failed");
 }
 
 fn assert_parent_cow_restore(space: &AddressSpace, page: usize) {
