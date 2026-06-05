@@ -90,8 +90,65 @@ struct Node {
     kind: NodeKind,
     metadata: FileMetadata,
     timestamps: FileTimestamps,
-    data: Vec<u8>,
+    data: FileData,
     link_target: Option<usize>,
+}
+
+enum FileData {
+    Owned(Vec<u8>),
+    Static(&'static [u8]),
+}
+
+impl FileData {
+    fn empty() -> Self {
+        Self::Owned(Vec::new())
+    }
+
+    fn from_slice(data: &[u8]) -> Self {
+        Self::Owned(Vec::from(data))
+    }
+
+    fn from_static(data: &'static [u8]) -> Self {
+        Self::Static(data)
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(data) => data.as_slice(),
+            Self::Static(data) => data,
+        }
+    }
+
+    fn make_mut(&mut self) -> Result<&mut Vec<u8>, VfsError> {
+        if let Self::Static(data) = self {
+            let mut owned = Vec::new();
+            owned
+                .try_reserve_exact(data.len())
+                .map_err(|_| VfsError::NoSpace)?;
+            owned.extend_from_slice(data);
+            *self = Self::Owned(owned);
+        }
+        match self {
+            Self::Owned(data) => Ok(data),
+            Self::Static(_) => unreachable!(),
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::Owned(Vec::new());
+    }
+
+    fn resize(&mut self, len: usize) -> Result<(), VfsError> {
+        resize_file_buffer(self.make_mut()?, len)
+    }
+
+    fn as_mut_slice(&mut self) -> Result<&mut [u8], VfsError> {
+        Ok(self.make_mut()?.as_mut_slice())
+    }
 }
 
 #[derive(Clone)]
@@ -630,7 +687,7 @@ impl Vfs {
 
     fn mount_initrd(&mut self, initrd: &Initrd) {
         for file in initrd.files() {
-            self.add_file(file.path, file.data);
+            self.add_static_file(file.path, file.data);
         }
     }
 
@@ -843,7 +900,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: None,
         });
     }
@@ -854,8 +911,7 @@ impl Vfs {
             node.kind = NodeKind::File;
             node.metadata = FileMetadata::new(0, 0, 0o644);
             node.timestamps.modified_at = now;
-            node.data.clear();
-            node.data.extend_from_slice(data);
+            node.data = FileData::from_slice(data);
             node.link_target = None;
             return;
         }
@@ -868,7 +924,31 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::from(data),
+            data: FileData::from_slice(data),
+            link_target: None,
+        });
+    }
+
+    fn add_static_file(&mut self, path: &str, data: &'static [u8]) {
+        let now = crate::time::filesystem_timestamp();
+        if let Some(node) = self.nodes.iter_mut().find(|node| node.path == path) {
+            node.kind = NodeKind::File;
+            node.metadata = FileMetadata::new(0, 0, 0o644);
+            node.timestamps.modified_at = now;
+            node.data = FileData::from_static(data);
+            node.link_target = None;
+            return;
+        }
+
+        self.nodes.push(Node {
+            path: String::from(path),
+            kind: NodeKind::File,
+            metadata: FileMetadata::new(0, 0, 0o644),
+            timestamps: FileTimestamps {
+                created_at: now,
+                modified_at: now,
+            },
+            data: FileData::from_static(data),
             link_target: None,
         });
     }
@@ -952,7 +1032,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: None,
         })?;
         self.push_open_handle(OpenHandle::Node {
@@ -972,7 +1052,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: None,
         });
     }
@@ -1018,7 +1098,7 @@ impl Vfs {
                     created_at: crate::time::filesystem_timestamp(),
                     modified_at: crate::time::filesystem_timestamp(),
                 },
-                data: Vec::new(),
+                data: FileData::empty(),
                 link_target: None,
             })?
         } else if Self::use_root_ext2(path) {
@@ -1172,7 +1252,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: None,
         });
         Ok(())
@@ -1238,7 +1318,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: None,
         })?;
         Ok(())
@@ -1439,7 +1519,7 @@ impl Vfs {
                 created_at: now,
                 modified_at: now,
             },
-            data: try_vec_from_bytes(target.as_bytes())?,
+            data: FileData::Owned(try_vec_from_bytes(target.as_bytes())?),
             link_target: None,
         })?;
         Ok(())
@@ -1496,7 +1576,7 @@ impl Vfs {
                 created_at: now,
                 modified_at,
             },
-            data: Vec::new(),
+            data: FileData::empty(),
             link_target: Some(target),
         })?;
         Ok(())
@@ -1520,7 +1600,7 @@ impl Vfs {
         if node.kind != NodeKind::Symlink {
             return Err(VfsError::NotFile);
         }
-        try_vec_from_bytes(&node.data)
+        try_vec_from_bytes(node.data.as_slice())
     }
 
     fn chown_as(
@@ -1701,7 +1781,7 @@ impl Vfs {
                 }
 
                 let data_node = canonical_node_index(&self.nodes, *node);
-                let data = &self.nodes[data_node].data;
+                let data = self.nodes[data_node].data.as_slice();
                 if *offset >= data.len() {
                     return Ok(0);
                 }
@@ -1851,13 +1931,13 @@ impl Vfs {
                 let data_node = canonical_node_index(&self.nodes, *node);
                 let node = &mut self.nodes[data_node];
                 if *offset > node.data.len() {
-                    resize_file_buffer(&mut node.data, *offset)?;
+                    node.data.resize(*offset)?;
                 }
                 let end = checked_file_end(*offset, input.len())?;
                 if end > node.data.len() {
-                    resize_file_buffer(&mut node.data, end)?;
+                    node.data.resize(end)?;
                 }
-                node.data[*offset..end].copy_from_slice(input);
+                node.data.as_mut_slice()?[*offset..end].copy_from_slice(input);
                 *offset = end;
                 node.timestamps.modified_at = crate::time::filesystem_timestamp();
                 Ok(input.len())
@@ -1936,7 +2016,7 @@ impl Vfs {
         if self.nodes[data_node].kind != NodeKind::File {
             return Err(VfsError::NotFile);
         }
-        resize_file_buffer(&mut self.nodes[data_node].data, len)?;
+        self.nodes[data_node].data.resize(len)?;
         self.nodes[data_node].timestamps.modified_at = crate::time::filesystem_timestamp();
         Ok(())
     }
@@ -2533,7 +2613,7 @@ impl Vfs {
         let node = self.nodes.iter().position(|node| node.path == path)?;
         let data_node = canonical_node_index(&self.nodes, node);
         if self.nodes[data_node].kind == NodeKind::File {
-            Some(self.nodes[data_node].data.clone())
+            try_vec_from_bytes(self.nodes[data_node].data.as_slice()).ok()
         } else {
             None
         }
@@ -2559,7 +2639,7 @@ impl Vfs {
             if node.kind != NodeKind::Symlink {
                 return Ok(current);
             }
-            let target = str::from_utf8(&node.data).map_err(|_| VfsError::Utf8)?;
+            let target = str::from_utf8(node.data.as_slice()).map_err(|_| VfsError::Utf8)?;
             let next = if target.starts_with('/') {
                 normalize_path(target)?
             } else {

@@ -345,7 +345,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"native_codegen = \"pending completed stage2 Ristux-hosted rustc package\"",
+            b"native_codegen = \"official stage2 Ristux-hosted rustc packaged at /bin/rustc\"",
         )
         || !contains(
             &manifest,
@@ -877,11 +877,11 @@ fn check_process_signal_syscalls() -> bool {
 fn check_tls_syscalls() -> bool {
     let mut old_fs = 0usize;
     if sys::arch_prctl(sys::ARCH_GET_FS, &mut old_fs as *mut usize as usize) < 0 {
-        return fail(b"tls syscalls");
+        return fail(b"tls get fs");
     }
     let mut gs = usize::MAX;
     if sys::arch_prctl(sys::ARCH_GET_GS, &mut gs as *mut usize as usize) < 0 || gs != 0 {
-        return fail(b"tls syscalls");
+        return fail(b"tls get gs");
     }
 
     let addr = sys::mmap(
@@ -893,19 +893,30 @@ fn check_tls_syscalls() -> bool {
         0,
     );
     if addr < 0 {
-        return fail(b"tls syscalls");
+        return fail(b"tls mmap");
     }
     let mut new_fs = 0usize;
-    if sys::arch_prctl(sys::ARCH_SET_FS, addr as usize) < 0
-        || sys::arch_prctl(sys::ARCH_GET_FS, &mut new_fs as *mut usize as usize) < 0
-        || new_fs != addr as usize
-    {
+    if sys::arch_prctl(sys::ARCH_SET_FS, addr as usize) < 0 {
         let _ = sys::arch_prctl(sys::ARCH_SET_FS, old_fs);
         let _ = sys::munmap(addr as usize, 4096);
-        return fail(b"tls syscalls");
+        return fail(b"tls set fs");
     }
-    if sys::arch_prctl(sys::ARCH_SET_FS, old_fs) < 0 || sys::munmap(addr as usize, 4096) < 0 {
-        return fail(b"tls syscalls");
+    if sys::arch_prctl(sys::ARCH_GET_FS, &mut new_fs as *mut usize as usize) < 0 {
+        let _ = sys::arch_prctl(sys::ARCH_SET_FS, old_fs);
+        let _ = sys::munmap(addr as usize, 4096);
+        return fail(b"tls get new fs");
+    }
+    if new_fs != addr as usize {
+        let _ = sys::arch_prctl(sys::ARCH_SET_FS, old_fs);
+        let _ = sys::munmap(addr as usize, 4096);
+        return fail(b"tls fs value");
+    }
+    if sys::arch_prctl(sys::ARCH_SET_FS, old_fs) < 0 {
+        let _ = sys::munmap(addr as usize, 4096);
+        return fail(b"tls restore fs");
+    }
+    if sys::munmap(addr as usize, 4096) < 0 {
+        return fail(b"tls munmap");
     }
     line(b"rust_host_probe: tls syscalls ok");
     true
@@ -1192,6 +1203,102 @@ fn check_clocks() -> bool {
     true
 }
 
+#[repr(C)]
+struct ClearTidProbe {
+    clear_tid: u32,
+    go: u32,
+    child_seen: u32,
+}
+
+extern "C" fn clear_tid_thread_entry(arg: usize) -> ! {
+    let probe = arg as *mut ClearTidProbe;
+    unsafe {
+        while ptr::read_volatile(&(*probe).go) == 0 {
+            let _ = sys::sched_yield();
+        }
+        ptr::write_volatile(&mut (*probe).child_seen, 1);
+    }
+    sys::exit(0);
+}
+
+fn check_clear_child_tid_wake() -> bool {
+    const STACK_LEN: usize = 64 * 1024;
+    let stack = sys::mmap(
+        0,
+        STACK_LEN,
+        sys::PROT_READ | sys::PROT_WRITE,
+        sys::MAP_PRIVATE | sys::MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if stack < 0 {
+        return fail(b"clear child tid mmap");
+    }
+
+    let stack_top = ((stack as usize + STACK_LEN) & !0xfusize) - core::mem::size_of::<usize>();
+    let mut probe = ClearTidProbe {
+        clear_tid: 0,
+        go: 0,
+        child_seen: 0,
+    };
+    let pid = sys::ristux_thread_create(
+        clear_tid_thread_entry as *const () as usize,
+        &mut probe as *mut ClearTidProbe as usize,
+        stack_top,
+        0,
+        &mut probe.clear_tid as *mut u32,
+    );
+    if pid <= 0 {
+        let _ = sys::munmap(stack as usize, STACK_LEN);
+        return fail(b"clear child tid create");
+    }
+
+    let pid_word = pid as u32;
+    if unsafe { ptr::read_volatile(&probe.clear_tid) } != pid_word {
+        let _ = sys::munmap(stack as usize, STACK_LEN);
+        return fail(b"clear child tid publish");
+    }
+
+    unsafe {
+        ptr::write_volatile(&mut probe.go, 1);
+    }
+    let timeout = sys::Timespec {
+        tv_sec: 0,
+        tv_nsec: 50_000_000,
+    };
+    loop {
+        let current = unsafe { ptr::read_volatile(&probe.clear_tid) };
+        if current == 0 {
+            break;
+        }
+        let rc = sys::futex(
+            &mut probe.clear_tid as *mut u32,
+            sys::FUTEX_WAIT | sys::FUTEX_PRIVATE_FLAG,
+            current as i32,
+            &timeout as *const sys::Timespec,
+        );
+        if rc < 0 {
+            let after = unsafe { ptr::read_volatile(&probe.clear_tid) };
+            if after != 0 {
+                let _ = sys::munmap(stack as usize, STACK_LEN);
+                return fail(b"clear child tid futex");
+            }
+        }
+    }
+    if unsafe { ptr::read_volatile(&probe.child_seen) } != 1 {
+        let _ = sys::munmap(stack as usize, STACK_LEN);
+        return fail(b"clear child tid child");
+    }
+    let mut status = 0i32;
+    if sys::wait4(pid, &mut status as *mut i32, 0, 0) != pid || status != 0 {
+        let _ = sys::munmap(stack as usize, STACK_LEN);
+        return fail(b"clear child tid wait");
+    }
+    let _ = sys::munmap(stack as usize, STACK_LEN);
+    line(b"rust_host_probe: clear child tid wake ok");
+    true
+}
+
 fn check_synchronization() -> bool {
     let mut word = 0u32;
     let timeout = sys::Timespec {
@@ -1240,6 +1347,7 @@ fn main(args: &[&[u8]], envp: *const *const u8) -> i32 {
         && check_process_capture(envp)
         && check_memory_map()
         && check_clocks()
+        && check_clear_child_tid_wake()
         && check_synchronization()
     {
         line(b"rust_host_probe: done");

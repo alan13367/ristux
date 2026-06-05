@@ -29,6 +29,7 @@ pub const FD_CLOEXEC: u32 = 1;
 pub const SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
 pub const SIGNAL_FLAG_RESTART: u32 = 2;
 const MAX_WAKE_PIDS: usize = MAX_FDS;
+const MAX_WAKE_TIMED_WAITS: usize = 4;
 const SYSCALL_TRAMPOLINE_BASE: usize = 0x4000_0000;
 const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
 const SYSCALL_TRAMPOLINE_STUBS: [&[u8]; 7] = [
@@ -127,10 +128,19 @@ fn shared_mapping_overlaps(mapping: &SharedMapping, addr: usize, range_end: usiz
     cmp::max(addr, mapping.addr) < cmp::min(range_end, mapping_end)
 }
 
+#[derive(Clone, Copy)]
+struct TimedWaitWake {
+    key: u64,
+    limit: usize,
+}
+
 struct WakeList {
     pids: [Pid; MAX_WAKE_PIDS],
     len: usize,
     overflow: bool,
+    timed_waits: [TimedWaitWake; MAX_WAKE_TIMED_WAITS],
+    timed_wait_len: usize,
+    timed_wait_overflow: bool,
 }
 
 impl WakeList {
@@ -139,6 +149,9 @@ impl WakeList {
             pids: [0; MAX_WAKE_PIDS],
             len: 0,
             overflow: false,
+            timed_waits: [TimedWaitWake { key: 0, limit: 0 }; MAX_WAKE_TIMED_WAITS],
+            timed_wait_len: 0,
+            timed_wait_overflow: false,
         }
     }
 
@@ -158,6 +171,25 @@ impl WakeList {
         &self.pids[..self.len]
     }
 
+    fn push_timed_wait_key(&mut self, key: u64, limit: usize) {
+        if self.timed_waits[..self.timed_wait_len]
+            .iter()
+            .any(|wake| wake.key == key)
+        {
+            return;
+        }
+        if self.timed_wait_len == self.timed_waits.len() {
+            self.timed_wait_overflow = true;
+            return;
+        }
+        self.timed_waits[self.timed_wait_len] = TimedWaitWake { key, limit };
+        self.timed_wait_len += 1;
+    }
+
+    fn timed_waits(&self) -> &[TimedWaitWake] {
+        &self.timed_waits[..self.timed_wait_len]
+    }
+
     fn extend(&mut self, other: WakeList) {
         for pid in other.as_slice() {
             self.push_unique(*pid);
@@ -165,7 +197,22 @@ impl WakeList {
         if other.overflow {
             self.overflow = true;
         }
+        for wait in other.timed_waits() {
+            self.push_timed_wait_key(wait.key, wait.limit);
+        }
+        if other.timed_wait_overflow {
+            self.timed_wait_overflow = true;
+        }
     }
+}
+
+fn clear_child_tid_wait_key(clear_tid: usize, address_space_key: usize) -> u64 {
+    timed_wait_key(
+        crate::syscall::linux::NR_futex,
+        clear_tid,
+        address_space_key,
+        0,
+    )
 }
 
 pub struct Process {
@@ -1460,6 +1507,12 @@ impl ProcessTable {
                     unsafe {
                         *(clear_tid as *mut u32) = 0;
                     }
+                    let private_key = clear_child_tid_wait_key(clear_tid, address_space.p4_phys());
+                    wake.push_timed_wait_key(private_key, usize::MAX);
+                    let shared_key = clear_child_tid_wait_key(clear_tid, 0);
+                    if shared_key != private_key {
+                        wake.push_timed_wait_key(shared_key, usize::MAX);
+                    }
                 }
                 process.clear_child_tid = 0;
             }
@@ -2384,6 +2437,9 @@ pub fn continue_process(pid: Pid) -> bool {
 }
 
 fn wake_processes(wake: WakeList) {
+    for wait in wake.timed_waits() {
+        let _ = wake_timed_waiters(wait.key, wait.limit);
+    }
     for pid in wake.as_slice() {
         scheduler::wake_blocked(*pid);
     }
@@ -3034,6 +3090,10 @@ pub fn user_close_socket_handle(handle: usize) -> Result<(), ()> {
         return Err(());
     }
     crate::net::socket::with_sockets(|table| table.close(handle)).map_err(|_| ())
+}
+
+pub fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
+    nr.rotate_left(48) ^ (a0 as u64).rotate_left(17) ^ (a1 as u64).rotate_left(7) ^ a2 as u64
 }
 
 pub fn timed_wait_deadline(key: u64, timeout_ms: u64, now_ms: u64) -> Result<u64, TimedWaitError> {

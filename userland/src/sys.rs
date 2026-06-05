@@ -111,6 +111,7 @@ pub const NR_RENAMEAT2: usize = 316;
 pub const NR_GETRANDOM: usize = 318;
 pub const NR_COPY_FILE_RANGE: usize = 326;
 pub const NR_STATX: usize = 332;
+pub const NR_RISTUX_THREAD_CREATE: usize = 451;
 pub const NR_GETUID: usize = 102;
 pub const NR_GETGID: usize = 104;
 pub const NR_SETUID: usize = 105;
@@ -184,6 +185,7 @@ pub const CLOCK_REALTIME: i32 = 0;
 pub const CLOCK_MONOTONIC: i32 = 1;
 pub const FUTEX_WAIT: i32 = 0;
 pub const FUTEX_WAKE: i32 = 1;
+pub const FUTEX_PRIVATE_FLAG: i32 = 128;
 pub const SIG_BLOCK: i32 = 0;
 pub const SIG_UNBLOCK: i32 = 1;
 pub const SIG_SETMASK: i32 = 2;
@@ -943,6 +945,26 @@ pub fn arch_prctl(code: i32, addr: usize) -> isize {
 #[inline]
 pub fn set_tid_address(tidptr: *mut i32) -> isize {
     unsafe { syscall1(NR_SET_TID_ADDRESS, tidptr as usize) }
+}
+
+#[inline]
+pub fn ristux_thread_create(
+    entry: usize,
+    arg: usize,
+    child_stack: usize,
+    tls: usize,
+    clear_child_tid: *mut u32,
+) -> isize {
+    unsafe {
+        syscall5(
+            NR_RISTUX_THREAD_CREATE,
+            entry,
+            arg,
+            child_stack,
+            tls,
+            clear_child_tid as usize,
+        )
+    }
 }
 
 #[inline]

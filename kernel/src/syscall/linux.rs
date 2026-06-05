@@ -1520,7 +1520,7 @@ struct PollSnapshot {
 }
 
 fn timed_wait_key(nr: u64, a0: usize, a1: usize, a2: usize) -> u64 {
-    nr.rotate_left(48) ^ (a0 as u64).rotate_left(17) ^ (a1 as u64).rotate_left(7) ^ a2 as u64
+    process::timed_wait_key(nr, a0, a1, a2)
 }
 
 fn futex_wait_key(uaddr: usize, private: bool) -> u64 {
@@ -2619,7 +2619,7 @@ fn validate_fs_base(base: usize) -> Result<(), i64> {
     if base >= USER_ADDRESS_TOP {
         return Err(EINVAL);
     }
-    if !process::is_user_readable(base, 1) {
+    if process::read_user(base, 1).is_none() {
         return Err(EFAULT);
     }
     Ok(())
@@ -2696,7 +2696,7 @@ fn validate_clone_child_stack(parent_rsp: u64, child_stack: usize) -> Result<u64
         return Err(EINVAL);
     }
     let probe = child_stack.checked_sub(1).ok_or(EINVAL)?;
-    if !process::is_user_readable(probe, 1) || process::write_user_buffer(probe, 1).is_none() {
+    if process::write_user_buffer(probe, 1).is_none() {
         return Err(EFAULT);
     }
     Ok(child_stack as u64)
@@ -2709,7 +2709,7 @@ fn validate_clone_tls_base(tls: usize) -> Result<u64, i64> {
     if tls >= USER_ADDRESS_TOP {
         return Err(EINVAL);
     }
-    if !process::is_user_readable(tls, 1) {
+    if process::read_user(tls, 1).is_none() {
         return Err(EFAULT);
     }
     Ok(tls as u64)
