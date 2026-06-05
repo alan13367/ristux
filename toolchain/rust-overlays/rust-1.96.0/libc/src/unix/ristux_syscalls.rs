@@ -537,7 +537,7 @@ fn ristux_open_syscall_flags(flags: c_int) -> usize {
         | REDOX_O_DIRECTORY
         | REDOX_O_NOFOLLOW;
 
-    if flags & REDOX_KNOWN_FLAGS == 0 {
+    if flags & REDOX_O_ACCMODE == 0 {
         return flags as usize;
     }
 
@@ -1810,6 +1810,10 @@ pub unsafe extern "C" fn pthread_create(
 
     let top = stack_base as usize + stack_len;
     let start_ptr = (top - core::mem::size_of::<PthreadStart>()) & !0xfusize;
+    // Ristux enters the thread entrypoint directly instead of through a call
+    // instruction. SysV x86_64 callees still expect the call-site return
+    // address adjustment, so synthesize an entry stack with rsp % 16 == 8.
+    let child_stack = start_ptr - core::mem::size_of::<usize>();
     let start_record = start_ptr as *mut PthreadStart;
     unsafe {
         core::ptr::write(start_record, PthreadStart { start, arg });
@@ -1820,7 +1824,7 @@ pub unsafe extern "C" fn pthread_create(
             NR_RISTUX_THREAD_CREATE,
             pthread_start as usize,
             start_record as usize,
-            start_ptr,
+            child_stack,
             0,
             0,
         )

@@ -1265,7 +1265,7 @@ fn normalize_open_flags(flags: i32) -> i32 {
         | REDOX_O_DIRECTORY
         | REDOX_O_NOFOLLOW;
 
-    if flags & REDOX_KNOWN_FLAGS == 0 {
+    if flags & REDOX_O_ACCMODE == 0 {
         return flags;
     }
 
@@ -3698,18 +3698,24 @@ fn copy_mmap_file_from_vfs(
     validate_mmap_file_range(offset, len)?;
     let offset = isize::try_from(offset).map_err(|_| EINVAL)?;
     fs::lseek(vfs_fd, offset, 0).map_err(map_vfs_error)?;
+    let mut copied = 0usize;
     let mut buffer = Vec::new();
-    buffer.try_reserve_exact(len).map_err(|_| ENOMEM)?;
-    buffer.resize(len, 0);
-    match fs::read(vfs_fd, &mut buffer) {
-        Ok(0) | Err(fs::vfs::VfsError::WouldBlock) => Ok(()),
-        Ok(n) => {
-            let out = process::write_user_buffer(mapped, n).ok_or(EFAULT)?;
-            out.copy_from_slice(&buffer[..n]);
-            Ok(())
+    let chunk_len = len.min(64 * 1024);
+    buffer.try_reserve_exact(chunk_len).map_err(|_| ENOMEM)?;
+    buffer.resize(chunk_len, 0);
+    while copied < len {
+        let want = (len - copied).min(buffer.len());
+        match fs::read(vfs_fd, &mut buffer[..want]) {
+            Ok(0) | Err(fs::vfs::VfsError::WouldBlock) => return Ok(()),
+            Ok(n) => {
+                let out = process::write_user_buffer(mapped + copied, n).ok_or(EFAULT)?;
+                out.copy_from_slice(&buffer[..n]);
+                copied += n;
+            }
+            Err(err) => return Err(map_vfs_error(err)),
         }
-        Err(err) => Err(map_vfs_error(err)),
     }
+    Ok(())
 }
 
 fn linux_time(tloc: usize) -> Result<u64, i64> {
