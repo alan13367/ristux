@@ -188,6 +188,18 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "cat /tmp/cargo-smoke/*argo.toml"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "grep 'extern crate ristux_panic' /tmp/cargo-smoke/src/main.rs"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "pkg files rust-std-libs"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "cd /tmp/cargo-smoke"
   sleep 1
   printf 'sendkey ret\n'
@@ -574,6 +586,12 @@ grep -Eq "rustc_metadata_probe: direct binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct binary run ok" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo new /tmp/cargo-smoke" "$SERIAL_LOG"
 grep -q 'Created binary package `cargo-smoke`' "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cat /tmp/cargo-smoke/\\*argo.toml" "$SERIAL_LOG"
+grep -q '^edition = "2024"$' "$SERIAL_LOG"
+grep -q "TTY canonical line ready: grep 'extern crate ristux_panic' /tmp/cargo-smoke/src/main.rs" "$SERIAL_LOG"
+grep -q "^extern crate ristux_panic;$" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: pkg files rust-std-libs" "$SERIAL_LOG"
+grep -q "^/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib$" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cd /tmp/cargo-smoke" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo run" "$SERIAL_LOG"
 grep -q "Compiling cargo-smoke v0.1.0" "$SERIAL_LOG"

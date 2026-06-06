@@ -144,7 +144,7 @@ package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar
 package awk 0.1.0 /bin/awk
 package basename 0.1.0 /bin/basename
-package cargo 1.96.0 /bin/cargo deps=rustc
+package cargo 1.96.0 /bin/cargo deps=rustc,rust-std-libs
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow

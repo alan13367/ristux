@@ -14,10 +14,12 @@ const O_CREAT: i32 = 64;
 const O_TRUNC: i32 = 512;
 const TARGET: &[u8] = b"x86_64-unknown-ristux";
 const SYSROOT: &[u8] = b"/usr";
+const PANIC_RUNTIME: &[u8] = b"/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib";
 
 struct Package {
     name: Vec<u8>,
     crate_name: Vec<u8>,
+    edition: Vec<u8>,
     manifest_dir: Vec<u8>,
 }
 
@@ -235,8 +237,8 @@ fn parse_manifest(path: &[u8]) -> Result<Package, &'static [u8]> {
     if !valid_package_name(&name) {
         return Err(b"package.name contains unsupported characters");
     }
-    if edition != b"2015" {
-        return Err(b"only Rust edition 2015 is supported by native builds currently");
+    if !matches!(edition.as_slice(), b"2015" | b"2018" | b"2021" | b"2024") {
+        return Err(b"package.edition must be 2015, 2018, 2021, or 2024");
     }
     if dependency_entries {
         return Err(b"dependencies are not supported by the local Cargo bootstrap yet");
@@ -245,6 +247,7 @@ fn parse_manifest(path: &[u8]) -> Result<Package, &'static [u8]> {
     Ok(Package {
         crate_name: crate_name(&name),
         name,
+        edition,
         manifest_dir: dirname(path),
     })
 }
@@ -313,6 +316,13 @@ fn build_package(
     if !path_exists(&source) {
         return Err(print_error(b"src/main.rs does not exist"));
     }
+    let source_bytes = read_file(&source).ok_or_else(|| print_error(b"cannot read src/main.rs"))?;
+    let uses_ristux_panic = source_bytes
+        .windows(b"extern crate ristux_panic".len())
+        .any(|window| window == b"extern crate ristux_panic");
+    if uses_ristux_panic && !path_exists(PANIC_RUNTIME) {
+        return Err(print_error(b"Ristux panic runtime is not installed"));
+    }
 
     let profile: &[u8] = if release { b"release" } else { b"debug" };
     let target_dir = join(&package.manifest_dir, b"target");
@@ -342,6 +352,8 @@ fn build_package(
     let mut args: Vec<&[u8]> = vec![
         b"--crate-name",
         &package.crate_name,
+        b"--edition",
+        &package.edition,
         b"--target",
         TARGET,
         b"--sysroot",
@@ -351,6 +363,12 @@ fn build_package(
         args.extend_from_slice(&[b"--emit", b"metadata"]);
     } else if release {
         args.extend_from_slice(&[b"-C", b"opt-level=3"]);
+    }
+    if uses_ristux_panic {
+        args.extend_from_slice(&[
+            b"--extern",
+            b"ristux_panic=/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib",
+        ]);
     }
     args.extend_from_slice(&[source.as_slice(), b"-o", output.as_slice()]);
 
@@ -401,13 +419,13 @@ fn create_project(
     let mut manifest = Vec::new();
     manifest.extend_from_slice(b"[package]\nname = \"");
     manifest.extend_from_slice(name);
-    manifest.extend_from_slice(b"\"\nversion = \"0.1.0\"\nedition = \"2015\"\n\n[dependencies]\n");
+    manifest.extend_from_slice(b"\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n");
     if !write_file(&join(path, b"Cargo.toml"), &manifest) {
         return print_error(b"cannot write Cargo.toml");
     }
 
     let source = if no_std {
-        b"#![no_std]\n#![no_main]\n\nuse core::panic::PanicInfo;\n\n#[panic_handler]\nfn panic(_: &PanicInfo) -> ! { loop {} }\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn main() -> i32 { 0 }\n".as_slice()
+        b"#![no_std]\n#![no_main]\n\nextern crate ristux_panic;\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn main() -> i32 { 0 }\n".as_slice()
     } else {
         b"fn main() {\n    println!(\"Hello, world!\");\n}\n".as_slice()
     };

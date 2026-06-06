@@ -144,6 +144,8 @@ RUST_SYSROOT_STAMP := build/rustlib.stamp
 RUST_STD_PROBE_ELF := build/userland/rust_std_probe.elf
 RUST_STD_SYSROOT_TREE := build/rust-std-sysroot
 RUST_STD_SYSROOT_STAMP := build/rust-std-sysroot.stamp
+RUST_PANIC_RUNTIME_SRC := toolchain/ristux-panic-runtime.rs
+RUST_PANIC_RUNTIME_RLIB := $(RUST_STD_SYSROOT_TREE)/x86_64-unknown-ristux/lib/libristux_panic.rlib
 RUST_OFFICIAL_RUSTC := build/official-rust/bin/rustc
 RUST_OFFICIAL_SYSROOT_TREE := build/official-rust/rustlib
 RUST_OFFICIAL_SYSROOT_STAMP := build/official-rust/rustlib.stamp
@@ -177,9 +179,10 @@ $(RUST_SYSROOT_STAMP): $(RUST_OFFICIAL_SYSROOT_STAMP) scripts/package_official_r
 	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_SYSROOT_TREE) core
 	touch $@
 
-$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh scripts/package_official_rust_sysroot.sh targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS) $(RUST_OFFICIAL_SYSROOT_STAMP)
+$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh scripts/package_official_rust_sysroot.sh scripts/build_ristux_panic_runtime.sh $(RUST_PANIC_RUNTIME_SRC) targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS) $(RUST_OFFICIAL_SYSROOT_STAMP)
 	RISTUX_STD_PROBE_OUTPUT=$(RUST_STD_PROBE_ELF) scripts/probe_rust_std.sh --expect-std-link-success
 	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_STD_SYSROOT_TREE) full
+	scripts/build_ristux_panic_runtime.sh $(RUST_PANIC_RUNTIME_RLIB)
 	touch $@
 
 $(RUST_STD_PROBE_ELF): $(RUST_STD_SYSROOT_STAMP)

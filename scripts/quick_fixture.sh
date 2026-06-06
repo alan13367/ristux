@@ -1003,12 +1003,18 @@ case "$SCENARIO" in
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
     COMMANDS=(
       "cargo new /tmp/cargo-local"
+      "grep 'edition = \"2024\"' /tmp/cargo-local/Cargo.toml"
+      "grep 'extern crate ristux_panic' /tmp/cargo-local/src/main.rs"
+      "pkg files rust-std-libs"
       "cargo run --manifest-path /tmp/cargo-local/Cargo.toml"
       "__wait 240"
       "echo cargo-local-ok"
     )
     EXPECTS=(
       '^     Created binary package `cargo-local`$'
+      '^edition = "2024"$'
+      "^extern crate ristux_panic;$"
+      "^/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic\\.rlib$"
       "^   Compiling cargo-local v0\\.1\\.0$"
       "^    Finished debug profile$"
       '^     Running `/tmp/cargo-local/target/debug/cargo-local`$'
