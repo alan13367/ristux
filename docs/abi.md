@@ -346,8 +346,16 @@ toolchain bootstrap:
   no-std program, invoking `ristux-ld`, producing a static executable, and
   running that executable inside Ristux. Ristux resolves slashless `execve`
   program names against the supplied `PATH` as a compatibility bridge for the
-  currently packaged libc shim's incomplete `execvp`. Cargo's transport and
-  package database graph remains the next native-toolchain boundary.
+  currently packaged libc shim's incomplete `execvp`.
+  `/bin/cargo` supports dependency-free local binary packages with `new`,
+  `init`, `build`, `check`, and `run`, including debug/release profiles and
+  `--manifest-path`; it invokes the installed native rustc and linker directly.
+  New projects use a Ristux no-std executable template by default; `--std`
+  opts into the hosted template while that link path is still experimental.
+  Native package builds currently accept edition 2015 because newer explicit
+  edition modes do not yet complete reliably on the hosted compiler. Registry,
+  Git, workspace, build-script, and dependency resolution support remain future
+  Cargo boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

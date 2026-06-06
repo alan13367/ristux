@@ -928,7 +928,7 @@ case "$SCENARIO" in
       "^/usr/lib/rustlib/x86_64-unknown-ristux/lib$"
       "^  \"linker\": \"ristux-ld\",$"
       "^  \"target-family\": \"unix\",$"
-      "^cargo 1\\.96\\.0 (ristux official-bootstrap stage0)$"
+      "^cargo 1\\.96\\.0 (ristux native-local)$"
       "^rustdoc 1\\.96\\.0 (ristux official-bootstrap stage0)$"
       "^ristux-ld 0\\.3\\.0-bootstrap$"
       "^ristux-ld: self-test linked static ELF64 ET_EXEC$"
@@ -997,6 +997,22 @@ case "$SCENARIO" in
       "^  /usr/lib/rustlib/src/ristux-overlays/rust-src/library/std/src/sys/pal/unix/futex\\.rs$"
       "^  rustc$"
       "^  ristux-ld$"
+    )
+    ;;
+  cargo-local)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    COMMANDS=(
+      "cargo new /tmp/cargo-local"
+      "cargo run --manifest-path /tmp/cargo-local/Cargo.toml"
+      "__wait 240"
+      "echo cargo-local-ok"
+    )
+    EXPECTS=(
+      '^     Created binary package `cargo-local`$'
+      "^   Compiling cargo-local v0\\.1\\.0$"
+      "^    Finished debug profile$"
+      '^     Running `/tmp/cargo-local/target/debug/cargo-local`$'
+      "^cargo-local-ok$"
     )
     ;;
   rust-std)

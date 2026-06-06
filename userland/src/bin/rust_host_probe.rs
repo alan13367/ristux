@@ -416,7 +416,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"cargo_build_execution = \"pending no-C Cargo transport and package database graph\"",
+            b"cargo_build_execution = \"dependency-free local build, check, and run supported; registry and Git pending\"",
         )
     {
         return fail(b"manifest");

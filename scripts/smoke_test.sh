@@ -184,6 +184,22 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep "${RISTUX_SMOKE_RUSTC_DIRECT_WAIT:-240}"
+  send_text "cargo new /tmp/cargo-smoke"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cd /tmp/cargo-smoke"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
+  send_text "cargo run"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep "${RISTUX_SMOKE_CARGO_LOCAL_WAIT:-240}"
+  send_text "echo cargo-smoke-ok"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep 3
   send_text "pkg info rustc"
   sleep 1
   printf 'sendkey ret\n'
@@ -522,7 +538,7 @@ grep -q "rustc 1.96.0" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
 grep -q "^x86_64-unknown-ristux$" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo --version" "$SERIAL_LOG"
-grep -q "cargo 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
+grep -q "cargo 1.96.0 (ristux native-local)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustdoc --version" "$SERIAL_LOG"
 grep -q "rustdoc 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: ristux-ld --self-test" "$SERIAL_LOG"
@@ -556,6 +572,14 @@ grep -q "TTY canonical line ready: rustc_metadata_probe --direct" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct status 0" "$SERIAL_LOG"
 grep -Eq "rustc_metadata_probe: direct binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct binary run ok" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cargo new /tmp/cargo-smoke" "$SERIAL_LOG"
+grep -q 'Created binary package `cargo-smoke`' "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cd /tmp/cargo-smoke" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: cargo run" "$SERIAL_LOG"
+grep -q "Compiling cargo-smoke v0.1.0" "$SERIAL_LOG"
+grep -q "Finished debug profile" "$SERIAL_LOG"
+grep -q 'Running `target/debug/cargo-smoke`' "$SERIAL_LOG"
+grep -q "^cargo-smoke-ok$" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: pkg info rustc" "$SERIAL_LOG"
 grep -q "name: rustc" "$SERIAL_LOG"
 grep -q "  ristux-ld" "$SERIAL_LOG"
