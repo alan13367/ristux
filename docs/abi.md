@@ -339,10 +339,15 @@ toolchain bootstrap:
   self-tests, and accepts the static GNU-style mode flags that rustc emits
   (`--as-needed`, `-Bstatic`, `-Bdynamic`, `--eh-frame-hdr`, `-z noexecstack`,
   `-L`, and `--gc-sections`); duplicate weak symbols are tolerated with the
-  usual strong-symbol preference. Full native Rust program builds still require
-  boot-verifying the installed stage2 compiler against the packaged
-  sysroot/linker and making Cargo's transport and package database graph build
-  without C-backed artifacts.
+  usual strong-symbol preference. The linker is also installed in the target
+  tool directory at
+  `/usr/lib/rustlib/x86_64-unknown-ristux/bin/ristux-ld`, where native rustc
+  searches for target tools. `/bin/rustc` has been boot-verified compiling a
+  no-std program, invoking `ristux-ld`, producing a static executable, and
+  running that executable inside Ristux. Ristux resolves slashless `execve`
+  program names against the supplied `PATH` as a compatibility bridge for the
+  currently packaged libc shim's incomplete `execvp`. Cargo's transport and
+  package database graph remains the next native-toolchain boundary.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

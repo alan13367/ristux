@@ -366,6 +366,80 @@ fn exec_and_wait(path: &[u8], args: &[&[u8]]) -> i32 {
     status
 }
 
+fn exec_and_monitor(path: &[u8], args: &[&[u8]], output_path: &[u8]) -> Option<i32> {
+    const WNOHANG: i32 = 1;
+    const SIGKILL: u8 = 9;
+    const TIMEOUT_SECONDS: usize = 180;
+
+    let pid = sys::fork();
+    if pid < 0 {
+        return None;
+    }
+    if pid == 0 {
+        let path_c = cstr(path);
+        let mut argv_storage = Vec::with_capacity(args.len() + 1);
+        argv_storage.push(cstr(path));
+        for arg in args {
+            argv_storage.push(cstr(arg));
+        }
+        let mut argv: Vec<*const u8> = argv_storage.iter().map(|arg| arg.as_ptr()).collect();
+        argv.push(ptr::null());
+
+        let env_storage = [
+            cstr(b"PATH=/bin:/usr/bin"),
+            cstr(b"HOME=/root"),
+            cstr(b"RUST_BACKTRACE=1"),
+        ];
+        let envp = [
+            env_storage[0].as_ptr(),
+            env_storage[1].as_ptr(),
+            env_storage[2].as_ptr(),
+            ptr::null(),
+        ];
+
+        let _ = sys::execve(path_c.as_ptr(), argv.as_ptr(), envp.as_ptr());
+        let _ = write_all(2, b"rustc_metadata_probe: monitored execve failed\n");
+        sys::exit(127);
+    }
+
+    let delay = sys::Timespec {
+        tv_sec: 1,
+        tv_nsec: 0,
+    };
+    for elapsed in 0..TIMEOUT_SECONDS {
+        let mut status = 0i32;
+        let waited = sys::wait4(pid, &mut status as *mut i32, WNOHANG, 0);
+        if waited == pid {
+            return Some(status);
+        }
+        if waited < 0 {
+            return None;
+        }
+        if elapsed % 10 == 9 {
+            value_line(b"direct elapsed", elapsed + 1);
+            value_line(
+                b"direct rustc-procs",
+                count_processes_named(b"/bin/rustc").unwrap_or(usize::MAX),
+            );
+            let linker_processes = count_processes_named(b"/bin/ristux-ld")
+                .or_else(|| count_processes_named(b"ristux-ld"))
+                .unwrap_or(usize::MAX);
+            value_line(b"direct linker-procs", linker_processes);
+            value_line(
+                b"direct output-bytes",
+                regular_file_size(output_path).unwrap_or(0) as usize,
+            );
+        }
+        let _ = sys::nanosleep(&delay);
+    }
+
+    line(b"rustc_metadata_probe: direct timeout");
+    let _ = sys::kill(pid, SIGKILL);
+    let mut status = 0i32;
+    let _ = sys::wait4(pid, &mut status as *mut i32, 0, 0);
+    Some(status)
+}
+
 fn fork_sanity() -> bool {
     let pid = sys::fork();
     if pid < 0 {
@@ -379,7 +453,63 @@ fn fork_sanity() -> bool {
     sys::wait4(pid, &mut status as *mut i32, 0, 0) == pid && status == 0
 }
 
-fn main(_args: &[&[u8]]) -> i32 {
+fn run_direct_probe() -> i32 {
+    let source_path = b"/tmp/rustc-direct-probe.rs";
+    let output_path = b"/tmp/rustc-direct-probe";
+    let _ = sys::unlink(cstr(source_path).as_ptr());
+    let _ = sys::unlink(cstr(output_path).as_ptr());
+
+    if !write_file(
+        source_path,
+        b"#![no_std]\n#![no_main]\nuse core::panic::PanicInfo;\n#[panic_handler]\nfn panic(_: &PanicInfo) -> ! { loop {} }\n#[unsafe(no_mangle)]\npub extern \"C\" fn main() -> i32 { 0 }\n",
+    ) {
+        return fail(b"direct source write");
+    }
+    line(b"rustc_metadata_probe: direct source ready");
+
+    let Some(status) = exec_and_monitor(
+        b"/bin/rustc",
+        &[
+            b"--crate-name",
+            b"ristux_direct_probe",
+            b"--target",
+            b"x86_64-unknown-ristux",
+            b"--sysroot",
+            b"/usr",
+            source_path,
+            b"-o",
+            output_path,
+        ],
+        output_path,
+    ) else {
+        return fail(b"direct rustc monitor");
+    };
+    status_line(b"direct", status);
+    if status != 0 {
+        return fail(b"direct rustc");
+    }
+
+    let output_size = regular_file_size(output_path).unwrap_or(0);
+    value_line(b"direct binary-bytes", output_size as usize);
+    if output_size == 0 {
+        return fail(b"direct binary output");
+    }
+
+    let Some(output) = spawn_capture(output_path, b"rustc-direct-probe", &[]) else {
+        return fail(b"direct binary run");
+    };
+    if !output.is_empty() {
+        return fail(b"direct binary quiet output");
+    }
+    line(b"rustc_metadata_probe: direct binary run ok");
+    0
+}
+
+fn main(args: &[&[u8]]) -> i32 {
+    if args.iter().any(|arg| *arg == b"--direct") {
+        return run_direct_probe();
+    }
+
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rs").as_ptr());
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rmeta").as_ptr());
     let _ = sys::unlink(cstr(b"/tmp/rustc-codegen-probe.o").as_ptr());

@@ -18,6 +18,7 @@ pub fn init(boot_info: &BootInfo) {
     paging::init();
     heap::init();
     refcount::init();
+    refcount::self_test();
     heap::self_test();
     crate::sync::spinlock::self_test();
     address_space::self_test();

@@ -1,13 +1,16 @@
-use crate::sync::spinlock::SpinLock;
+use crate::{
+    memory::frame_allocator::{FRAME_SIZE, MAX_PHYSICAL_MEMORY},
+    sync::spinlock::SpinLock,
+};
 use alloc::vec::Vec;
 
 const CHUNK_SHIFT: usize = 9;
 const CHUNK_SIZE: usize = 1 << CHUNK_SHIFT;
 const CHUNK_MASK: usize = CHUNK_SIZE - 1;
-const ROOT_ENTRIES: usize = 512;
+const ROOT_ENTRIES: usize = MAX_PHYSICAL_MEMORY / FRAME_SIZE / CHUNK_SIZE;
 
 struct RefcountTable {
-    root: [Option<Vec<u16>>; ROOT_ENTRIES],
+    root: Vec<Option<Vec<u16>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,10 +21,12 @@ pub enum RefcountError {
 }
 
 impl RefcountTable {
-    const fn new() -> Self {
-        Self {
-            root: [const { None }; ROOT_ENTRIES],
-        }
+    fn new() -> Result<Self, RefcountError> {
+        let mut root = Vec::new();
+        root.try_reserve_exact(ROOT_ENTRIES)
+            .map_err(|_| RefcountError::OutOfMemory)?;
+        root.resize_with(ROOT_ENTRIES, || None);
+        Ok(Self { root })
     }
 
     fn ensure_chunk(&mut self, frame_index: usize) -> Result<&mut [u16], RefcountError> {
@@ -57,16 +62,29 @@ static REF_COUNTS: SpinLock<Option<RefcountTable>> = SpinLock::new(None);
 
 pub fn init() {
     let mut guard = REF_COUNTS.lock();
-    *guard = Some(RefcountTable::new());
+    *guard = Some(RefcountTable::new().expect("failed to allocate sparse frame refcount root"));
     crate::println!(
-        "Sparse frame refcount table initialized ({} chunks x {} frames).",
+        "Sparse frame refcount table initialized ({} chunks x {} frames, {} GiB).",
         ROOT_ENTRIES,
-        CHUNK_SIZE
+        CHUNK_SIZE,
+        MAX_PHYSICAL_MEMORY / (1024 * 1024 * 1024)
     );
 }
 
+pub fn self_test() {
+    let high_frame = MAX_PHYSICAL_MEMORY - FRAME_SIZE;
+    if get(high_frame) != 1
+        || try_increment(high_frame).is_err()
+        || get(high_frame) != 2
+        || decrement(high_frame) != 1
+    {
+        panic!("sparse frame refcount high-frame self-test failed");
+    }
+    crate::println!("Sparse frame refcount high-frame self-test passed.");
+}
+
 fn frame_index(phys: usize) -> usize {
-    phys / 4096
+    phys / FRAME_SIZE
 }
 
 pub fn try_increment(phys: usize) -> Result<(), RefcountError> {

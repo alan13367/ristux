@@ -73,7 +73,7 @@ normalize_serial_noise() {
 
 set +e
 (
-  sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
+  sleep "${RISTUX_SMOKE_BOOT_WAIT:-20}"
   send_text "root"
   sleep 1
   printf 'sendkey ret\n'
@@ -152,6 +152,14 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "rustc --version"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
+  send_text "rustc --print target-list"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
   send_text "cargo --version"
   sleep 1
   printf 'sendkey ret\n'
@@ -172,6 +180,10 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep "${RISTUX_SMOKE_RUST_HOST_PROBE_WAIT:-75}"
+  send_text "rustc_metadata_probe --direct"
+  sleep 1
+  printf 'sendkey ret\n'
+  sleep "${RISTUX_SMOKE_RUSTC_DIRECT_WAIT:-240}"
   send_text "pkg info rustc"
   sleep 1
   printf 'sendkey ret\n'
@@ -425,7 +437,7 @@ fi
 
 set +e
 (
-  sleep "${RISTUX_SMOKE_BOOT_WAIT:-12}"
+  sleep "${RISTUX_SMOKE_BOOT_WAIT:-20}"
   send_text "alice"
   sleep 1
   printf 'sendkey ret\n'
@@ -505,6 +517,10 @@ grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --version" "$SERIAL_LOG"
+grep -q "rustc 1.96.0" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
+grep -q "^x86_64-unknown-ristux$" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo --version" "$SERIAL_LOG"
 grep -q "cargo 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: rustdoc --version" "$SERIAL_LOG"
@@ -536,6 +552,10 @@ grep -q "rust_host_probe: clear child tid wake ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: exit group threads ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: synchronization ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: done" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc_metadata_probe --direct" "$SERIAL_LOG"
+grep -q "rustc_metadata_probe: direct status 0" "$SERIAL_LOG"
+grep -Eq "rustc_metadata_probe: direct binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
+grep -q "rustc_metadata_probe: direct binary run ok" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: pkg info rustc" "$SERIAL_LOG"
 grep -q "name: rustc" "$SERIAL_LOG"
 grep -q "  ristux-ld" "$SERIAL_LOG"

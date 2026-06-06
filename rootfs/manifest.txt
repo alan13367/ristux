@@ -92,6 +92,7 @@ file /bin/pty_shell_check ../build/userland/pty_shell_check.elf
 file /bin/pwd ../build/userland/pwd.elf
 file /bin/readlink ../build/userland/readlink.elf
 file /bin/ristux-ld ../build/userland/ristux_ld.elf
+file /usr/lib/rustlib/x86_64-unknown-ristux/bin/ristux-ld ../build/userland/ristux_ld.elf
 file /bin/rust_host_probe ../build/userland/rust_host_probe.elf
 file /bin/rustc_metadata_probe ../build/userland/rustc_metadata_probe.elf
 file /bin/rust_std_probe ../build/userland/rust_std_probe.elf
@@ -230,6 +231,7 @@ package pty_shell_check 0.1.0 /bin/pty_shell_check
 package pwd 0.1.0 /bin/pwd
 package readlink 0.1.0 /bin/readlink
 package ristux-ld 0.3.0-bootstrap /bin/ristux-ld
+package ristux-ld 0.3.0-bootstrap /usr/lib/rustlib/x86_64-unknown-ristux/bin/ristux-ld
 package rm 0.1.0 /bin/rm
 package rust-host-probe 0.1.0 /bin/rust_host_probe deps=rustc,cargo,rustdoc,ristux-ld
 package rustc-metadata-probe 0.1.0 /bin/rustc_metadata_probe deps=rustc,ristux-ld

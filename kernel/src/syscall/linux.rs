@@ -2811,7 +2811,7 @@ fn linux_execve(
     let args = read_user_argv(argv_ptr).map_err(map_user_vector_error)?;
     let env = read_user_envp(envp_ptr).map_err(map_user_vector_error)?;
     let pid = process::current_pid().ok_or(ESRCH)?;
-    let path = process::resolve_current_path(&path).map_err(map_vfs_error)?;
+    let path = resolve_exec_path(&path, &env)?;
     let arg_refs = string_refs(&args)?;
     let env_refs = string_refs(&env)?;
     let info = process::exec_for_user(pid, &path, &arg_refs, &env_refs).map_err(map_exec_error)?;
@@ -2829,6 +2829,44 @@ fn linux_execve(
     // rax (return value) will be overwritten by the iretq epilogue; set it
     // so user code that mistakenly inspects rax after execve sees 0.
     Ok(0)
+}
+
+fn resolve_exec_path(
+    path: &str,
+    env: &[alloc::string::String],
+) -> Result<alloc::string::String, i64> {
+    use alloc::string::String;
+
+    if path.contains('/') {
+        return process::resolve_current_path(path).map_err(map_vfs_error);
+    }
+
+    let search_path = env
+        .iter()
+        .find_map(|entry| entry.strip_prefix("PATH="))
+        .unwrap_or("/bin");
+    for directory in search_path.split(':') {
+        let candidate_len = directory
+            .len()
+            .checked_add(usize::from(!directory.is_empty()))
+            .and_then(|len| len.checked_add(path.len()))
+            .ok_or(ENOMEM)?;
+        let mut candidate = String::new();
+        candidate
+            .try_reserve_exact(candidate_len)
+            .map_err(|_| ENOMEM)?;
+        if !directory.is_empty() {
+            candidate.push_str(directory);
+            candidate.push('/');
+        }
+        candidate.push_str(path);
+
+        let resolved = process::resolve_current_path(&candidate).map_err(map_vfs_error)?;
+        if fs::stat(&resolved).is_ok() {
+            return Ok(resolved);
+        }
+    }
+    Err(ENOENT)
 }
 
 fn string_refs(strings: &[alloc::string::String]) -> Result<Vec<&str>, i64> {

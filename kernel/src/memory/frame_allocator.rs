@@ -1,7 +1,7 @@
 use crate::{multiboot::BootInfo, sync::spinlock::SpinLock};
 
 pub const FRAME_SIZE: usize = 4096;
-const MAX_PHYSICAL_MEMORY: usize = 16 * 1024 * 1024 * 1024;
+pub(crate) const MAX_PHYSICAL_MEMORY: usize = 16 * 1024 * 1024 * 1024;
 const MAX_FRAMES: usize = MAX_PHYSICAL_MEMORY / FRAME_SIZE;
 const BITMAP_WORDS: usize = MAX_FRAMES / 64;
 

@@ -362,6 +362,7 @@ fn check_toolchain_files() -> bool {
         || !exists(b"/bin/cargo")
         || !exists(b"/bin/rustdoc")
         || !exists(b"/bin/ristux-ld")
+        || !exists(b"/usr/lib/rustlib/x86_64-unknown-ristux/bin/ristux-ld")
         || !exists(b"/usr/lib/rustlib/rust-1.96.0-manifest.toml")
         || !exists(b"/usr/lib/rustlib/src/ristux-overlays/README.md")
         || !exists(b"/usr/lib/rustlib/x86_64-unknown-ristux/target.json")
@@ -411,7 +412,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"native_codegen = \"official stage2 Ristux-hosted rustc packaged at /bin/rustc\"",
+            b"native_codegen = \"official stage2 rustc compile, ristux-ld link, and static ELF execution verified\"",
         )
         || !contains(
             &manifest,
@@ -448,6 +449,10 @@ fn check_package_index() -> bool {
         || !contains(&index, b"cargo 1.96.0 /bin/cargo")
         || !contains(&index, b"rustdoc 1.96.0 /bin/rustdoc")
         || !contains(&index, b"ristux-ld 0.3.0-bootstrap /bin/ristux-ld")
+        || !contains(
+            &index,
+            b"ristux-ld 0.3.0-bootstrap /usr/lib/rustlib/x86_64-unknown-ristux/bin/ristux-ld",
+        )
         || !contains(&index, b"rust-host-probe 0.1.0 /bin/rust_host_probe")
         || !contains(
             &index,
