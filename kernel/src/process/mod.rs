@@ -1385,21 +1385,20 @@ impl ProcessTable {
     fn clone_thread(
         &mut self,
         parent: Pid,
+        mut child: Process,
         entry: u64,
         arg: u64,
         stack_top: u64,
         tls: u64,
         clear_child_tid: usize,
-    ) -> Result<Pid, ForkError> {
-        self.processes
-            .try_reserve_exact(1)
-            .map_err(|_| ForkError::OutOfMemory)?;
-        let parent_proc = self
-            .get(parent)
-            .ok_or(ForkError::NoSuchProcess)?
-            .clone_thread()?;
+    ) -> Result<Pid, (ForkError, Process)> {
+        if self.get(parent).is_none() {
+            return Err((ForkError::NoSuchProcess, child));
+        }
+        if self.processes.try_reserve_exact(1).is_err() {
+            return Err((ForkError::OutOfMemory, child));
+        }
         let pid = self.next_pid;
-        let mut child = parent_proc;
         child.pid = pid;
         child.parent = Some(parent);
         child.waiters.clear();
@@ -1420,7 +1419,8 @@ impl ProcessTable {
                 .ensure_user_writable(clear_child_tid, core::mem::size_of::<u32>())
                 .is_err()
             {
-                return Err(ForkError::InvalidProcessState);
+                drop(address_space);
+                return Err((ForkError::InvalidProcessState, child));
             }
             unsafe {
                 *(clear_child_tid as *mut u32) = pid as u32;
@@ -2070,17 +2070,11 @@ impl Process {
         })
     }
 
-    fn clone_thread(&self) -> Result<Self, ForkError> {
+    fn clone_thread_snapshot(&self) -> Result<Self, ForkError> {
         let name = Self::clone_string(&self.name)?;
         let cwd = Self::clone_string(&self.cwd)?;
-        let fds = Self::duplicate_fd_entries(&self.fds)?;
-        let socket_handles = match Self::duplicate_socket_handles(&self.socket_handles) {
-            Ok(socket_handles) => socket_handles,
-            Err(err) => {
-                Self::close_fd_entries(&fds);
-                return Err(err);
-            }
-        };
+        let fds = Self::copy_fd_entries(&self.fds)?;
+        let socket_handles = Self::copy_socket_handles(&self.socket_handles)?;
         Ok(Self {
             pid: self.pid,
             parent: Some(self.pid),
@@ -2122,6 +2116,45 @@ impl Process {
             clear_child_tid: 0,
             fpu_state: fpu::initial_state(),
         })
+    }
+
+    fn copy_fd_entries(entries: &[FdEntry]) -> Result<Vec<FdEntry>, ForkError> {
+        let mut copied = Vec::new();
+        copied
+            .try_reserve_exact(entries.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
+        copied.extend_from_slice(entries);
+        Ok(copied)
+    }
+
+    fn copy_socket_handles(handles: &[usize]) -> Result<Vec<usize>, ForkError> {
+        let mut copied = Vec::new();
+        copied
+            .try_reserve_exact(handles.len())
+            .map_err(|_| ForkError::OutOfMemory)?;
+        copied.extend_from_slice(handles);
+        Ok(copied)
+    }
+
+    fn acquire_thread_resources(&mut self) -> Result<(), ForkError> {
+        let fds = Self::duplicate_fd_entries(&self.fds)?;
+        let socket_handles = match Self::duplicate_socket_handles(&self.socket_handles) {
+            Ok(handles) => handles,
+            Err(err) => {
+                Self::close_fd_entries(&fds);
+                return Err(err);
+            }
+        };
+        self.fds = fds;
+        self.socket_handles = socket_handles;
+        Ok(())
+    }
+
+    fn release_thread_resources(&mut self) {
+        Self::close_fd_entries(&self.fds);
+        Self::close_socket_handle_list(&self.socket_handles);
+        self.fds.clear();
+        self.socket_handles.clear();
     }
 }
 
@@ -2170,7 +2203,22 @@ pub fn clone_thread(
     tls: u64,
     clear_child_tid: usize,
 ) -> Result<Pid, ForkError> {
-    with_table(|table| table.clone_thread(parent, entry, arg, stack_top, tls, clear_child_tid))
+    let mut child = with_table(|table| {
+        table
+            .get(parent)
+            .ok_or(ForkError::NoSuchProcess)?
+            .clone_thread_snapshot()
+    })?;
+    child.acquire_thread_resources()?;
+    match with_table(|table| {
+        table.clone_thread(parent, child, entry, arg, stack_top, tls, clear_child_tid)
+    }) {
+        Ok(pid) => Ok(pid),
+        Err((err, mut child)) => {
+            child.release_thread_resources();
+            Err(err)
+        }
+    }
 }
 
 pub fn set_user_fs_base(pid: Pid, base: u64) -> bool {
