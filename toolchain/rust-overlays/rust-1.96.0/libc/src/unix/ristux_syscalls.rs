@@ -6,6 +6,7 @@ use crate::{
     size_t, ssize_t, stat as stat_t, statfs as statfs_t, timespec, timeval, uid_t, utsname,
     Dl_info,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const NR_READ: usize = 0;
 const NR_WRITE: usize = 1;
@@ -100,11 +101,13 @@ const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
 const EAGAIN: c_int = 11;
 const EBADF: c_int = 9;
 const EINVAL: c_int = 22;
+const EMFILE: c_int = 24;
 const ENOSYS: c_int = 38;
 const ETIMEDOUT: c_int = 110;
 const EAI_NONAME: c_int = -2;
 const DIRENT64_HEADER: usize = 19;
 const DIR_BUFFER_LEN: usize = 4096;
+const MAX_OPEN_DIRS: usize = 16;
 const AT_FDCWD: c_int = -100;
 const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
 const KERNEL_SIGNAL_FLAG_NOCLDSTOP: u32 = 1;
@@ -133,6 +136,14 @@ struct RistuxDir {
     ent: dirent,
 }
 
+impl core::marker::Copy for RistuxDir {}
+
+impl core::clone::Clone for RistuxDir {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 #[repr(C)]
 struct KernelSigAction {
     handler: usize,
@@ -152,19 +163,8 @@ static mut NEXT_PTHREAD_KEY: pthread_key_t = 1;
 static mut PTHREAD_THREAD_IDS: [pid_t; MAX_PTHREAD_THREADS] = [0; MAX_PTHREAD_THREADS];
 static mut PTHREAD_VALUES: [[*const c_void; MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS] =
     [[core::ptr::null(); MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS];
-static mut DIR_STATE: RistuxDir = RistuxDir {
-    fd: -1,
-    pos: 0,
-    len: 0,
-    buf: [0; DIR_BUFFER_LEN],
-    ent: dirent {
-        d_ino: 0,
-        d_off: 0,
-        d_reclen: 0,
-        d_type: 0,
-        d_name: [0; 256],
-    },
-};
+static DIR_LOCK: AtomicBool = AtomicBool::new(false);
+static mut DIR_STATES: [RistuxDir; MAX_OPEN_DIRS] = [RistuxDir::closed(); MAX_OPEN_DIRS];
 
 #[no_mangle]
 pub static mut environ: *const *const c_char = core::ptr::null();
@@ -356,27 +356,74 @@ unsafe fn copy_c_string_unbounded(src: *const c_char, dst: *mut c_char) -> bool 
 }
 
 #[inline]
-unsafe fn dir_state_mut() -> &'static mut RistuxDir {
-    unsafe { &mut *core::ptr::addr_of_mut!(DIR_STATE) }
-}
-
-unsafe fn init_dir_state(fd: c_int) -> *mut crate::DIR {
-    let state = unsafe { dir_state_mut() };
-    if state.fd >= 0 {
-        let _ = unsafe { close(state.fd) };
-    }
-    state.fd = fd;
-    state.pos = 0;
-    state.len = 0;
-    state.buf.fill(0);
-    state.ent = dirent {
+const fn empty_dirent() -> dirent {
+    dirent {
         d_ino: 0,
         d_off: 0,
         d_reclen: 0,
         d_type: 0,
         d_name: [0; 256],
-    };
-    state as *mut RistuxDir as *mut crate::DIR
+    }
+}
+
+impl RistuxDir {
+    const fn closed() -> Self {
+        Self {
+            fd: -1,
+            pos: 0,
+            len: 0,
+            buf: [0; DIR_BUFFER_LEN],
+            ent: empty_dirent(),
+        }
+    }
+}
+
+#[inline]
+fn lock_dir_pool() {
+    while DIR_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+fn unlock_dir_pool() {
+    DIR_LOCK.store(false, Ordering::Release);
+}
+
+unsafe fn dir_state_from_ptr(
+    dirp: *mut crate::DIR,
+) -> core::option::Option<&'static mut RistuxDir> {
+    for index in 0..MAX_OPEN_DIRS {
+        let state = unsafe { core::ptr::addr_of_mut!(DIR_STATES[index]) };
+        if state as *mut crate::DIR == dirp {
+            return core::option::Option::Some(unsafe { &mut *state });
+        }
+    }
+    core::option::Option::None
+}
+
+unsafe fn init_dir_state(fd: c_int) -> *mut crate::DIR {
+    lock_dir_pool();
+    for index in 0..MAX_OPEN_DIRS {
+        let state = unsafe { &mut *core::ptr::addr_of_mut!(DIR_STATES[index]) };
+        if state.fd < 0 {
+            state.fd = fd;
+            state.pos = 0;
+            state.len = 0;
+            state.buf.fill(0);
+            state.ent = empty_dirent();
+            let dirp = state as *mut RistuxDir as *mut crate::DIR;
+            unlock_dir_pool();
+            return dirp;
+        }
+    }
+    unlock_dir_pool();
+    let _ = unsafe { close(fd) };
+    set_errno(EMFILE);
+    core::ptr::null_mut()
 }
 
 unsafe fn pthread_thread_slot() -> core::option::Option<usize> {
@@ -1067,7 +1114,10 @@ pub unsafe extern "C" fn readdir(dirp: *mut crate::DIR) -> *mut dirent {
         set_errno(EINVAL);
         return core::ptr::null_mut();
     }
-    let state = unsafe { dir_state_mut() };
+    let core::option::Option::Some(state) = (unsafe { dir_state_from_ptr(dirp) }) else {
+        set_errno(EBADF);
+        return core::ptr::null_mut();
+    };
     if state.fd < 0 {
         set_errno(EBADF);
         return core::ptr::null_mut();
@@ -1159,8 +1209,14 @@ pub unsafe extern "C" fn closedir(dirp: *mut crate::DIR) -> c_int {
         set_errno(EINVAL);
         return -1;
     }
-    let state = unsafe { dir_state_mut() };
+    lock_dir_pool();
+    let core::option::Option::Some(state) = (unsafe { dir_state_from_ptr(dirp) }) else {
+        unlock_dir_pool();
+        set_errno(EBADF);
+        return -1;
+    };
     if state.fd < 0 {
+        unlock_dir_pool();
         set_errno(EBADF);
         return -1;
     }
@@ -1168,6 +1224,9 @@ pub unsafe extern "C" fn closedir(dirp: *mut crate::DIR) -> c_int {
     state.fd = -1;
     state.pos = 0;
     state.len = 0;
+    state.buf.fill(0);
+    state.ent = empty_dirent();
+    unlock_dir_pool();
     unsafe { close(fd) }
 }
 
@@ -1176,8 +1235,11 @@ pub unsafe extern "C" fn dirfd(dirp: *mut crate::DIR) -> c_int {
     if dirp.is_null() {
         set_errno(EINVAL);
         -1
+    } else if let core::option::Option::Some(state) = unsafe { dir_state_from_ptr(dirp) } {
+        state.fd
     } else {
-        unsafe { dir_state_mut() }.fd
+        set_errno(EBADF);
+        -1
     }
 }
 
@@ -1276,7 +1338,7 @@ fn ristux_clock_syscall_id(clk_id: clockid_t) -> usize {
     match clk_id as c_int {
         // libc currently inherits these constants from the Redox module for
         // target_os = "ristux"; the kernel ABI remains Linux-like.
-        1 => 0, // CLOCK_REALTIME
+        1 => 0,     // CLOCK_REALTIME
         2 | 4 => 1, // CLOCK_PROCESS_CPUTIME_ID and CLOCK_MONOTONIC
         other => other as usize,
     }
@@ -1284,12 +1346,24 @@ fn ristux_clock_syscall_id(clk_id: clockid_t) -> usize {
 
 #[no_mangle]
 pub unsafe extern "C" fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int {
-    cvt_int(unsafe { syscall2(NR_CLOCK_GETTIME, ristux_clock_syscall_id(clk_id), tp as usize) })
+    cvt_int(unsafe {
+        syscall2(
+            NR_CLOCK_GETTIME,
+            ristux_clock_syscall_id(clk_id),
+            tp as usize,
+        )
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn clock_getres(clk_id: clockid_t, tp: *mut timespec) -> c_int {
-    cvt_int(unsafe { syscall2(NR_CLOCK_GETRES, ristux_clock_syscall_id(clk_id), tp as usize) })
+    cvt_int(unsafe {
+        syscall2(
+            NR_CLOCK_GETRES,
+            ristux_clock_syscall_id(clk_id),
+            tp as usize,
+        )
+    })
 }
 
 #[no_mangle]
