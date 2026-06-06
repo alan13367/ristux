@@ -352,7 +352,9 @@ fn exec_and_wait(path: &[u8], args: &[&[u8]]) -> i32 {
         ];
 
         let _ = sys::execve(path_c.as_ptr(), argv.as_ptr(), envp.as_ptr());
-        let _ = write_all(2, b"rustc_metadata_probe: execve /bin/rustc failed\n");
+        let _ = write_all(2, b"rustc_metadata_probe: execve failed: ");
+        let _ = write_all(2, path);
+        let _ = write_all(2, b"\n");
         sys::exit(127);
     }
 
@@ -381,6 +383,9 @@ fn main(_args: &[&[u8]]) -> i32 {
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rs").as_ptr());
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rmeta").as_ptr());
     let _ = sys::unlink(cstr(b"/tmp/rustc-codegen-probe.o").as_ptr());
+    let _ = sys::unlink(cstr(b"/tmp/rustc-native-hello.rs").as_ptr());
+    let _ = sys::unlink(cstr(b"/tmp/rustc-native-link.o").as_ptr());
+    let _ = sys::unlink(cstr(b"/tmp/rustc-native-hello").as_ptr());
 
     if regular_file_size(b"/bin/rustc").unwrap_or(0) < 1024 * 1024 {
         return fail(b"official rustc presence");
@@ -479,6 +484,79 @@ fn main(_args: &[&[u8]]) -> i32 {
         return fail(b"post-object fork");
     }
     line(b"rustc_metadata_probe: post-object fork ok");
+
+    if !write_file(
+        b"/tmp/rustc-native-hello.rs",
+        b"#![no_std]\n#[unsafe(no_mangle)]\npub extern \"C\" fn main() -> i32 { 0 }\n",
+    ) {
+        return fail(b"binary source write");
+    }
+    line(b"rustc_metadata_probe: binary source ready");
+
+    let status = exec_and_wait(
+        b"/bin/rustc",
+        &[
+            b"--crate-name",
+            b"rustc_native_link",
+            b"--crate-type",
+            b"lib",
+            b"--target",
+            b"x86_64-unknown-ristux",
+            b"--sysroot",
+            b"/usr",
+            b"--emit",
+            b"obj",
+            b"/tmp/rustc-native-hello.rs",
+            b"-o",
+            b"/tmp/rustc-native-link.o",
+        ],
+    );
+    status_line(b"link-object", status);
+    let link_object_size = regular_file_size(b"/tmp/rustc-native-link.o").unwrap_or(0);
+    if link_object_size > 0 {
+        let _ = write_all(1, b"rustc_metadata_probe: link-object bytes ");
+        write_usize(link_object_size as usize);
+        let _ = write_all(1, b"\n");
+    }
+    if status != 0 {
+        return fail(b"rustc link object");
+    }
+    if link_object_size == 0 {
+        return fail(b"link object output");
+    }
+    line(b"rustc_metadata_probe: link object compile ok");
+
+    let status = exec_and_wait(
+        b"/bin/ristux-ld",
+        &[
+            b"--ristux-crt0",
+            b"-o",
+            b"/tmp/rustc-native-hello",
+            b"/tmp/rustc-native-link.o",
+        ],
+    );
+    status_line(b"manual-link", status);
+    let binary_size = regular_file_size(b"/tmp/rustc-native-hello").unwrap_or(0);
+    if binary_size > 0 {
+        let _ = write_all(1, b"rustc_metadata_probe: binary bytes ");
+        write_usize(binary_size as usize);
+        let _ = write_all(1, b"\n");
+    }
+    if status != 0 {
+        return fail(b"manual link");
+    }
+    if binary_size == 0 {
+        return fail(b"binary output");
+    }
+    line(b"rustc_metadata_probe: manual link ok");
+
+    let Some(output) = spawn_capture(b"/tmp/rustc-native-hello", b"rustc-native-hello", &[]) else {
+        return fail(b"binary run");
+    };
+    if !output.is_empty() {
+        return fail(b"binary quiet output");
+    }
+    line(b"rustc_metadata_probe: binary run ok");
 
     0
 }

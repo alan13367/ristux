@@ -1202,6 +1202,10 @@ fn is_ignored_wl_flag(arg: &[u8]) -> bool {
     true
 }
 
+fn is_ristux_crt0_flag(arg: &[u8]) -> bool {
+    arg == b"--ristux-crt0"
+}
+
 fn option_value_name(arg: &[u8]) -> Option<&'static str> {
     if arg == b"-L" {
         Some("-L")
@@ -1216,9 +1220,10 @@ fn option_value_name(arg: &[u8]) -> Option<&'static str> {
 
 fn parse_args<'a>(
     args: &'a [&'a [u8]],
-) -> Result<(Vec<&'a [u8]>, &'a [u8], &'a [u8]), &'static str> {
+) -> Result<(Vec<&'a [u8]>, &'a [u8], &'a [u8], bool), &'static str> {
     let mut output = b"a.out".as_slice();
     let mut entry = b"_start".as_slice();
+    let mut include_crt0 = false;
     let mut inputs = Vec::new();
     let mut index = 1usize;
     while index < args.len() {
@@ -1233,6 +1238,8 @@ fn parse_args<'a>(
             entry = *args
                 .get(index)
                 .ok_or("ristux-ld: missing entry symbol after -e")?;
+        } else if is_ristux_crt0_flag(arg) {
+            include_crt0 = true;
         } else if is_ignored_flag(arg) || is_ignored_wl_flag(arg) {
             // rustc emits GNU linker mode flags even for our static-only
             // linker. They do not change the current Ristux output model.
@@ -1255,11 +1262,11 @@ fn parse_args<'a>(
     if inputs.is_empty() {
         return Err("ristux-ld: no input objects");
     }
-    Ok((inputs, output, entry))
+    Ok((inputs, output, entry, include_crt0))
 }
 
 fn run_link(args: &[&[u8]]) -> i32 {
-    let (input_paths, output_path, entry) = match parse_args(args) {
+    let (input_paths, output_path, entry, include_crt0) = match parse_args(args) {
         Ok(parsed) => parsed,
         Err(err) => {
             print_err(err.as_bytes());
@@ -1273,6 +1280,9 @@ fn run_link(args: &[&[u8]]) -> i32 {
             return 1;
         };
         inputs.push(bytes);
+    }
+    if include_crt0 {
+        inputs.insert(0, make_crt0_object());
     }
     let image = match link_objects(inputs, entry) {
         Ok(image) => image,
@@ -1590,7 +1600,10 @@ fn main_inner(args: &[&[u8]]) -> i32 {
         return 0;
     }
     if args.iter().any(|arg| *arg == b"--help" || *arg == b"-h") {
-        let _ = write_all(1, b"usage: ristux-ld [-o OUTPUT] [-e SYMBOL] INPUT.o...\n");
+        let _ = write_all(
+            1,
+            b"usage: ristux-ld [--ristux-crt0] [-o OUTPUT] [-e SYMBOL] INPUT.o...\n",
+        );
         let _ = write_all(
             1,
             b"links ELF64 x86_64 ET_REL objects and archive/rlib members into static Ristux ET_EXEC images\n",
