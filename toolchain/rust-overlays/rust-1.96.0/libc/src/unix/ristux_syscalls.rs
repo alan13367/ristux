@@ -74,6 +74,7 @@ const NR_SETGROUPS: usize = 116;
 const NR_STATFS: usize = 137;
 const NR_FSTATFS: usize = 138;
 const NR_GETTID: usize = 186;
+const NR_FUTEX: usize = 202;
 const NR_GETDENTS64: usize = 217;
 const NR_FADVISE64: usize = 221;
 const NR_CLOCK_GETTIME: usize = 228;
@@ -98,6 +99,8 @@ const NR_GETRANDOM: usize = 318;
 const NR_RISTUX_THREAD_CREATE: usize = 451;
 const SYSCALL_TRAMPOLINE_BASE: usize = 0x4000_0000;
 const SYSCALL_TRAMPOLINE_STRIDE: usize = 0x20;
+const FUTEX_WAIT: usize = 0;
+const FUTEX_PRIVATE_FLAG: usize = 0x80;
 const EAGAIN: c_int = 11;
 const EBADF: c_int = 9;
 const EINVAL: c_int = 22;
@@ -156,13 +159,16 @@ struct KernelSigAction {
 struct PthreadStart {
     start: extern "C" fn(*mut c_void) -> *mut c_void,
     arg: *mut c_void,
+    clear_tid: u32,
 }
 
 static mut ERRNO: c_int = 0;
 static mut NEXT_PTHREAD_KEY: pthread_key_t = 1;
 static mut PTHREAD_THREAD_IDS: [pid_t; MAX_PTHREAD_THREADS] = [0; MAX_PTHREAD_THREADS];
+static mut PTHREAD_CLEAR_TIDS: [usize; MAX_PTHREAD_THREADS] = [0; MAX_PTHREAD_THREADS];
 static mut PTHREAD_VALUES: [[*const c_void; MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS] =
     [[core::ptr::null(); MAX_PTHREAD_KEYS]; MAX_PTHREAD_THREADS];
+static PTHREAD_LOCK: AtomicBool = AtomicBool::new(false);
 static DIR_LOCK: AtomicBool = AtomicBool::new(false);
 static mut DIR_STATES: [RistuxDir; MAX_OPEN_DIRS] = [RistuxDir::closed(); MAX_OPEN_DIRS];
 
@@ -393,6 +399,68 @@ fn unlock_dir_pool() {
     DIR_LOCK.store(false, Ordering::Release);
 }
 
+#[inline]
+fn lock_pthread_pool() {
+    while PTHREAD_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+fn unlock_pthread_pool() {
+    PTHREAD_LOCK.store(false, Ordering::Release);
+}
+
+unsafe fn remember_pthread_clear_tid(tid: pid_t, clear_tid: usize) {
+    lock_pthread_pool();
+    for index in 0..MAX_PTHREAD_THREADS {
+        if unsafe { PTHREAD_THREAD_IDS[index] } == tid
+            || unsafe { PTHREAD_THREAD_IDS[index] } == 0
+        {
+            unsafe {
+                PTHREAD_THREAD_IDS[index] = tid;
+                PTHREAD_CLEAR_TIDS[index] = clear_tid;
+            }
+            unlock_pthread_pool();
+            return;
+        }
+    }
+    unlock_pthread_pool();
+}
+
+unsafe fn lookup_pthread_clear_tid(tid: pid_t) -> usize {
+    lock_pthread_pool();
+    for index in 0..MAX_PTHREAD_THREADS {
+        if unsafe { PTHREAD_THREAD_IDS[index] } == tid {
+            let clear_tid = unsafe { PTHREAD_CLEAR_TIDS[index] };
+            unlock_pthread_pool();
+            return clear_tid;
+        }
+    }
+    unlock_pthread_pool();
+    0
+}
+
+unsafe fn retire_pthread_slot(tid: pid_t) {
+    lock_pthread_pool();
+    for index in 0..MAX_PTHREAD_THREADS {
+        if unsafe { PTHREAD_THREAD_IDS[index] } == tid {
+            unsafe {
+                PTHREAD_THREAD_IDS[index] = 0;
+                PTHREAD_CLEAR_TIDS[index] = 0;
+                for key in 0..MAX_PTHREAD_KEYS {
+                    PTHREAD_VALUES[index][key] = core::ptr::null();
+                }
+            }
+            break;
+        }
+    }
+    unlock_pthread_pool();
+}
+
 unsafe fn dir_state_from_ptr(
     dirp: *mut crate::DIR,
 ) -> core::option::Option<&'static mut RistuxDir> {
@@ -426,7 +494,7 @@ unsafe fn init_dir_state(fd: c_int) -> *mut crate::DIR {
     core::ptr::null_mut()
 }
 
-unsafe fn pthread_thread_slot() -> core::option::Option<usize> {
+unsafe fn pthread_thread_slot_locked() -> core::option::Option<usize> {
     let tid = unsafe { gettid() };
     if tid <= 0 {
         return core::option::Option::None;
@@ -1891,8 +1959,16 @@ pub unsafe extern "C" fn pthread_create(
     let child_stack = start_ptr - core::mem::size_of::<usize>();
     let start_record = start_ptr as *mut PthreadStart;
     unsafe {
-        core::ptr::write(start_record, PthreadStart { start, arg });
+        core::ptr::write(
+            start_record,
+            PthreadStart {
+                start,
+                arg,
+                clear_tid: 0,
+            },
+        );
     }
+    let clear_tid = unsafe { core::ptr::addr_of_mut!((*start_record).clear_tid) } as usize;
 
     let pid = unsafe {
         syscall5(
@@ -1901,7 +1977,7 @@ pub unsafe extern "C" fn pthread_create(
             start_record as usize,
             child_stack,
             0,
-            0,
+            clear_tid,
         )
     };
     if is_errno(pid) {
@@ -1911,6 +1987,7 @@ pub unsafe extern "C" fn pthread_create(
     }
     unsafe {
         *tid = pid as usize as pthread_t;
+        remember_pthread_clear_tid(pid as pid_t, clear_tid);
     }
     0
 }
@@ -1922,10 +1999,37 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, value: *mut *mut c_void
     }
     let mut status = 0;
     let pid = thread as usize as pid_t;
+    let clear_tid = unsafe { lookup_pthread_clear_tid(pid) };
+    if clear_tid != 0 {
+        loop {
+            let current = unsafe { *(clear_tid as *const u32) };
+            if current == 0 {
+                break;
+            }
+            let waited = unsafe {
+                syscall4(
+                    NR_FUTEX,
+                    clear_tid,
+                    FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
+                    current as usize,
+                    0,
+                )
+            };
+            if is_errno(waited) {
+                let errno = (-waited) as c_int;
+                if errno != EAGAIN {
+                    return errno;
+                }
+            }
+        }
+    }
     let waited = unsafe { waitpid(pid, &mut status as *mut c_int, 0) };
     if waited < 0 {
         unsafe { ERRNO }
     } else {
+        unsafe {
+            retire_pthread_slot(pid);
+        }
         if !value.is_null() {
             unsafe {
                 *value = core::ptr::null_mut();
@@ -1969,11 +2073,13 @@ pub unsafe extern "C" fn pthread_key_delete(key: pthread_key_t) -> c_int {
     if key as usize >= MAX_PTHREAD_KEYS {
         return EINVAL;
     }
+    lock_pthread_pool();
     for slot in 0..MAX_PTHREAD_THREADS {
         unsafe {
             PTHREAD_VALUES[slot][key as usize] = core::ptr::null();
         }
     }
+    unlock_pthread_pool();
     0
 }
 
@@ -1982,11 +2088,17 @@ pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void 
     if key as usize >= MAX_PTHREAD_KEYS {
         core::ptr::null_mut()
     } else {
-        let slot = match unsafe { pthread_thread_slot() } {
+        lock_pthread_pool();
+        let slot = match unsafe { pthread_thread_slot_locked() } {
             core::option::Option::Some(slot) => slot,
-            core::option::Option::None => return core::ptr::null_mut(),
+            core::option::Option::None => {
+                unlock_pthread_pool();
+                return core::ptr::null_mut();
+            }
         };
-        unsafe { PTHREAD_VALUES[slot][key as usize] as *mut c_void }
+        let value = unsafe { PTHREAD_VALUES[slot][key as usize] as *mut c_void };
+        unlock_pthread_pool();
+        value
     }
 }
 
@@ -1995,13 +2107,18 @@ pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c
     if key as usize >= MAX_PTHREAD_KEYS {
         return EINVAL;
     }
-    let slot = match unsafe { pthread_thread_slot() } {
+    lock_pthread_pool();
+    let slot = match unsafe { pthread_thread_slot_locked() } {
         core::option::Option::Some(slot) => slot,
-        core::option::Option::None => return EAGAIN,
+        core::option::Option::None => {
+            unlock_pthread_pool();
+            return EAGAIN;
+        }
     };
     unsafe {
         PTHREAD_VALUES[slot][key as usize] = value;
     }
+    unlock_pthread_pool();
     0
 }
 

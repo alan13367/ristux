@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::{
     fs,
     memory::{
-        address_space::{UserProtection, USER_MMAP_END, USER_MMAP_START},
+        address_space::{USER_MMAP_END, USER_MMAP_START, UserProtection},
         frame_allocator::FRAME_SIZE,
     },
     process,
@@ -1670,7 +1670,10 @@ fn linux_futex_wait(
                 return Err(err);
             }
         };
-        if current != expected && !queued {
+        if current != expected {
+            if queued {
+                process::clear_timed_wait(key);
+            }
             return Err(EAGAIN);
         }
 
@@ -1693,6 +1696,9 @@ fn linux_futex_wait(
         if deadline_ms.is_some_and(|deadline| crate::time::uptime_millis() >= deadline) {
             process::clear_timed_wait(key);
             return Err(ETIMEDOUT);
+        }
+        if process::take_timed_wait_wake(key) {
+            return Ok(0);
         }
         block_for_io(frame, deadline_ms)?;
     }
@@ -3501,11 +3507,7 @@ fn linux_readlinkat(dirfd: i32, path_ptr: usize, buf: usize, len: usize) -> Resu
 }
 
 fn validate_readlink_len(len: usize) -> Result<(), i64> {
-    if len == 0 {
-        Err(EINVAL)
-    } else {
-        Ok(())
-    }
+    if len == 0 { Err(EINVAL) } else { Ok(()) }
 }
 
 fn linux_readlink_path(path: &str, buf: usize, len: usize) -> Result<u64, i64> {

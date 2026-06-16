@@ -1,5 +1,6 @@
 /target/
 /build/
 /iso/boot/ristux.elf
+/iso/boot/initrd.bin
 /userland/target/
 .DS_Store

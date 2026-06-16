@@ -210,6 +210,7 @@ pub fn yield_from_syscall(frame: &mut SavedSyscallFrame) -> Option<Pid> {
 
         if let Some(next) = dispatch_local() {
             if Some(next) == self_pid {
+                process::discard_saved_syscall_frame(next);
                 process::set_current(next);
                 return Some(next);
             }

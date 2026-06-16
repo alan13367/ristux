@@ -350,12 +350,11 @@ toolchain bootstrap:
   `/bin/cargo` supports dependency-free local binary packages with `new`,
   `init`, `build`, `check`, and `run`, including debug/release profiles and
   `--manifest-path`; it invokes the installed native rustc and linker directly.
-  New projects use a Ristux no-std executable template by default; `--std`
-  opts into the hosted template while that link path is still experimental.
-  Native package builds currently accept edition 2015 because newer explicit
-  edition modes do not yet complete reliably on the hosted compiler. Registry,
-  Git, workspace, build-script, and dependency resolution support remain future
-  Cargo boundaries.
+  New projects use a Ristux no-std executable template with edition 2024 by
+  default; `--std` opts into the hosted template while that link path is still
+  experimental. Native no-std local Cargo builds support editions 2015, 2018,
+  2021, and 2024. Registry, Git, workspace, build-script, and dependency
+  resolution support remain future Cargo boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

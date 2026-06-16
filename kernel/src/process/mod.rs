@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::fpu,
     fs,
     memory::{
-        address_space::{AddressSpace, UserAccess, UserProtection, USER_MMAP_START},
+        address_space::{AddressSpace, USER_MMAP_START, UserAccess, UserProtection},
         frame_allocator::{self, FRAME_SIZE},
         paging,
     },
@@ -1547,6 +1547,12 @@ impl ProcessTable {
         let mut wake = WakeList::new();
         let parent_pid = self.get(pid).and_then(|p| p.parent);
         let address_space = self.get(pid).map(|p| Arc::clone(&p.address_space));
+        let current_address_space = if was_current {
+            None
+        } else {
+            current_pid()
+                .and_then(|current| self.get(current).map(|p| Arc::clone(&p.address_space)))
+        };
         let waiters = {
             let process = match self.get_mut(pid) {
                 Some(p) => p,
@@ -1559,19 +1565,35 @@ impl ProcessTable {
             }
             if process.clear_child_tid != 0 {
                 let clear_tid = process.clear_child_tid;
-                let mut address_space = process.address_space.lock();
-                if address_space.allows_user(
-                    clear_tid,
-                    core::mem::size_of::<u32>(),
-                    UserAccess::Write,
-                ) && address_space
-                    .ensure_user_writable(clear_tid, core::mem::size_of::<u32>())
-                    .is_ok()
-                {
+                let private_key = {
+                    let mut address_space = process.address_space.lock();
+                    if !address_space.allows_user(
+                        clear_tid,
+                        core::mem::size_of::<u32>(),
+                        UserAccess::Write,
+                    ) || address_space
+                        .ensure_user_writable(clear_tid, core::mem::size_of::<u32>())
+                        .is_err()
+                    {
+                        None
+                    } else {
+                        if !was_current {
+                            address_space.activate();
+                        }
+                        let private_key =
+                            clear_child_tid_wait_key(clear_tid, address_space.p4_phys());
+                        Some(private_key)
+                    }
+                };
+                if let Some(private_key) = private_key {
                     unsafe {
                         *(clear_tid as *mut u32) = 0;
                     }
-                    let private_key = clear_child_tid_wait_key(clear_tid, address_space.p4_phys());
+                    if !was_current {
+                        if let Some(current_address_space) = &current_address_space {
+                            current_address_space.lock().activate();
+                        }
+                    }
                     wake.push_timed_wait_key(private_key, usize::MAX);
                     let shared_key = clear_child_tid_wait_key(clear_tid, 0);
                     if shared_key != private_key {
@@ -3552,16 +3574,18 @@ fn wake_next_timed_waiter(key: u64) -> Option<Pid> {
     let mut guard = PROCESS_TABLE.lock();
     let table = guard.as_mut()?;
     for process in &mut table.processes {
-        let waiting_for_key = matches!(process.timed_wait, Some(wait) if wait.key == key);
-        let blocked_for_io = matches!(
-            process.state,
-            ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
-        );
-        if waiting_for_key && blocked_for_io {
+        let waiting_for_key =
+            matches!(process.timed_wait, Some(wait) if wait.key == key && !wait.woken);
+        if waiting_for_key {
             if let Some(wait) = process.timed_wait.as_mut() {
                 wait.woken = true;
             }
-            process.state = ProcessState::Ready;
+            if matches!(
+                process.state,
+                ProcessState::Blocked(BlockReason::WaitIo | BlockReason::WaitIoUntil(_))
+            ) {
+                process.state = ProcessState::Ready;
+            }
             return Some(process.pid);
         }
     }
@@ -3647,6 +3671,14 @@ pub fn restore_syscall_frame(pid: Pid, frame: &mut SavedSyscallFrame) -> bool {
         }
         false
     })
+}
+
+pub fn discard_saved_syscall_frame(pid: Pid) {
+    with_table(|table| {
+        if let Some(process) = table.get_mut(pid) {
+            process.saved_syscall = None;
+        }
+    });
 }
 
 pub fn kill_current(status: i32) {
