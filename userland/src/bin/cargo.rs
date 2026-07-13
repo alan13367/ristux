@@ -16,11 +16,17 @@ const TARGET: &[u8] = b"x86_64-unknown-ristux";
 const SYSROOT: &[u8] = b"/usr";
 const PANIC_RUNTIME: &[u8] = b"/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib";
 
+struct Dependency {
+    extern_name: Vec<u8>,
+    path: Vec<u8>,
+}
+
 struct Package {
     name: Vec<u8>,
     crate_name: Vec<u8>,
     edition: Vec<u8>,
     manifest_dir: Vec<u8>,
+    dependencies: Vec<Dependency>,
 }
 
 fn write_all(fd: i32, mut bytes: &[u8]) -> bool {
@@ -73,6 +79,37 @@ fn parse_string(value: &[u8]) -> Option<&[u8]> {
         return None;
     }
     Some(value)
+}
+
+fn parse_path_dependency(value: &[u8]) -> Option<Vec<u8>> {
+    let value = trim_ascii(value);
+    if !value.starts_with(b"{") || !value.ends_with(b"}") {
+        return None;
+    }
+    for field in value[1..value.len() - 1].split(|byte| *byte == b',') {
+        let field = trim_ascii(field);
+        let equals = field.iter().position(|byte| *byte == b'=')?;
+        if trim_ascii(&field[..equals]) == b"path" {
+            return parse_string(&field[equals + 1..]).map(|path| path.to_vec());
+        }
+    }
+    None
+}
+
+fn parse_string_array(value: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let value = trim_ascii(value);
+    if !value.starts_with(b"[") || !value.ends_with(b"]") {
+        return None;
+    }
+    let mut values = Vec::new();
+    for entry in value[1..value.len() - 1].split(|byte| *byte == b',') {
+        let entry = trim_ascii(entry);
+        if entry.is_empty() {
+            continue;
+        }
+        values.push(parse_string(entry)?.to_vec());
+    }
+    Some(values)
 }
 
 fn read_file(path: &[u8]) -> Option<Vec<u8>> {
@@ -206,7 +243,7 @@ fn parse_manifest(path: &[u8]) -> Result<Package, &'static [u8]> {
     let mut section: &[u8] = b"";
     let mut name = None;
     let mut edition = b"2015".to_vec();
-    let mut dependency_entries = false;
+    let mut dependencies = Vec::new();
 
     for raw_line in bytes.split(|byte| *byte == b'\n') {
         let line = trim_ascii(strip_comment(raw_line));
@@ -228,8 +265,19 @@ fn parse_manifest(path: &[u8]) -> Result<Package, &'static [u8]> {
             edition = parse_string(value)
                 .ok_or(b"package.edition must be a quoted string".as_slice())?
                 .to_vec();
-        } else if section == b"dependencies" || section.starts_with(b"dependencies.") {
-            dependency_entries = true;
+        } else if section == b"dependencies" {
+            if !valid_package_name(key) {
+                return Err(b"dependency name contains unsupported characters");
+            }
+            let path = parse_path_dependency(value).ok_or(
+                b"only path dependencies like { path = \"../library\" } are supported".as_slice(),
+            )?;
+            dependencies.push(Dependency {
+                extern_name: crate_name(key),
+                path,
+            });
+        } else if section.starts_with(b"dependencies.") {
+            return Err(b"dependency tables are not supported; use an inline path dependency");
         }
     }
 
@@ -240,16 +288,64 @@ fn parse_manifest(path: &[u8]) -> Result<Package, &'static [u8]> {
     if !matches!(edition.as_slice(), b"2015" | b"2018" | b"2021" | b"2024") {
         return Err(b"package.edition must be 2015, 2018, 2021, or 2024");
     }
-    if dependency_entries {
-        return Err(b"dependencies are not supported by the local Cargo bootstrap yet");
-    }
-
     Ok(Package {
         crate_name: crate_name(&name),
         name,
         edition,
         manifest_dir: dirname(path),
+        dependencies,
     })
+}
+
+fn parse_workspace_members(path: &[u8]) -> Result<Option<Vec<Vec<u8>>>, &'static [u8]> {
+    let bytes = read_file(path).ok_or(b"cannot read Cargo.toml".as_slice())?;
+    let mut section: &[u8] = b"";
+    for raw_line in bytes.split(|byte| *byte == b'\n') {
+        let line = trim_ascii(strip_comment(raw_line));
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with(b"[") && line.ends_with(b"]") {
+            section = trim_ascii(&line[1..line.len() - 1]);
+            continue;
+        }
+        let Some(equals) = line.iter().position(|byte| *byte == b'=') else {
+            continue;
+        };
+        if section == b"workspace" && trim_ascii(&line[..equals]) == b"members" {
+            let members = parse_string_array(&line[equals + 1..])
+                .ok_or(b"workspace.members must be an inline array of quoted paths".as_slice())?;
+            if members.is_empty() {
+                return Err(b"workspace.members cannot be empty");
+            }
+            return Ok(Some(members));
+        }
+    }
+    Ok(None)
+}
+
+fn workspace_packages(manifest: &[u8], include_root: bool) -> Result<Vec<Package>, &'static [u8]> {
+    let members = parse_workspace_members(manifest)?
+        .ok_or(b"Cargo.toml does not define workspace.members".as_slice())?;
+    let root = dirname(manifest);
+    let mut packages = Vec::new();
+    if include_root {
+        packages.push(parse_manifest(manifest)?);
+    }
+    for member in members {
+        if member.is_empty()
+            || member.starts_with(b"/")
+            || member == b".."
+            || member.starts_with(b"../")
+            || member.ends_with(b"/..")
+            || member.windows(4).any(|window| window == b"/../")
+        {
+            return Err(b"workspace member must be a relative child path");
+        }
+        let member_manifest = join(&join(&root, &member), b"Cargo.toml");
+        packages.push(parse_manifest(&member_manifest)?);
+    }
+    Ok(packages)
 }
 
 fn status_code(status: i32) -> i32 {
@@ -306,6 +402,108 @@ fn print_error(message: &[u8]) -> i32 {
     1
 }
 
+struct ExternalArtifact {
+    name: Vec<u8>,
+    path: Vec<u8>,
+}
+
+fn dependency_manifest(package: &Package, dependency: &Dependency) -> Vec<u8> {
+    join(
+        &join(&package.manifest_dir, &dependency.path),
+        b"Cargo.toml",
+    )
+}
+
+fn append_extern_args(args: &mut Vec<Vec<u8>>, artifacts: &[ExternalArtifact]) {
+    for artifact in artifacts {
+        let mut value = artifact.name.clone();
+        value.push(b'=');
+        value.extend_from_slice(&artifact.path);
+        args.push(b"--extern".to_vec());
+        args.push(value);
+    }
+}
+
+fn rustc_owned(args: &[Vec<u8>]) -> i32 {
+    let refs: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+    spawn(b"/bin/rustc", b"rustc", &refs)
+}
+
+fn build_library(
+    package: &Package,
+    release: bool,
+    quiet: bool,
+    depth: usize,
+) -> Result<Vec<u8>, i32> {
+    if depth > 16 {
+        return Err(print_error(b"path dependency graph is too deep or cyclic"));
+    }
+    let source = join(&package.manifest_dir, b"src/lib.rs");
+    if !path_exists(&source) {
+        return Err(print_error(b"path dependency is missing src/lib.rs"));
+    }
+    let artifacts = build_dependencies(package, release, quiet, depth + 1)?;
+    let profile: &[u8] = if release { b"release" } else { b"debug" };
+    let deps_dir = join(
+        &join(&package.manifest_dir, b"target"),
+        &join(profile, b"deps"),
+    );
+    if !ensure_dir(&deps_dir) {
+        return Err(print_error(b"cannot create dependency target directory"));
+    }
+    let mut filename = b"lib".to_vec();
+    filename.extend_from_slice(&package.crate_name);
+    filename.extend_from_slice(b".rlib");
+    let output = join(&deps_dir, &filename);
+
+    if !quiet {
+        let _ = write_all(1, b"   Compiling ");
+        let _ = write_all(1, &package.name);
+        let _ = write_all(1, b" v0.1.0\n");
+    }
+    let mut args = vec![
+        b"--crate-name".to_vec(),
+        package.crate_name.clone(),
+        b"--crate-type".to_vec(),
+        b"rlib".to_vec(),
+        b"--edition".to_vec(),
+        package.edition.clone(),
+        b"--target".to_vec(),
+        TARGET.to_vec(),
+        b"--sysroot".to_vec(),
+        SYSROOT.to_vec(),
+    ];
+    if release {
+        args.extend_from_slice(&[b"-C".to_vec(), b"opt-level=3".to_vec()]);
+    }
+    append_extern_args(&mut args, &artifacts);
+    args.extend_from_slice(&[source, b"-o".to_vec(), output.clone()]);
+    let status = rustc_owned(&args);
+    if status != 0 {
+        return Err(status);
+    }
+    Ok(output)
+}
+
+fn build_dependencies(
+    package: &Package,
+    release: bool,
+    quiet: bool,
+    depth: usize,
+) -> Result<Vec<ExternalArtifact>, i32> {
+    let mut artifacts = Vec::new();
+    for dependency in &package.dependencies {
+        let manifest = dependency_manifest(package, dependency);
+        let dependency_package = parse_manifest(&manifest).map_err(print_error)?;
+        let path = build_library(&dependency_package, release, quiet, depth)?;
+        artifacts.push(ExternalArtifact {
+            name: dependency.extern_name.clone(),
+            path,
+        });
+    }
+    Ok(artifacts)
+}
+
 fn build_package(
     package: &Package,
     release: bool,
@@ -314,7 +512,20 @@ fn build_package(
 ) -> Result<Vec<u8>, i32> {
     let source = join(&package.manifest_dir, b"src/main.rs");
     if !path_exists(&source) {
-        return Err(print_error(b"src/main.rs does not exist"));
+        let library = join(&package.manifest_dir, b"src/lib.rs");
+        if !path_exists(&library) {
+            return Err(print_error(
+                b"package has neither src/main.rs nor src/lib.rs",
+            ));
+        }
+        let output = build_library(package, release, quiet, 0)?;
+        if !quiet {
+            let profile: &[u8] = if release { b"release" } else { b"debug" };
+            let _ = write_all(1, b"    Finished ");
+            let _ = write_all(1, profile);
+            let _ = write_all(1, b" profile\n");
+        }
+        return Ok(output);
     }
     let source_bytes = read_file(&source).ok_or_else(|| print_error(b"cannot read src/main.rs"))?;
     let uses_ristux_panic = source_bytes
@@ -323,14 +534,13 @@ fn build_package(
     if uses_ristux_panic && !path_exists(PANIC_RUNTIME) {
         return Err(print_error(b"Ristux panic runtime is not installed"));
     }
+    let artifacts = build_dependencies(package, release, quiet, 0)?;
 
     let profile: &[u8] = if release { b"release" } else { b"debug" };
-    let target_dir = join(&package.manifest_dir, b"target");
-    let profile_dir = join(&target_dir, profile);
+    let profile_dir = join(&join(&package.manifest_dir, b"target"), profile);
     if !ensure_dir(&profile_dir) {
         return Err(print_error(b"cannot create target directory"));
     }
-
     let output = if check {
         let deps = join(&profile_dir, b"deps");
         if !ensure_dir(&deps) {
@@ -348,31 +558,32 @@ fn build_package(
         let _ = write_all(1, &package.name);
         let _ = write_all(1, b" v0.1.0\n");
     }
-
-    let mut args: Vec<&[u8]> = vec![
-        b"--crate-name",
-        &package.crate_name,
-        b"--edition",
-        &package.edition,
-        b"--target",
-        TARGET,
-        b"--sysroot",
-        SYSROOT,
+    let mut args = vec![
+        b"--crate-name".to_vec(),
+        package.crate_name.clone(),
+        b"--edition".to_vec(),
+        package.edition.clone(),
+        b"--target".to_vec(),
+        TARGET.to_vec(),
+        b"--sysroot".to_vec(),
+        SYSROOT.to_vec(),
     ];
     if check {
-        args.extend_from_slice(&[b"--emit", b"metadata"]);
+        args.extend_from_slice(&[b"--emit".to_vec(), b"metadata".to_vec()]);
     } else if release {
-        args.extend_from_slice(&[b"-C", b"opt-level=3"]);
+        args.extend_from_slice(&[b"-C".to_vec(), b"opt-level=3".to_vec()]);
     }
     if uses_ristux_panic {
-        args.extend_from_slice(&[
-            b"--extern",
-            b"ristux_panic=/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib",
-        ]);
+        args.push(b"--extern".to_vec());
+        args.push(
+            b"ristux_panic=/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib"
+                .to_vec(),
+        );
     }
-    args.extend_from_slice(&[source.as_slice(), b"-o", output.as_slice()]);
+    append_extern_args(&mut args, &artifacts);
+    args.extend_from_slice(&[source, b"-o".to_vec(), output.clone()]);
 
-    let status = spawn(b"/bin/rustc", b"rustc", &args);
+    let status = rustc_owned(&args);
     if status != 0 {
         return Err(status);
     }
@@ -388,6 +599,7 @@ fn create_project(
     path: &[u8],
     requested_name: Option<&[u8]>,
     no_std: bool,
+    library: bool,
     allow_existing: bool,
 ) -> i32 {
     let name_path = if path == b"." {
@@ -424,15 +636,22 @@ fn create_project(
         return print_error(b"cannot write Cargo.toml");
     }
 
-    let source = if no_std {
+    let source = if library && no_std {
+        b"#![no_std]\n\npub fn value() -> usize { 42 }\n".as_slice()
+    } else if library {
+        b"pub fn value() -> usize { 42 }\n".as_slice()
+    } else if no_std {
         b"#![no_std]\n#![no_main]\n\nextern crate ristux_panic;\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn main() -> i32 { 0 }\n".as_slice()
     } else {
         b"fn main() {\n    println!(\"Hello, world!\");\n}\n".as_slice()
     };
-    if !write_file(&join(&source_dir, b"main.rs"), source) {
-        return print_error(b"cannot write src/main.rs");
+    let source_name: &[u8] = if library { b"lib.rs" } else { b"main.rs" };
+    if !write_file(&join(&source_dir, source_name), source) {
+        return print_error(b"cannot write project source");
     }
-    let _ = write_all(1, b"     Created binary package `");
+    let _ = write_all(1, b"     Created ");
+    let _ = write_all(1, if library { b"library" } else { b"binary" });
+    let _ = write_all(1, b" package `");
     let _ = write_all(1, name);
     let _ = write_all(1, b"`\n");
     0
@@ -445,7 +664,7 @@ fn usage() {
     );
     let _ = write_all(
         1,
-        b"local packages without dependencies are supported; registry and Git dependencies are pending\n",
+        b"local packages, explicit workspaces, and recursive path dependencies are supported; registry and Git dependencies are pending\n",
     );
 }
 
@@ -468,6 +687,7 @@ fn main(args: &[&[u8]]) -> i32 {
         };
         let mut name = None;
         let mut no_std = true;
+        let mut library = false;
         let mut index = 2usize;
         while let Some(arg) = args.get(index) {
             if *arg == b"--name" {
@@ -482,6 +702,12 @@ fn main(args: &[&[u8]]) -> i32 {
             } else if *arg == b"--std" {
                 no_std = false;
                 index += 1;
+            } else if *arg == b"--lib" {
+                library = true;
+                index += 1;
+            } else if *arg == b"--bin" {
+                library = false;
+                index += 1;
             } else if arg.starts_with(b"-") {
                 return print_error(b"unsupported project creation option");
             } else if command == b"new" && path.is_empty() {
@@ -494,7 +720,7 @@ fn main(args: &[&[u8]]) -> i32 {
         if path.is_empty() {
             return print_error(b"cargo new requires a path");
         }
-        return create_project(path, name, no_std, command == b"init");
+        return create_project(path, name, no_std, library, command == b"init");
     }
 
     if !matches!(command, b"build" | b"check" | b"run") {
@@ -504,6 +730,8 @@ fn main(args: &[&[u8]]) -> i32 {
     let mut manifest = b"Cargo.toml".to_vec();
     let mut release = false;
     let mut quiet = false;
+    let mut workspace = false;
+    let mut selected_package: Option<Vec<u8>> = None;
     let mut run_args: Vec<&[u8]> = Vec::new();
     let mut index = 2usize;
     while let Some(arg) = args.get(index) {
@@ -519,6 +747,15 @@ fn main(args: &[&[u8]]) -> i32 {
         } else if *arg == b"--quiet" || *arg == b"-q" {
             quiet = true;
             index += 1;
+        } else if *arg == b"--workspace" {
+            workspace = true;
+            index += 1;
+        } else if *arg == b"--package" || *arg == b"-p" {
+            let Some(value) = args.get(index + 1) else {
+                return print_error(b"--package requires a value");
+            };
+            selected_package = Some(value.to_vec());
+            index += 2;
         } else if *arg == b"--target" {
             let Some(value) = args.get(index + 1) else {
                 return print_error(b"--target requires a value");
@@ -535,17 +772,59 @@ fn main(args: &[&[u8]]) -> i32 {
         }
     }
 
-    let package = match parse_manifest(&manifest) {
-        Ok(package) => package,
+    let root_package = parse_manifest(&manifest);
+    let has_workspace = match parse_workspace_members(&manifest) {
+        Ok(members) => members.is_some(),
         Err(message) => return print_error(message),
     };
-    let output = match build_package(&package, release, command == b"check", quiet) {
-        Ok(output) => output,
-        Err(status) => return status,
+    let mut packages = if workspace || (root_package.is_err() && has_workspace) {
+        match workspace_packages(&manifest, root_package.is_ok()) {
+            Ok(packages) => packages,
+            Err(message) => return print_error(message),
+        }
+    } else {
+        match root_package {
+            Ok(package) => vec![package],
+            Err(message) => return print_error(message),
+        }
     };
+    if let Some(name) = selected_package {
+        packages.retain(|package| package.name == name);
+        if packages.is_empty() {
+            return print_error(b"selected package is not a workspace member");
+        }
+    }
+    if command == b"run" && packages.len() != 1 {
+        return print_error(b"cargo run in a workspace requires --package <name>");
+    }
+
+    let package_count = packages.len();
+    let mut run_package = None;
+    let mut run_output = None;
+    for package in packages {
+        if command == b"run" && !path_exists(&join(&package.manifest_dir, b"src/main.rs")) {
+            return print_error(b"cargo run requires a binary target");
+        }
+        let output = match build_package(&package, release, command == b"check", quiet) {
+            Ok(output) => output,
+            Err(status) => return status,
+        };
+        if command == b"run" {
+            run_output = Some(output);
+            run_package = Some(package);
+        }
+    }
+    if package_count > 1 && !quiet {
+        let profile: &[u8] = if release { b"release" } else { b"debug" };
+        let _ = write_all(1, b"    Finished workspace ");
+        let _ = write_all(1, profile);
+        let _ = write_all(1, b" profile\n");
+    }
     if command != b"run" {
         return 0;
     }
+    let package = run_package.expect("one run package");
+    let output = run_output.expect("one run output");
     if !quiet {
         let _ = write_all(1, b"     Running `");
         let _ = write_all(1, &output);

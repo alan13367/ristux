@@ -777,6 +777,16 @@ for crate_dir in sorted((root / "vendor").glob("getrandom-*")):
         if new_text != text:
             toml.write_text(new_text)
             changed.append(toml_name)
+    legacy_lib_rs = crate_dir / "src/lib.rs"
+    if legacy_lib_rs.exists():
+        text = legacy_lib_rs.read_text()
+        new_text = text.replace(
+            'target_os = "haiku", target_os = "redox", target_os = "nto", target_os = "aix"',
+            'target_os = "haiku", target_os = "redox", target_os = "ristux", target_os = "nto", target_os = "aix"',
+        )
+        if new_text != text:
+            legacy_lib_rs.write_text(new_text)
+            changed.append("src/lib.rs")
     backends_rs = crate_dir / "src/backends.rs"
     if backends_rs.exists():
         text = backends_rs.read_text()

@@ -505,9 +505,118 @@ fn run_direct_probe() -> i32 {
     0
 }
 
+fn run_hosted_probe() -> i32 {
+    let source_path = b"/tmp/rustc-hosted-probe.rs";
+    let output_path = b"/tmp/rustc-hosted-probe";
+    let _ = sys::unlink(cstr(source_path).as_ptr());
+    let _ = sys::unlink(cstr(output_path).as_ptr());
+
+    if !write_file(
+        source_path,
+        b"fn main() { println!(\"hello from native Ristux std\"); }\n",
+    ) {
+        return fail(b"hosted source write");
+    }
+    line(b"rustc_metadata_probe: hosted source ready");
+
+    let Some(status) = exec_and_monitor(
+        b"/bin/rustc",
+        &[
+            b"--crate-name",
+            b"ristux_hosted_probe",
+            b"--edition",
+            b"2024",
+            b"--target",
+            b"x86_64-unknown-ristux",
+            b"--sysroot",
+            b"/usr",
+            source_path,
+            b"-o",
+            output_path,
+        ],
+        output_path,
+    ) else {
+        return fail(b"hosted rustc monitor");
+    };
+    status_line(b"hosted", status);
+    if status != 0 {
+        return fail(b"hosted rustc");
+    }
+
+    let output_size = regular_file_size(output_path).unwrap_or(0);
+    value_line(b"hosted binary-bytes", output_size as usize);
+    if output_size == 0 {
+        return fail(b"hosted binary output");
+    }
+
+    let Some(output) = spawn_capture(output_path, b"rustc-hosted-probe", &[]) else {
+        return fail(b"hosted binary run");
+    };
+    if !contains(&output, b"hello from native Ristux std\n") {
+        let _ = write_all(2, &output);
+        return fail(b"hosted binary output");
+    }
+    line(b"rustc_metadata_probe: hosted binary run ok");
+    0
+}
+
+fn run_thread_codegen_probe() -> i32 {
+    let source_path = b"/tmp/rustc-thread-codegen.rs";
+    let output_path = b"/tmp/rustc-thread-codegen.o";
+    let _ = sys::unlink(cstr(source_path).as_ptr());
+    let _ = sys::unlink(cstr(output_path).as_ptr());
+    if !write_file(
+        source_path,
+        b"use std::thread;\npub fn threaded_value() -> usize { thread::spawn(|| 42usize).join().unwrap() }\n",
+    ) {
+        return fail(b"thread codegen source write");
+    }
+    line(b"rustc_metadata_probe: thread codegen source ready");
+    let Some(status) = exec_and_monitor(
+        b"/bin/rustc",
+        &[
+            b"--crate-name",
+            b"ristux_thread_codegen_probe",
+            b"--crate-type",
+            b"lib",
+            b"--edition",
+            b"2024",
+            b"--target",
+            b"x86_64-unknown-ristux",
+            b"--sysroot",
+            b"/usr",
+            b"--emit",
+            b"obj",
+            source_path,
+            b"-o",
+            output_path,
+        ],
+        output_path,
+    ) else {
+        return fail(b"thread codegen rustc monitor");
+    };
+    status_line(b"thread codegen", status);
+    if status != 0 {
+        return fail(b"thread codegen rustc");
+    }
+    let output_size = regular_file_size(output_path).unwrap_or(0);
+    value_line(b"thread codegen object-bytes", output_size as usize);
+    if output_size == 0 {
+        return fail(b"thread codegen object output");
+    }
+    line(b"rustc_metadata_probe: thread codegen ok");
+    0
+}
+
 fn main(args: &[&[u8]]) -> i32 {
     if args.iter().any(|arg| *arg == b"--direct") {
         return run_direct_probe();
+    }
+    if args.iter().any(|arg| *arg == b"--hosted") {
+        return run_hosted_probe();
+    }
+    if args.iter().any(|arg| *arg == b"--thread-codegen") {
+        return run_thread_codegen_probe();
     }
 
     let _ = sys::unlink(cstr(b"/tmp/rustc-metadata-probe.rs").as_ptr());

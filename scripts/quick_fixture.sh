@@ -13,6 +13,7 @@ BOOT_WAIT="${RISTUX_QUICK_BOOT_WAIT:-20}"
 KEY_DELAY="${RISTUX_QUICK_KEY_DELAY:-0.01}"
 COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-4}"
 TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-120}"
+EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-900}"
 REBUILD="${RISTUX_QUICK_REBUILD:-1}"
 
 if [[ -z "$QEMU_FLAGS" ]]; then
@@ -1021,6 +1022,100 @@ case "$SCENARIO" in
       "^cargo-local-ok$"
     )
     ;;
+  rust-native-std)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-2200}"
+    EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-1900}"
+    COMMANDS=(
+      "rustc_metadata_probe --hosted"
+      "__expect rustc_metadata_probe: hosted binary run ok"
+    )
+    EXPECTS=(
+      "^rustc_metadata_probe: hosted source ready$"
+      "^rustc_metadata_probe: hosted status 0$"
+      "^rustc_metadata_probe: hosted binary-bytes [1-9][0-9]*$"
+      "^rustc_metadata_probe: hosted binary run ok$"
+    )
+    ;;
+  rust-thread-codegen)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-2200}"
+    EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-1900}"
+    COMMANDS=(
+      "rustc_metadata_probe --thread-codegen"
+      "__expect rustc_metadata_probe: thread codegen ok"
+    )
+    EXPECTS=(
+      "^rustc_metadata_probe: thread codegen source ready$"
+      "^rustc_metadata_probe: thread codegen status 0$"
+      "^rustc_metadata_probe: thread codegen object-bytes [1-9][0-9]*$"
+      "^rustc_metadata_probe: thread codegen ok$"
+    )
+    ;;
+  cargo-std)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-2200}"
+    EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-1900}"
+    COMMANDS=(
+      "cargo new --std /tmp/cargo-std"
+      "cargo run --manifest-path /tmp/cargo-std/Cargo.toml"
+      "__expect Hello, world!"
+    )
+    EXPECTS=(
+      '^     Created binary package `cargo-std`$'
+      "^   Compiling cargo-std v0\.1\.0$"
+      "^    Finished debug profile$"
+      '^     Running `/tmp/cargo-std/target/debug/cargo-std`$'
+      "^Hello, world!$"
+    )
+    ;;
+  cargo-path)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-4000}"
+    EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-3600}"
+    COMMANDS=(
+      "cargo new --lib /tmp/path-lib"
+      "cargo new /tmp/path-app"
+      "echo 'path-lib = { path = \"../path-lib\" }' >> /tmp/path-app/Cargo.toml"
+      "cargo run --manifest-path /tmp/path-app/Cargo.toml"
+      '__expect Running `/tmp/path-app/target/debug/path-app`'
+      "echo cargo-path-ok"
+    )
+    EXPECTS=(
+      '^     Created library package `path-lib`$'
+      '^     Created binary package `path-app`$'
+      '^   Compiling path-lib v0\.1\.0$'
+      '^   Compiling path-app v0\.1\.0$'
+      '^    Finished debug profile$'
+      '^     Running `/tmp/path-app/target/debug/path-app`$'
+      '^cargo-path-ok$'
+    )
+    ;;
+  cargo-workspace)
+    COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
+    TIMEOUT_SECONDS="${RISTUX_QUICK_TIMEOUT:-4000}"
+    EXPECT_TIMEOUT="${RISTUX_QUICK_EXPECT_TIMEOUT:-3600}"
+    COMMANDS=(
+      "mkdir -p /tmp/cargo-workspace"
+      "cargo new --lib /tmp/cargo-workspace/shared"
+      "cargo new /tmp/cargo-workspace/app"
+      "echo '[workspace]' > /tmp/cargo-workspace/Cargo.toml"
+      "echo 'members = [\"shared\", \"app\"]' >> /tmp/cargo-workspace/Cargo.toml"
+      "cargo build --workspace --manifest-path /tmp/cargo-workspace/Cargo.toml"
+      "__expect Finished workspace debug profile"
+      "/tmp/cargo-workspace/app/target/debug/app"
+      "echo cargo-workspace-ok"
+    )
+    EXPECTS=(
+      '^     Created library package `shared`$'
+      '^     Created binary package `app`$'
+      '^   Compiling shared v0\.1\.0$'
+      '^   Compiling app v0\.1\.0$'
+      '^    Finished workspace debug profile$'
+      '^TTY canonical line ready: /tmp/cargo-workspace/app/target/debug/app$'
+      '^cargo-workspace-ok$'
+    )
+    ;;
   rust-std)
     COMMAND_WAIT="${RISTUX_QUICK_COMMAND_WAIT:-2}"
     COMMANDS=(
@@ -1030,7 +1125,7 @@ case "$SCENARIO" in
     )
     EXPECTS=(
       "TTY canonical line ready: rust_std_probe"
-      "^hello from Ristux std$"
+      "^hello from Ristux std thread 42$"
       "^name: rust-std-probe$"
       "^version: 0\\.1\\.0$"
       "^  rustc$"
@@ -2891,6 +2986,21 @@ send_text() {
   done
 }
 
+wait_for_serial() {
+  local pattern="$1"
+  local timeout="$EXPECT_TIMEOUT"
+  local elapsed=0
+  while (( elapsed < timeout * 10 )); do
+    if [[ -f "$SERIAL_LOG" ]] && grep -Fq "$pattern" "$SERIAL_LOG"; then
+      return 0
+    fi
+    sleep 0.1
+    ((elapsed += 1))
+  done
+  echo "quick_fixture: timed out waiting for serial text: $pattern" >&2
+  return 1
+}
+
 send_command() {
   local command="$1"
   case "$command" in
@@ -2902,6 +3012,10 @@ send_command() {
       ;;
     "__wait "*)
       sleep "${command#__wait }"
+      return
+      ;;
+    "__expect "*)
+      wait_for_serial "${command#__expect }"
       return
       ;;
     *)

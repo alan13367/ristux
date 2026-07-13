@@ -35,6 +35,21 @@ QEMU_ARGS+=(
   -device "virtio-blk-pci,drive=hd0"
 )
 
+wait_for_serial() {
+  local pattern="$1"
+  local timeout="$2"
+  local elapsed=0
+  while (( elapsed < timeout * 10 )); do
+    if [[ -f "$SERIAL_LOG" ]] && grep -Eq "$pattern" "$SERIAL_LOG"; then
+      return 0
+    fi
+    command sleep 0.1
+    ((elapsed += 1))
+  done
+  echo "smoke_test: timed out waiting for serial pattern: $pattern" >&2
+  return 1
+}
+
 send_text() {
   local text="$1"
   local i ch
@@ -60,7 +75,7 @@ send_text() {
       '~') printf 'sendkey alt-n\n' ;;
       *) echo "smoke_test: unsupported key '$ch'" >&2; exit 1 ;;
     esac
-    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.04}"
+    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.01}"
   done
 }
 
@@ -155,11 +170,11 @@ set +e
   send_text "rustc --version"
   sleep 1
   printf 'sendkey ret\n'
-  sleep "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
+  wait_for_serial 'rustc 1\.96\.0' "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
   send_text "rustc --print target-list"
   sleep 1
   printf 'sendkey ret\n'
-  sleep "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
+  wait_for_serial 'x86_64-unknown-ristux' "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
   send_text "cargo --version"
   sleep 1
   printf 'sendkey ret\n'
@@ -179,11 +194,15 @@ set +e
   send_text "rust_host_probe"
   sleep 1
   printf 'sendkey ret\n'
-  sleep "${RISTUX_SMOKE_RUST_HOST_PROBE_WAIT:-75}"
+  wait_for_serial 'rust_host_probe: done' "${RISTUX_SMOKE_RUST_HOST_PROBE_WAIT:-75}"
   send_text "rustc_metadata_probe --direct"
   sleep 1
   printf 'sendkey ret\n'
-  sleep "${RISTUX_SMOKE_RUSTC_DIRECT_WAIT:-240}"
+  wait_for_serial 'rustc_metadata_probe: direct binary run ok' "${RISTUX_SMOKE_RUSTC_DIRECT_WAIT:-900}"
+  send_text "rustc_metadata_probe --hosted"
+  sleep 1
+  printf 'sendkey ret\n'
+  wait_for_serial 'rustc_metadata_probe: hosted binary run ok' "${RISTUX_SMOKE_RUSTC_HOSTED_WAIT:-1900}"
   send_text "cargo new /tmp/cargo-smoke"
   sleep 1
   printf 'sendkey ret\n'
@@ -207,7 +226,7 @@ set +e
   send_text "cargo run"
   sleep 1
   printf 'sendkey ret\n'
-  sleep "${RISTUX_SMOKE_CARGO_LOCAL_WAIT:-240}"
+  wait_for_serial 'Running `target/debug/cargo-smoke`' "${RISTUX_SMOKE_CARGO_LOCAL_WAIT:-900}"
   send_text "echo cargo-smoke-ok"
   sleep 1
   printf 'sendkey ret\n'
@@ -584,6 +603,10 @@ grep -q "TTY canonical line ready: rustc_metadata_probe --direct" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct status 0" "$SERIAL_LOG"
 grep -Eq "rustc_metadata_probe: direct binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct binary run ok" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: rustc_metadata_probe --hosted" "$SERIAL_LOG"
+grep -q "rustc_metadata_probe: hosted status 0" "$SERIAL_LOG"
+grep -Eq "rustc_metadata_probe: hosted binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
+grep -q "rustc_metadata_probe: hosted binary run ok" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cargo new /tmp/cargo-smoke" "$SERIAL_LOG"
 grep -q 'Created binary package `cargo-smoke`' "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /tmp/cargo-smoke/\\*argo.toml" "$SERIAL_LOG"

@@ -179,8 +179,8 @@ $(RUST_SYSROOT_STAMP): $(RUST_OFFICIAL_SYSROOT_STAMP) scripts/package_official_r
 	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_SYSROOT_TREE) core
 	touch $@
 
-$(RUST_STD_SYSROOT_STAMP): scripts/probe_rust_std.sh scripts/package_official_rust_sysroot.sh scripts/build_ristux_panic_runtime.sh $(RUST_PANIC_RUNTIME_SRC) targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS) $(RUST_OFFICIAL_SYSROOT_STAMP)
-	RISTUX_STD_PROBE_OUTPUT=$(RUST_STD_PROBE_ELF) scripts/probe_rust_std.sh --expect-std-link-success
+$(RUST_STD_SYSROOT_STAMP): scripts/build_official_rust_std_probe.sh scripts/package_official_rust_sysroot.sh scripts/build_ristux_panic_runtime.sh $(RUST_PANIC_RUNTIME_SRC) targets/x86_64-unknown-ristux.json userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS) $(RUST_OFFICIAL_SYSROOT_STAMP)
+	scripts/build_official_rust_std_probe.sh $(RUST_STD_PROBE_ELF)
 	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) scripts/package_official_rust_sysroot.sh $(RUST_STD_SYSROOT_TREE) full
 	scripts/build_ristux_panic_runtime.sh $(RUST_PANIC_RUNTIME_RLIB)
 	touch $@

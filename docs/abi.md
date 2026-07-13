@@ -347,14 +347,17 @@ toolchain bootstrap:
   running that executable inside Ristux. Ristux resolves slashless `execve`
   program names against the supplied `PATH` as a compatibility bridge for the
   currently packaged libc shim's incomplete `execvp`.
-  `/bin/cargo` supports dependency-free local binary packages with `new`,
-  `init`, `build`, `check`, and `run`, including debug/release profiles and
-  `--manifest-path`; it invokes the installed native rustc and linker directly.
-  New projects use a Ristux no-std executable template with edition 2024 by
-  default; `--std` opts into the hosted template while that link path is still
-  experimental. Native no-std local Cargo builds support editions 2015, 2018,
-  2021, and 2024. Registry, Git, workspace, build-script, and dependency
-  resolution support remain future Cargo boundaries.
+  `/bin/cargo` supports local binary and library packages with `new`, `init`,
+  `build`, `check`, and `run`, including debug/release profiles,
+  `--manifest-path`, `--lib`, and recursive inline path dependencies. It invokes
+  the installed native rustc and linker directly. New projects use a Ristux
+  no-std executable template with edition 2024 by default; `--std` creates a
+  hosted template whose native `cargo run` path is boot-verified. Native local
+  builds support editions 2015, 2018, 2021, and 2024. Explicit workspaces with
+  inline `members = ["path", ...]` lists support `--workspace` builds and
+  `--package` selection. Registry, Git, build-script, proc-macro, wildcard
+  workspace members, and general dependency resolution remain future Cargo
+  boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,
@@ -391,11 +394,12 @@ toolchain bootstrap:
   interfaces. Rust userland currently uses a process-local `brk` allocator and
   small command-specific formatting/input helpers.
 - Threading primitives: `gettid` and Linux-style futex constants are exposed;
-  the kernel implements `FUTEX_WAIT` mismatch, timeout, and signal interruption
-  behavior plus `FUTEX_WAKE` wakeups as a first pthread-portability layer.
-  `clone` accepts process-style `SIGCHLD` children and `CLONE_SETTLS` FS-base
-  setup, but full clone-based thread groups and shared address spaces are not
-  part of the ABI yet.
+  the kernel implements `FUTEX_WAIT`/`FUTEX_WAKE`, clear-child-TID wakeups, and
+  a Ristux thread-create syscall used by the Rust `libc` overlay. The overlay's
+  `pthread_create`/`pthread_join` path shares the address space and is
+  boot-verified by an upstream `std::thread::spawn(...).join()` probe. Linux
+  `clone` still accepts only process-style children; complete Linux clone flag
+  and thread-group compatibility remains future work.
 
 The first allocator is a process-local `sbrk` free-list allocator. Freed blocks
 are reused and adjacent free blocks are coalesced, but heap pages are not yet

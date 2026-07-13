@@ -119,8 +119,9 @@ rust-std` packages that binary as `/bin/rust_std_probe`, boots Ristux, executes
 it, and expects `hello from Ristux std`. The overlay source package is installed
 at `/usr/lib/rustlib/src/ristux-overlays`, and the overlay-built `std` rlibs
 and rmetas are installed in `/usr/lib/rustlib/x86_64-unknown-ristux/lib` as
-`rust-std-libs`. Replacing the bootstrap `rustc`/Cargo frontends with the real
-upstream `rustc_driver` and Cargo binaries is the next toolchain step.
+`rust-std-libs`. The default image now packages the real official stage2
+Ristux-hosted `rustc`; replacing the local Cargo and Rustdoc frontends with
+upstream binaries is the next toolchain step.
 `make rust-official-target-probe` applies the maintained `rustc_target` overlay
 to a temporary official Rust 1.96.0 source tree, adds `Os::Ristux`, registers
 `x86_64-unknown-ristux` as a built-in hosted tier-3 target, patches Rust
@@ -148,7 +149,12 @@ expected blocker is now Cargo's C-backed transport and compression graph:
 `curl-sys`, `libgit2-sys`, `libssh2-sys`, and `libz-sys` still enter the
 Ristux Cargo build and try to compile C. Those need to be target-gated out or
 replaced with pure Rust registry, Git, compression, and package database paths
-before the real `/bin/rustc` and `/bin/cargo` can be packaged.
+before the real upstream `/bin/cargo` can be packaged. The official stage2
+`/bin/rustc` is already packaged.
+The packaged local Cargo frontend supports binary and library projects,
+recursive inline path dependencies, and explicit workspaces whose member paths
+are listed inline. Wildcard workspace members, build scripts, proc macros,
+registry access, and Git dependencies remain outside that frontend's scope.
 `make rust-official-std-probe` uses the official Rust 1.96.0 source tarball and
 checks the current expected blocker: direct standalone `build-std` reaches core
 intrinsics/lang-item mismatches because the official source needs Rust's
