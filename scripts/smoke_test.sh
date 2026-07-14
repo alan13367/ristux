@@ -11,13 +11,55 @@ QEMU_FLAGS="${QEMU_FLAGS:-}"
 REBUILD="${RISTUX_SMOKE_REBUILD:-1}"
 TOOLCHAIN_ONLY="${RISTUX_SMOKE_TOOLCHAIN_ONLY:-0}"
 SLEEP_SCALE="${RISTUX_SMOKE_SLEEP_SCALE:-1}"
+SSHD_PORT="${RISTUX_SMOKE_SSHD_PORT:-22422}"
+SSHD_PID=""
 if [[ -z "$QEMU_FLAGS" ]]; then
   QEMU_FLAGS="-m 2048M -smp 4"
 fi
 
+cleanup_smoke_sshd() {
+  if [[ -n "$SSHD_PID" ]]; then
+    kill "$SSHD_PID" 2>/dev/null || true
+    wait "$SSHD_PID" 2>/dev/null || true
+  fi
+  rm -f /tmp/ristux-smoke-sshd-host-key /tmp/ristux-smoke-sshd-host-key.pub \
+    /tmp/ristux-smoke-sshd.pid /tmp/ristux-ssh-repo
+}
+trap cleanup_smoke_sshd EXIT
+
 rm -f "$SERIAL_LOG" "$REBOOT_SERIAL_LOG"
 if [[ "$REBUILD" != "0" ]]; then
   make iso
+fi
+
+if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
+  sshd_bin="${SSHD:-/usr/sbin/sshd}"
+  sshd_user="${RISTUX_SMOKE_SSHD_USER:-$(id -un)}"
+  [[ "$sshd_user" =~ ^[a-z0-9._-]+$ ]] || {
+    echo "smoke_test: SSH fixture username is not keyboard-injectable: $sshd_user" >&2
+    exit 1
+  }
+  test -x "$sshd_bin"
+  ssh-keygen -q -t ed25519 -N '' -f /tmp/ristux-smoke-sshd-host-key
+  ln -sfn "$PWD/build/testdata/cargo-git-dependency" /tmp/ristux-ssh-repo
+  "$sshd_bin" -D -e -f /dev/null \
+    -h /tmp/ristux-smoke-sshd-host-key \
+    -p "$SSHD_PORT" \
+    -o ListenAddress=0.0.0.0 \
+    -o "AuthorizedKeysFile=$PWD/rootfs/testdata/ssh-smoke-id_ed25519.pub" \
+    -o StrictModes=no \
+    -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no \
+    -o UsePAM=no \
+    -o PidFile=/tmp/ristux-smoke-sshd.pid \
+    -o LogLevel=VERBOSE \
+    >/tmp/ristux-smoke-sshd.log 2>&1 &
+  SSHD_PID=$!
+  for _ in {1..50}; do
+    nc -z 127.0.0.1 "$SSHD_PORT" >/dev/null 2>&1 && break
+    command sleep 0.1
+  done
+  nc -z 127.0.0.1 "$SSHD_PORT" >/dev/null 2>&1
 fi
 
 sleep() {
@@ -34,6 +76,8 @@ QEMU_ARGS+=($QEMU_FLAGS)
 QEMU_ARGS+=(
   -drive "file=$DISK_IMAGE,if=none,id=hd0,format=raw"
   -device "virtio-blk-pci,drive=hd0"
+  -netdev "user,id=net0"
+  -device "virtio-net-pci,netdev=net0"
 )
 
 wait_for_serial() {
@@ -53,6 +97,7 @@ wait_for_serial() {
 
 send_text() {
   local text="$1"
+  local delay="${2:-${RISTUX_SMOKE_KEY_DELAY:-0.12}}"
   local i ch
   for ((i = 0; i < ${#text}; i++)); do
     ch="${text:i:1}"
@@ -76,7 +121,7 @@ send_text() {
       '~') printf 'sendkey alt-n\n' ;;
       *) echo "smoke_test: unsupported key '$ch'" >&2; exit 1 ;;
     esac
-    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.12}"
+    sleep "$delay"
   done
 }
 
@@ -102,6 +147,13 @@ set +e
     sleep 1
     printf 'sendkey ret\n'
     wait_for_serial 'toolchain-smoke: done' "${RISTUX_SMOKE_CARGO_WORKSPACE_WAIT:-3600}"
+    send_text "ssh -v -p $SSHD_PORT -l $sshd_user -i /usr/share/testdata/ssh-smoke-id_ed25519 -o stricthostkeychecking=no 10.0.2.2 \"git-upload-pack '/tmp/ristux-ssh-repo' || echo ssh-git-auth-ok\" < /dev/null" "${RISTUX_SMOKE_SSH_KEY_DELAY:-0.005}"
+    sleep 1
+    printf 'sendkey ret\n'
+    wait_for_serial 'ssh: authenticated as' "${RISTUX_SMOKE_SSH_WAIT:-180}"
+    wait_for_serial 'ssh: remote command started' "${RISTUX_SMOKE_SSH_WAIT:-180}"
+    wait_for_serial 'fatal: the remote end hung up unexpectedly' "${RISTUX_SMOKE_SSH_WAIT:-180}"
+    wait_for_serial 'ssh-git-auth-ok' "${RISTUX_SMOKE_SSH_WAIT:-180}"
     printf 'quit\n'
     trap - EXIT
     exit 0
@@ -418,6 +470,7 @@ if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
   grep -Eq "cargo 1\.96\.0 \([0-9a-f]+ 2026-05-25\)" "$SERIAL_LOG"
   grep -q "ssh-client-ok" "$SERIAL_LOG"
   grep -q "cargo-local-git-helper-ok" "$SERIAL_LOG"
+  grep -q "ssh-git-auth-ok" "$SERIAL_LOG"
   grep -q "toolchain-smoke: done" "$SERIAL_LOG"
   ! grep -q "kernel panic" "$SERIAL_LOG"
   echo "Ristux toolchain smoke test passed"

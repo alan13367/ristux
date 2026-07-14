@@ -150,6 +150,8 @@ file /usr/share/testdata/cargo-workspace/app/src/main.rs testdata/cargo-workspac
 file /usr/share/testdata/cargo-git-dependency.tar.gz ../build/testdata/cargo-git-dependency.tar.gz
 file /usr/share/testdata/cargo-git-consumer/Cargo.toml testdata/cargo-git-consumer/Cargo.toml
 file /usr/share/testdata/cargo-git-consumer/src/main.rs testdata/cargo-git-consumer/src/main.rs
+file /usr/share/testdata/ssh-smoke-id_ed25519 testdata/ssh-smoke-id_ed25519
+file /usr/share/testdata/ssh-smoke-id_ed25519.pub testdata/ssh-smoke-id_ed25519.pub
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar

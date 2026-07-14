@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use russh::client;
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
-use russh::{ChannelMsg, Disconnect};
+use russh::ChannelMsg;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
@@ -77,16 +77,18 @@ impl Options {
                 "-i" => key = Some(PathBuf::from(args.next().ok_or("-i requires a path")?)),
                 "-o" => {
                     let option = args.next().ok_or("-o requires an option")?;
-                    if matches!(
-                        option.as_str(),
-                        "StrictHostKeyChecking=no" | "StrictHostKeyChecking=off"
-                    ) {
+                    if option.eq_ignore_ascii_case("StrictHostKeyChecking=no")
+                        || option.eq_ignore_ascii_case("StrictHostKeyChecking=off")
+                    {
                         strict_host_key = false;
                     }
                 }
                 "-v" | "-vv" | "-vvv" => verbose = true,
                 "-4" | "-6" | "-T" | "-x" | "-q" => {}
                 "--" => host = args.next(),
+                _ if arg.starts_with("-p") && arg.len() > 2 => port = arg[2..].parse()?,
+                _ if arg.starts_with("-l") && arg.len() > 2 => user = Some(arg[2..].to_owned()),
+                _ if arg.starts_with("-i") && arg.len() > 2 => key = Some(PathBuf::from(&arg[2..])),
                 _ if arg.starts_with('-') => {
                     return Err(format!("unsupported ssh option: {arg}").into());
                 }
@@ -271,14 +273,6 @@ fn main() {
 
 fn run() -> Result<(), AnyError> {
     let options = Options::parse()?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_time()
-        .build()?;
-    runtime.block_on(run_async(options))
-}
-
-async fn run_async(options: Options) -> Result<(), AnyError> {
     if options.verbose {
         eprintln!("ssh: connecting to {}:{}", options.host, options.port);
     }
@@ -287,6 +281,14 @@ async fn run_async(options: Options) -> Result<(), AnyError> {
     if options.verbose {
         eprintln!("ssh: TCP connection established");
     }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_time()
+        .build()?;
+    runtime.block_on(run_async(options, socket))
+}
+
+async fn run_async(options: Options, socket: TcpStream) -> Result<(), AnyError> {
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         nodelay: true,
@@ -357,13 +359,15 @@ async fn run_async(options: Options) -> Result<(), AnyError> {
                 std::io::stderr().flush()?;
             }
             ChannelMsg::ExitStatus { exit_status: status } => exit_status = Some(status),
+            ChannelMsg::Eof | ChannelMsg::Close => break,
             _ => {}
         }
     }
     input.join().map_err(|_| "stdin forwarding thread panicked")??;
-    session
-        .disconnect(Disconnect::ByApplication, "", "English")
-        .await?;
+    // A remote command commonly closes the SSH transport immediately after
+    // its exit status (notably git-upload-pack after an EOF request). Waiting
+    // to send a redundant disconnect packet can then stall on a dead peer.
+    drop(session);
     match exit_status.unwrap_or(0) {
         0 => Ok(()),
         status => Err(format!("remote command exited with status {status}").into()),

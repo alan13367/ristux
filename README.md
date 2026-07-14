@@ -156,8 +156,9 @@ Cargo-sized fork under emulation. The rootfs also ships pure-Rust `ssh` and
 verification, and Git protocol-v1 pack streaming. The upload-pack fixture is
 guest-verified and host Git clones its generated pack successfully; a complete
 guest Cargo Git metadata run still needs accelerated/native x86 verification.
-Authenticated guest SSH Git, HTTPS Git/registry access, and proc macros remain
-pending.
+The toolchain smoke test also boots a key-only host SSH fixture and verifies
+guest Ed25519 authentication plus a remote `git-upload-pack` ref advertisement.
+HTTPS Git/registry access and proc macros remain pending.
 `make rust-official-std-probe` uses the official Rust 1.96.0 source tarball and
 checks the current expected blocker: direct standalone `build-std` reaches core
 intrinsics/lang-item mismatches because the official source needs Rust's

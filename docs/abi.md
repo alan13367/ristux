@@ -325,9 +325,10 @@ toolchain bootstrap:
   gix for repository discovery, object/ref access, pure-Rust fetches, and
   checkout. Local `file://` Git dependencies are supported. The pure-Rust
   `/bin/ssh` command provides Ed25519 authentication, host-key verification,
-  and the bidirectional remote-command transport required by `git-upload-pack`;
-  an authenticated guest fixture, HTTPS Git, sparse registry HTTPS, and proc
-  macros remain separate boundaries.
+  and the bidirectional remote-command transport required by `git-upload-pack`.
+  A guest smoke fixture authenticates to an isolated key-only host daemon and
+  validates its remote Git ref advertisement; HTTPS Git, sparse registry HTTPS,
+  and proc macros remain separate boundaries.
   `make rust-official-std-probe` separately verifies the current official
   Rust 1.96.0 source boundary: direct standalone `build-std` against the
   official source reaches the expected stage1-bootstrap blocker, so the real
@@ -365,8 +366,8 @@ toolchain bootstrap:
   interoperates with host Git; the complete upstream Cargo Git metadata path
   still needs accelerated/native x86 verification because ARM-hosted x86 TCG
   does not reach Git source update within the bounded smoke window. Registry
-  HTTPS, authenticated guest SSH Git verification, proc macros, and wildcard
-  workspace members remain future Cargo boundaries.
+  HTTPS, proc macros, and wildcard workspace members remain future Cargo
+  boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

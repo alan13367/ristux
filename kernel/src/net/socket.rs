@@ -114,6 +114,16 @@ impl SocketEntry {
             ref_count: 1,
         }
     }
+
+    fn closed() -> Self {
+        let mut entry = Self::new(
+            SocketDomain::Inet,
+            SocketType::Stream,
+            SocketBackend::Closed,
+        );
+        entry.ref_count = 0;
+        entry
+    }
 }
 
 impl SocketTable {
@@ -163,6 +173,35 @@ impl SocketTable {
         Ok(())
     }
 
+    pub fn duplicate_descriptor(
+        &mut self,
+        handle: usize,
+        minimum_handle: usize,
+        fd_flags: u32,
+    ) -> Result<usize, SocketError> {
+        let mut duplicate = *self.entry(handle)?;
+        duplicate.fd_flags = fd_flags;
+        duplicate.ref_count = 1;
+        if let Some(index) = self
+            .sockets
+            .iter()
+            .enumerate()
+            .skip(minimum_handle)
+            .find_map(|(index, socket)| {
+                (socket.backend == SocketBackend::Closed && socket.ref_count == 0)
+                    .then_some(index)
+            })
+        {
+            self.sockets[index] = duplicate;
+            return Ok(index);
+        }
+        while self.sockets.len() < minimum_handle {
+            self.sockets.push(SocketEntry::closed());
+        }
+        self.sockets.push(duplicate);
+        Ok(self.sockets.len() - 1)
+    }
+
     pub fn close(&mut self, handle: usize) -> Result<(), SocketError> {
         {
             let entry = self.entry_mut(handle)?;
@@ -172,6 +211,14 @@ impl SocketTable {
             }
         }
         let backend = self.entry(handle)?.backend;
+        self.sockets[handle] = SocketEntry::closed();
+        if self
+            .sockets
+            .iter()
+            .any(|entry| entry.backend == backend && entry.ref_count > 0)
+        {
+            return Ok(());
+        }
         match backend {
             SocketBackend::Closed => return Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
@@ -189,8 +236,6 @@ impl SocketTable {
                 }
             }
         }
-        self.sockets[handle].backend = SocketBackend::Closed;
-        self.sockets[handle].ref_count = 0;
         Ok(())
     }
 
@@ -234,13 +279,14 @@ impl SocketTable {
         match self.entry(handle)?.backend {
             SocketBackend::Closed => Err(SocketError::BadFd),
             SocketBackend::Tcp(socket) => {
-                if let Err(err) = self
-                    .tcp
-                    .connect(socket, remote_ip, remote_port)
-                    .map_err(map_tcp_error)
-                {
-                    self.record_error(handle, err);
-                    return Err(err);
+                match self.tcp.connect(socket, remote_ip, remote_port) {
+                    Ok(()) | Err(TcpError::InProgress) => {}
+                    Err(TcpError::AlreadyConnected) => return Ok(()),
+                    Err(error) => {
+                        let error = map_tcp_error(error);
+                        self.record_error(handle, error);
+                        return Err(error);
+                    }
                 }
                 super::drive_tcp(&mut self.tcp);
                 if let Some(error) = self.tcp.sockets.get(socket).and_then(|socket| socket.error) {
@@ -523,7 +569,12 @@ impl SocketTable {
     }
 
     pub fn set_status_flags(&mut self, handle: usize, flags: u32) -> Result<(), SocketError> {
-        self.entry_mut(handle)?.status_flags = flags;
+        let backend = self.entry(handle)?.backend;
+        for entry in &mut self.sockets {
+            if entry.backend == backend && entry.ref_count > 0 {
+                entry.status_flags = flags;
+            }
+        }
         Ok(())
     }
 
@@ -721,6 +772,32 @@ pub fn self_test() {
         if &response[..read] != b"pong" {
             panic!("loopback client payload mismatch");
         }
+        let client_duplicate = table
+            .duplicate_descriptor(client, 0, 1)
+            .expect("loopback client descriptor duplicate");
+        if table.fd_flags(client_duplicate).expect("duplicate fd flags") != 1 {
+            panic!("duplicated socket descriptor flags mismatch");
+        }
+        table
+            .set_status_flags(client, 0x800)
+            .expect("shared socket status flags");
+        if table
+            .status_flags(client_duplicate)
+            .expect("duplicate status flags")
+            != 0x800
+        {
+            panic!("duplicated socket status flags were not shared");
+        }
+        table.close(client).expect("original client close");
+        table
+            .send(client_duplicate, b"clone")
+            .expect("duplicated client send after original close");
+        let read = table
+            .recv(server, &mut request)
+            .expect("duplicated client server recv");
+        if &request[..read] != b"clone" {
+            panic!("duplicated socket backend lifetime mismatch");
+        }
 
         let udp_server = table
             .socket(SocketDomain::Inet, SocketType::Datagram)
@@ -786,7 +863,9 @@ pub fn self_test() {
         }
         table.close(udp_server).expect("udp server close");
         table.close(server).expect("loopback server close");
-        table.close(client).expect("loopback client close");
+        table
+            .close(client_duplicate)
+            .expect("duplicated loopback client close");
         table.close(listener).expect("loopback listener close");
         table.close(fd).expect("tcp socket close");
     });

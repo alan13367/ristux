@@ -364,7 +364,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_nanosleep => linux_nanosleep(frame, a0 as usize, a1 as usize),
         NR_getpid => Ok(process::current_pid().unwrap_or(0)),
         NR_socket => linux_socket(a0 as i32, a1 as i32, a2 as i32),
-        NR_connect => linux_connect(a0 as usize, a1 as usize, a2 as usize),
+        NR_connect => linux_connect(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_accept => linux_accept(frame, a0 as usize, a1 as usize, a2 as usize),
         NR_sendto => linux_sendto(
             a0 as usize,
@@ -1398,12 +1398,35 @@ fn linux_ftruncate(fd: usize, len: i64) -> Result<u64, i64> {
 }
 
 fn linux_socket_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
+    const F_DUPFD: i32 = 0;
     const F_GETFD: i32 = 1;
     const F_SETFD: i32 = 2;
     const F_GETFL: i32 = 3;
     const F_SETFL: i32 = 4;
+    const F_DUPFD_CLOEXEC: i32 = 1030;
 
     let handle = socket_handle(fd)?;
+    if cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC {
+        let minimum_fd = usize::try_from(arg).map_err(|_| EINVAL)?;
+        let minimum_handle = minimum_fd.saturating_sub(SOCKET_FD_BASE);
+        if minimum_handle >= process::MAX_FDS {
+            return Err(EINVAL);
+        }
+        let fd_flags = if cmd == F_DUPFD_CLOEXEC {
+            process::FD_CLOEXEC
+        } else {
+            0
+        };
+        let duplicate = crate::net::socket::with_sockets(|table| {
+            table.duplicate_descriptor(handle, minimum_handle, fd_flags)
+        })
+        .map_err(map_socket_error)?;
+        if let Err(error) = process::install_socket_handle(duplicate) {
+            let _ = crate::net::socket::with_sockets(|table| table.close(duplicate));
+            return Err(map_socket_install_error(error));
+        }
+        return Ok((SOCKET_FD_BASE + duplicate) as u64);
+    }
     crate::net::socket::with_sockets(|table| match cmd {
         F_GETFD => table.fd_flags(handle).map(|flags| flags as u64),
         F_SETFD => table
@@ -2122,7 +2145,12 @@ fn map_socket_install_error(err: process::SocketInstallError) -> i64 {
     }
 }
 
-fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
+fn linux_connect(
+    frame: &mut SyscallInterruptFrame,
+    fd: usize,
+    addr: usize,
+    addrlen: usize,
+) -> Result<u64, i64> {
     let handle = socket_handle(fd)?;
     let (ip, port) = read_sockaddr_in(addr, addrlen)?;
     let nonblocking = crate::net::socket::with_sockets(|table| {
@@ -2131,12 +2159,17 @@ fn linux_connect(fd: usize, addr: usize, addrlen: usize) -> Result<u64, i64> {
             .map(|flags| flags & O_NONBLOCK != 0)
     })
     .map_err(map_socket_error)?;
-    match crate::net::socket::with_sockets(|table| {
-        table.connect(handle, crate::net::Ipv4Addr(ip), port)
-    }) {
-        Ok(()) => Ok(0),
-        Err(crate::net::socket::SocketError::WouldBlock) if nonblocking => Err(EINPROGRESS),
-        Err(err) => Err(map_socket_error(err)),
+    loop {
+        match crate::net::socket::with_sockets(|table| {
+            table.connect(handle, crate::net::Ipv4Addr(ip), port)
+        }) {
+            Ok(()) => return Ok(0),
+            Err(crate::net::socket::SocketError::WouldBlock) if nonblocking => {
+                return Err(EINPROGRESS);
+            }
+            Err(crate::net::socket::SocketError::WouldBlock) => block_for_io(frame, None)?,
+            Err(err) => return Err(map_socket_error(err)),
+        }
     }
 }
 
@@ -4035,6 +4068,10 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
     const BLKSSZGET: u64 = 0x1268;
     const BLKGETSIZE64: u64 = 0x8008_1272;
 
+    if fd >= SOCKET_FD_BASE {
+        return linux_socket_ioctl(fd, request, argp);
+    }
+
     let vfs_fd = process::user_vfs_fd(fd).ok_or(EBADF)?;
     let is_tty = fs::is_tty_fd(vfs_fd);
     let is_pty = fs::pty_number(vfs_fd).is_some();
@@ -4165,6 +4202,41 @@ fn linux_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
             Ok(0)
         }
         _ => Ok(0),
+    }
+}
+
+fn linux_socket_ioctl(fd: usize, request: u64, argp: usize) -> Result<u64, i64> {
+    const FIONCLEX: u64 = 0x5450;
+    const FIOCLEX: u64 = 0x5451;
+    const FIONBIO: u64 = 0x5421;
+
+    let handle = socket_handle(fd)?;
+    match request {
+        FIOCLEX => crate::net::socket::with_sockets(|table| {
+            let flags = table.fd_flags(handle)? | process::FD_CLOEXEC;
+            table.set_fd_flags(handle, flags).map(|_| 0)
+        })
+        .map_err(map_socket_error),
+        FIONCLEX => crate::net::socket::with_sockets(|table| {
+            let flags = table.fd_flags(handle)? & !process::FD_CLOEXEC;
+            table.set_fd_flags(handle, flags).map(|_| 0)
+        })
+        .map_err(map_socket_error),
+        FIONBIO => {
+            let input = process::read_user(argp, 4).ok_or(EFAULT)?;
+            let enabled = i32::from_le_bytes([input[0], input[1], input[2], input[3]]) != 0;
+            crate::net::socket::with_sockets(|table| {
+                let current = table.status_flags(handle)?;
+                let flags = if enabled {
+                    current | O_NONBLOCK
+                } else {
+                    current & !O_NONBLOCK
+                };
+                table.set_status_flags(handle, flags).map(|_| 0)
+            })
+            .map_err(map_socket_error)
+        }
+        _ => Err(ENOTTY),
     }
 }
 
