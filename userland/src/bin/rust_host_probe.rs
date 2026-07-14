@@ -416,7 +416,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"cargo_build_execution = \"upstream Cargo binary/library build, check, and run supported for editions 2015/2018/2021/2024 with recursive path dependencies, local file Git dependencies through gix, workspaces, and build scripts; network Git, registry HTTPS, and proc macros pending\"",
+            b"cargo_build_execution = \"upstream Cargo binary/library build, check, and run supported for editions 2015/2018/2021/2024 with recursive path dependencies, workspaces, and build scripts; pure-Rust local Git import plus SSH and upload-pack transports are installed; full guest Cargo Git metadata, authenticated SSH Git, registry HTTPS, and proc macros pending\"",
         )
     {
         return fail(b"manifest");

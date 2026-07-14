@@ -98,7 +98,7 @@ set +e
   printf 'sendkey ret\n'
   sleep 3
   if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
-    send_text "tc q"
+    send_text "tcf"
     sleep 1
     printf 'sendkey ret\n'
     wait_for_serial 'toolchain-smoke: done' "${RISTUX_SMOKE_CARGO_WORKSPACE_WAIT:-3600}"
@@ -415,10 +415,9 @@ fi
 if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
   normalize_serial_noise "$SERIAL_LOG"
   grep -q "TTY canonical line ready: tc" "$SERIAL_LOG"
-  grep -q "rustc 1.96.0" "$SERIAL_LOG"
   grep -Eq "cargo 1\.96\.0 \([0-9a-f]+ 2026-05-25\)" "$SERIAL_LOG"
-  grep -q "cargo-smoke-ok" "$SERIAL_LOG"
-  grep -q "workspace-build-script: build-script-ok" "$SERIAL_LOG"
+  grep -q "ssh-client-ok" "$SERIAL_LOG"
+  grep -q "cargo-local-git-helper-ok" "$SERIAL_LOG"
   grep -q "toolchain-smoke: done" "$SERIAL_LOG"
   ! grep -q "kernel panic" "$SERIAL_LOG"
   echo "Ristux toolchain smoke test passed"
@@ -553,6 +552,7 @@ grep -q "Compiling cargo-smoke v0.1.0" "$SERIAL_LOG"
 grep -q "Finished debug profile" "$SERIAL_LOG"
 grep -q 'Running `target/debug/cargo-smoke`' "$SERIAL_LOG"
 grep -q "^cargo-smoke-ok$" "$SERIAL_LOG"
+grep -q "^ssh-client-ok$" "$SERIAL_LOG"
 grep -q "Compiling workspace-app v0.1.0" "$SERIAL_LOG"
 grep -q "workspace-build-script: build-script-ok" "$SERIAL_LOG"
 grep -q "name: rustc" "$SERIAL_LOG"

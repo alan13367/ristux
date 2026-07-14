@@ -18,10 +18,15 @@ IFS=' ' read -r -a CARGO_STAGE0_CMD <<< "$CARGO_STAGE0"
 
 export RISTUX_RUST_TARGET_PROBE_DIR="$PROBE_DIR"
 
-scripts/probe_rust_target.sh --prepare-only
-
 source_dir="$PROBE_DIR/rustc-${RUST_VERSION}-src"
 config="$PROBE_DIR/bootstrap.ristux.toml"
+
+if [[ "${RISTUX_RUST_BOOTSTRAP_PATCH_ONLY:-0}" != "1" \
+      && "${RISTUX_RUST_BOOTSTRAP_CARGO_ONLY:-0}" != "1" \
+      || ! -f "$source_dir/.ristux-patched" \
+      || ! -f "$config" ]]; then
+  scripts/probe_rust_target.sh --prepare-only
+fi
 
 if [[ ! -f "$source_dir/x.py" ]]; then
   echo "prepared official Rust source is missing x.py: $source_dir" >&2
@@ -43,6 +48,7 @@ import json
 import shutil
 
 root = pathlib.Path(sys.argv[1])
+was_previously_patched = (root / ".ristux-patched").exists()
 
 def replace(path, old, new, desc):
     text = path.read_text()
@@ -305,7 +311,7 @@ for crate_dir in sorted((root / "vendor").glob("crc32fast-*")):
         refresh_vendor_checksum(crate_dir, "src/specialized/mod.rs")
         patched_crc32fast += 1
 
-if patched_crc32fast == 0:
+if patched_crc32fast == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored crc32fast crates for Ristux baseline CRC")
 
 patched_sha1 = 0
@@ -326,7 +332,7 @@ for crate_dir in sorted((root / "vendor").glob("sha1-*")):
         refresh_vendor_checksum(crate_dir, "src/compress.rs")
         patched_sha1 += 1
 
-if patched_sha1 == 0:
+if patched_sha1 == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored sha1 crates for Ristux soft backend")
 
 patched_sha2 = 0
@@ -354,7 +360,7 @@ for crate_dir in sorted((root / "vendor").glob("sha2-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_sha2 += 1
 
-if patched_sha2 == 0:
+if patched_sha2 == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored sha2 crates for Ristux soft backend")
 
 patched_libm = 0
@@ -373,7 +379,7 @@ for crate_dir in sorted((root / "vendor").glob("libm-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_libm += 1
 
-if patched_libm == 0:
+if patched_libm == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored libm crates for Ristux portable backend")
 
 patched_blake3 = 0
@@ -398,7 +404,7 @@ for crate_dir in sorted((root / "vendor").glob("blake3-*")):
         refresh_vendor_checksum(crate_dir, "build.rs")
         patched_blake3 += 1
 
-if patched_blake3 == 0:
+if patched_blake3 == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored blake3 crates for Ristux non-assembly backend")
 
 patched_constant_time_eq = 0
@@ -526,7 +532,7 @@ use generic as simd;''',
         refresh_vendor_checksum(crate_dir, *changed)
         patched_constant_time_eq += 1
 
-if patched_constant_time_eq == 0:
+if patched_constant_time_eq == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored constant_time_eq crates for Ristux generic backend")
 
 patched_libloading = 0
@@ -547,7 +553,7 @@ for crate_dir in sorted((root / "vendor").glob("libloading-*")):
         refresh_vendor_checksum(crate_dir, "src/os/unix/consts.rs")
         patched_libloading += 1
 
-if patched_libloading == 0:
+if patched_libloading == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored libloading crates for Ristux RTLD constants")
 
 patched_target_lexicon = 0
@@ -583,7 +589,7 @@ for crate_dir in sorted((root / "vendor").glob("target-lexicon-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_target_lexicon += 1
 
-if patched_target_lexicon == 0:
+if patched_target_lexicon == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored target-lexicon crates for Ristux target triples")
 
 patched_nix = 0
@@ -663,7 +669,7 @@ for crate_dir in sorted((root / "vendor").glob("nix-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_nix += 1
 
-if patched_nix == 0:
+if patched_nix == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored nix crates for Ristux Redox-shaped errno/signal ABI")
 
 patched_ctrlc = 0
@@ -708,7 +714,7 @@ mod implementation {''',
         refresh_vendor_checksum(crate_dir, "src/platform/unix/mod.rs")
         patched_ctrlc += 1
 
-if patched_ctrlc == 0:
+if patched_ctrlc == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored ctrlc crates for Ristux non-POSIX-semaphore signal wait")
 
 patched_stacker = 0
@@ -765,7 +771,7 @@ for crate_dir in sorted((root / "vendor").glob("stacker-*")):
         refresh_vendor_checksum(crate_dir, "src/mmap_stack_restore_guard.rs")
         patched_stacker += 1
 
-if patched_stacker == 0:
+if patched_stacker == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored stacker crates for Ristux stack growth")
 
 patched_zlib_rs = 0
@@ -793,7 +799,7 @@ for crate_dir in sorted((root / "vendor").glob("zlib-rs-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_zlib_rs += 1
 
-if patched_zlib_rs == 0:
+if patched_zlib_rs == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored zlib-rs crate for Ristux portable backend")
 
 patched_getrandom = 0
@@ -855,8 +861,24 @@ for crate_dir in sorted((root / "vendor").glob("getrandom-*")):
         refresh_vendor_checksum(crate_dir, *changed)
         patched_getrandom += 1
 
-if patched_getrandom == 0:
+if patched_getrandom == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored getrandom crates for Ristux file backend")
+
+gix_protocol = root / "vendor/gix-0.81.0/src/config/tree/sections/protocol.rs"
+replace(
+    gix_protocol,
+    "                None => return Ok(gix_protocol::transport::Protocol::V2),",
+    '                None => {\n'
+    '                    let protocol = if cfg!(target_os = "ristux") {\n'
+    '                        gix_protocol::transport::Protocol::V1\n'
+    '                    } else {\n'
+    '                        gix_protocol::transport::Protocol::V2\n'
+    '                    };\n'
+    '                    return Ok(protocol);\n'
+    '                },',
+    "gix Ristux upload-pack protocol v1 default",
+)
+refresh_vendor_checksum(gix_protocol.parent.parent.parent.parent.parent, "src/config/tree/sections/protocol.rs")
 
 patched_rustix = 0
 for crate_dir in sorted((root / "vendor").glob("rustix-*")):
@@ -873,7 +895,7 @@ for crate_dir in sorted((root / "vendor").glob("rustix-*")):
         refresh_vendor_checksum(crate_dir, "src/ioctl/mod.rs")
         patched_rustix += 1
 
-if patched_rustix == 0:
+if patched_rustix == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored rustix ioctl opcode type for Ristux")
 
 patched_filetime = 0
@@ -891,7 +913,7 @@ for crate_dir in sorted((root / "vendor").glob("filetime-*")):
         refresh_vendor_checksum(crate_dir, "src/unix/mod.rs")
         patched_filetime += 1
 
-if patched_filetime == 0:
+if patched_filetime == 0 and not was_previously_patched:
     raise SystemExit("failed to patch vendored filetime crate for Ristux utimensat support")
 
 patched_heapless = 0
@@ -909,7 +931,7 @@ for crate_dir in sorted((root / "vendor").glob("heapless-*")):
         refresh_vendor_checksum(crate_dir, "build.rs")
         patched_heapless += 1
 
-if patched_heapless == 0:
+if patched_heapless == 0 and not was_previously_patched:
     raise SystemExit("failed to gate vendored heapless ARM assembly probe for Ristux")
 
 patched_zmij = 0
@@ -927,7 +949,7 @@ for crate_dir in sorted((root / "vendor").glob("zmij-*")):
         refresh_vendor_checksum(crate_dir, "src/lib.rs")
         patched_zmij += 1
 
-if patched_zmij == 0:
+if patched_zmij == 0 and not was_previously_patched:
     raise SystemExit("failed to select vendored zmij portable paths for Ristux")
 
 cargo_root = root / "src/tools/cargo"
@@ -995,6 +1017,21 @@ replace(
 cargo_git_utils = cargo_root / "src/cargo/sources/git/utils.rs"
 replace(
     cargo_git_utils,
+    '    debug!("doing a fetch for {remote_url}");\n'
+    '    let result = if let Some(true) = gctx.net_config()?.git_fetch_with_cli {',
+    '    debug!("doing a fetch for {remote_url}");\n'
+    '    #[cfg(target_os = "ristux")]\n'
+    '    if remote_url.starts_with("file://") {\n'
+    '        eprintln!("ristux-cargo: local Git import start");\n'
+    '        repo.ristux_import_local(remote_url)?;\n'
+    '        eprintln!("ristux-cargo: local Git import done");\n'
+    '        return Ok(());\n'
+    '    }\n'
+    '    let result = if let Some(true) = gctx.net_config()?.git_fetch_with_cli {',
+    "Cargo Ristux in-process local Git import",
+)
+replace(
+    cargo_git_utils,
     '    } else if gctx.cli_unstable().gitoxide.map_or(false, |git| git.fetch) {',
     '    } else if cfg!(target_os = "ristux")\n'
     '        || std::env::var_os("__CARGO_USE_GITOXIDE_INSTEAD_OF_GIT2")\n'
@@ -1004,11 +1041,43 @@ replace(
     "Cargo Ristux gix fetch selection",
 )
 
+cargo_git_source = cargo_root / "src/cargo/sources/git/source.rs"
+replace(
+    cargo_git_source,
+    '    fn update(&self) -> CargoResult<()> {\n'
+    '        if self.path_source.borrow().is_some() {',
+    '    fn update(&self) -> CargoResult<()> {\n'
+    '        #[cfg(target_os = "ristux")]\n'
+    '        eprintln!("ristux-cargo: GitSource update start");\n'
+    '        if self.path_source.borrow().is_some() {',
+    "Cargo Ristux Git source update diagnostics",
+)
+replace(
+    cargo_git_source,
+    '        let (db, actual_rev) = self.fetch_db(false)?;',
+    '        #[cfg(target_os = "ristux")]\n'
+    '        eprintln!("ristux-cargo: GitSource fetch database");\n'
+    '        let (db, actual_rev) = self.fetch_db(false)?;\n'
+    '        #[cfg(target_os = "ristux")]\n'
+    '        eprintln!("ristux-cargo: GitSource database ready");',
+    "Cargo Ristux Git database diagnostics",
+)
+replace(
+    cargo_git_source,
+    '        db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;',
+    '        #[cfg(target_os = "ristux")]\n'
+    '        eprintln!("ristux-cargo: GitSource checkout start");\n'
+    '        db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;\n'
+    '        #[cfg(target_os = "ristux")]\n'
+    '        eprintln!("ristux-cargo: GitSource checkout done");',
+    "Cargo Ristux Git checkout diagnostics",
+)
+
 cargo_util_paths = cargo_root / "crates/cargo-util/src/paths.rs"
 text = cargo_util_paths.read_text()
 old_mode_mask = "u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO)"
 new_mode_mask = "(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO) as u32"
-if old_mode_mask not in text:
+if old_mode_mask not in text and new_mode_mask not in text:
     raise SystemExit("failed to locate Cargo permission masks for Ristux mode_t")
 cargo_util_paths.write_text(text.replace(old_mode_mask, new_mode_mask))
 
@@ -1076,8 +1145,13 @@ PY
   }
 }
 
-if [[ "${RISTUX_RUST_BOOTSTRAP_PATCH_ONLY:-0}" == "1" ]]; then
+if [[ "${RISTUX_RUST_BOOTSTRAP_PATCH_ONLY:-0}" == "1" \
+      || "${RISTUX_RUST_BOOTSTRAP_CARGO_ONLY:-0}" == "1" ]]; then
   patch_static_cranelift_compiler "$source_dir"
+  touch "$source_dir/.ristux-patched"
+fi
+
+if [[ "${RISTUX_RUST_BOOTSTRAP_PATCH_ONLY:-0}" == "1" ]]; then
   echo "official Rust $RUST_VERSION Ristux bootstrap sources patched and Cargo checked"
   exit 0
 fi
@@ -1092,6 +1166,42 @@ chmod 755 "$HOST_RISTUX_LD_DIR/ristux-as"
   -o "$HOST_RISTUX_LD_DIR/ristux-ld"
 "$HOST_RISTUX_LD_DIR/ristux-ld" --self-test >/dev/null
 "$HOST_RISTUX_LD_DIR/ristux-ld" --self-test-archive >/dev/null
+
+if [[ "${RISTUX_RUST_BOOTSTRAP_CARGO_ONLY:-0}" == "1" ]]; then
+  mkdir -p "$(dirname "$LOG")"
+  set +e
+  (
+    cd "$source_dir"
+    PATH="$HOST_RISTUX_LD_DIR:$PATH" \
+      BOOTSTRAP_SKIP_TARGET_SANITY=1 \
+      python3 x.py \
+        --config "$config" \
+        build \
+        --stage 2 \
+        --host x86_64-unknown-ristux \
+        --target x86_64-unknown-ristux \
+        cargo
+  ) > "$LOG" 2>&1
+  status=$?
+  set -e
+  if [[ $status -ne 0 ]]; then
+    echo "official Rust $RUST_VERSION Cargo-only Ristux build failed; tail of $LOG:" >&2
+    tail -120 "$LOG" >&2
+    exit "$status"
+  fi
+  cargo_bin="$(find "$PROBE_DIR/bootstrap-build" -type f \( -path '*/stage2-tools-bin/cargo' -o -path '*/stage2-tools/x86_64-unknown-ristux/release/cargo' \) -print | sort | head -n 1)"
+  if [[ -z "$cargo_bin" ]]; then
+    echo "Cargo-only Ristux build succeeded but produced no Cargo binary" >&2
+    exit 1
+  fi
+  if [[ -n "$CARGO_OUTPUT" ]]; then
+    mkdir -p "$(dirname "$CARGO_OUTPUT")"
+    cp "$cargo_bin" "$CARGO_OUTPUT"
+    chmod 755 "$CARGO_OUTPUT"
+  fi
+  echo "official Rust $RUST_VERSION Cargo-only Ristux build passed: $LOG"
+  exit 0
+fi
 
 mkdir -p "$(dirname "$STAGE1_CODEGEN_LOG")"
 set +e

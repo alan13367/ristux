@@ -323,8 +323,11 @@ toolchain bootstrap:
   dylib-output and Cranelift component-format blockers and removes Cargo's
   C-backed curl/libgit2/libssh2/zlib graph. The Ristux compatibility layer uses
   gix for repository discovery, object/ref access, pure-Rust fetches, and
-  checkout. Local `file://` Git dependencies are supported; authenticated SSH,
-  HTTPS Git, sparse registry HTTPS, and proc macros remain separate boundaries.
+  checkout. Local `file://` Git dependencies are supported. The pure-Rust
+  `/bin/ssh` command provides Ed25519 authentication, host-key verification,
+  and the bidirectional remote-command transport required by `git-upload-pack`;
+  an authenticated guest fixture, HTTPS Git, sparse registry HTTPS, and proc
+  macros remain separate boundaries.
   `make rust-official-std-probe` separately verifies the current official
   Rust 1.96.0 source boundary: direct standalone `build-std` against the
   official source reaches the expected stage1-bootstrap blocker, so the real
@@ -356,9 +359,14 @@ toolchain bootstrap:
   builds support editions 2015, 2018, 2021, and 2024. Explicit workspaces with
   inline `members = ["path", ...]` lists support `--workspace` builds and
   `--package` selection, and build scripts execute through the native process
-  path. Local `file://` Git dependencies resolve and checkout through gix.
-  Registry HTTPS, authenticated network Git transports, proc macros, and
-  wildcard workspace members remain future Cargo boundaries.
+  path. Local `file://` Git repositories use an in-process pure-Rust import,
+  while SSH transport uses gix plus the packaged pure-Rust `ssh` and
+  `git-upload-pack` protocol-v1 helpers. The pack helper is guest-verified and
+  interoperates with host Git; the complete upstream Cargo Git metadata path
+  still needs accelerated/native x86 verification because ARM-hosted x86 TCG
+  does not reach Git source update within the bounded smoke window. Registry
+  HTTPS, authenticated guest SSH Git verification, proc macros, and wildcard
+  workspace members remain future Cargo boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

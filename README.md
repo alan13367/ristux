@@ -149,8 +149,14 @@ feature removes Cargo's curl/libgit2 C graph with pure-Rust target compatibility
 layers, defaults Git operations to gix, disables SQLite-backed global cache
 tracking on Ristux, and retains the pure-Rust package/build paths. The resulting
 upstream `/bin/cargo` is a static Ristux ELF and supports binary and library
-projects, recursive path and local `file://` Git dependencies, workspaces, and
-build scripts. Network Git transports, registry HTTPS, and proc macros remain
+projects, recursive path dependencies, workspaces, and build scripts. Local
+`file://` bare repositories are imported in-process to avoid an expensive
+Cargo-sized fork under emulation. The rootfs also ships pure-Rust `ssh` and
+`git-upload-pack` commands for gix/Cargo, with Ed25519 keys, `known_hosts`
+verification, and Git protocol-v1 pack streaming. The upload-pack fixture is
+guest-verified and host Git clones its generated pack successfully; a complete
+guest Cargo Git metadata run still needs accelerated/native x86 verification.
+Authenticated guest SSH Git, HTTPS Git/registry access, and proc macros remain
 pending.
 `make rust-official-std-probe` uses the official Rust 1.96.0 source tarball and
 checks the current expected blocker: direct standalone `build-std` reaches core

@@ -3,6 +3,25 @@ set -e
 export HOME=/root
 export PATH=/bin
 
+check_ssh() {
+    set +e
+    ssh >/tmp/ssh-usage.txt 2>&1
+    ssh_status=$?
+    set -e
+    test "$ssh_status" -eq 255 || exit 1
+    echo ssh-client-ok
+}
+
+check_local_git() {
+    mkdir /tmp/cargo-git-dependency || exit 1
+    cd /tmp/cargo-git-dependency
+    gzip -dc /usr/share/testdata/cargo-git-dependency.tar.gz | tar -xf - || exit 1
+    cp -r /usr/share/testdata/cargo-git-consumer /tmp/cargo-git-consumer || exit 1
+    cd /tmp/cargo-git-consumer
+    HOME=/root cargo metadata --format-version 1 || exit 1
+    echo cargo-local-git-ok
+}
+
 rustc --version || exit 1
 rustc --print target-list || exit 1
 HOME=/root cargo --version || exit 1
@@ -13,13 +32,8 @@ HOME=/root rust_host_probe || exit 1
 HOME=/root cargo new /tmp/cargo-smoke || exit 1
 cat /tmp/cargo-smoke/Cargo.toml
 pkg files rust-std-libs
-mkdir /tmp/cargo-git-dependency || exit 1
-cd /tmp/cargo-git-dependency
-gzip -dc /usr/share/testdata/cargo-git-dependency.tar.gz | tar -xf - || exit 1
-cp -r /usr/share/testdata/cargo-git-consumer /tmp/cargo-git-consumer || exit 1
-cd /tmp/cargo-git-consumer
-HOME=/root cargo metadata --format-version 1 || exit 1
-echo cargo-local-git-ok
+check_ssh
+check_local_git
 cd /tmp/cargo-smoke
 HOME=/root CARGO_INCREMENTAL=0 cargo run || exit 1
 echo cargo-smoke-ok

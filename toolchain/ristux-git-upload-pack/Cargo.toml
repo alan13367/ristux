@@ -1,0 +1,19 @@
+[package]
+name = "ristux-git-upload-pack"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "git-upload-pack"
+path = "src/main.rs"
+
+[dependencies]
+miniz_oxide = { path = "vendor/miniz_oxide", default-features = true }
+
+[profile.release]
+panic = "abort"
+strip = true
+
+[workspace]

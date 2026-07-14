@@ -12,7 +12,10 @@ file /bin/chown ../build/userland/chown.elf
 file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
 file /bin/cargo ../build/official-rust/bin/cargo
+file /bin/git-upload-pack ../build/official-rust/bin/git-upload-pack
+file /bin/ssh ../build/official-rust/bin/ssh
 file /bin/tc testdata/toolchain-smoke.sh
+file /bin/tcf testdata/toolchain-fast-smoke.sh
 file /bin/cut ../build/userland/cut.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
 file /bin/cc_cow ../build/userland/cc_cow.elf
@@ -153,6 +156,8 @@ package ar 0.1.0 /bin/ar
 package awk 0.1.0 /bin/awk
 package basename 0.1.0 /bin/basename
 package cargo 1.96.0 /bin/cargo deps=rustc,rust-std-libs
+package git-upload-pack 0.1.0 /bin/git-upload-pack
+package ssh 0.1.0 /bin/ssh
 package cat 0.1.0 /bin/cat
 package cc_cred 0.1.0 /bin/cc_cred
 package cc_cow 0.1.0 /bin/cc_cow

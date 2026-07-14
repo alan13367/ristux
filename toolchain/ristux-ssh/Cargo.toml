@@ -1,0 +1,29 @@
+[package]
+name = "ristux-ssh"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "ssh"
+path = "src/main.rs"
+
+[dependencies]
+getrandom = "=0.4.3"
+libm = "=0.2.16"
+russh = { path = "vendor/russh", default-features = false }
+tokio = { version = "1.49.0", default-features = false, features = ["io-util", "rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(not(target_os = "ristux"))'.dependencies]
+tokio = { version = "1.49.0", default-features = false, features = ["net"] }
+
+[profile.release]
+panic = "abort"
+strip = true
+
+[patch.crates-io]
+libc = { path = "vendor/libc" }
+
+[workspace]
+exclude = ["vendor/russh"]

@@ -1177,6 +1177,7 @@ fn is_ignored_flag(arg: &[u8]) -> bool {
             | b"--eh-frame-hdr"
             | b"--gc-sections"
             | b"--no-gc-sections"
+            | b"--strip-all"
             | b"-static"
             | b"--no-dynamic-linker"
     ) || arg.starts_with(b"-O")

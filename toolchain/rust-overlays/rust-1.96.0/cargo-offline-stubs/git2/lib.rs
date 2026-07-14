@@ -1,4 +1,5 @@
 use std::fmt;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -486,6 +487,35 @@ fn checkout_tree(repo: &Repository, id: Oid) -> Result<(), Error> {
 }
 
 impl Repository {
+    pub fn ristux_import_local(&mut self, remote_url: &str) -> Result<(), Error> {
+        eprintln!("ristux-git: copying local objects");
+        let source = remote_url.strip_prefix("file://").ok_or(Error)?;
+        let source = Path::new(source);
+        copy_tree(&source.join("objects"), &self.git_dir.join("objects"))?;
+
+        let source_heads = source.join("refs/heads");
+        let remote_heads = self.git_dir.join("refs/remotes/origin");
+        copy_tree(&source_heads, &remote_heads)?;
+        copy_tree(&source.join("refs/tags"), &self.git_dir.join("refs/tags"))?;
+
+        let head = fs::read_to_string(source.join("HEAD")).map_err(|_| Error)?;
+        let head = head.trim();
+        let oid = if let Some(reference) = head.strip_prefix("ref: ") {
+            fs::read_to_string(source.join(reference)).map_err(|_| Error)?
+        } else {
+            head.to_owned()
+        };
+        fs::create_dir_all(&remote_heads).map_err(|_| Error)?;
+        fs::write(remote_heads.join("HEAD"), format!("{}\n", oid.trim())).map_err(|_| Error)?;
+        fs::write(
+            self.git_dir.join("FETCH_HEAD"),
+            format!("{}\t\t{}\n", oid.trim(), remote_url),
+        )
+        .map_err(|_| Error)?;
+        eprintln!("ristux-git: local refs installed");
+        Ok(())
+    }
+
     fn from_gix(inner: gix::Repository) -> Self {
         let git_dir = inner.path().to_path_buf();
         let workdir = inner.workdir().map(Path::to_path_buf);
@@ -584,6 +614,24 @@ impl Repository {
     pub fn remote_anonymous(&self, _: &str) -> Result<Remote<'_>, Error> {
         Err(Error)
     }
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<(), Error> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(destination).map_err(|_| Error)?;
+    for entry in fs::read_dir(source).map_err(|_| Error)? {
+        let entry = entry.map_err(|_| Error)?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_tree(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            fs::copy(source_path, destination_path).map_err(|_| Error)?;
+        }
+    }
+    Ok(())
 }
 
 pub struct Remote<'a>(std::marker::PhantomData<&'a ()>);
