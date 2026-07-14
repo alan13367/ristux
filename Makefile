@@ -136,8 +136,13 @@ ROOTFS_GZIP_TESTDATA_SOURCE := rootfs/testdata/gzip-dynamic.txt
 ROOTFS_GZIP_TESTDATA_ARCHIVE := build/testdata/gzip-dynamic.txt.gz
 ROOTFS_SOURCEPKG_DIR := rootfs/testdata/sourcepkg
 ROOTFS_SOURCEPKG_INPUTS := $(shell find $(ROOTFS_SOURCEPKG_DIR) -type f 2>/dev/null | sort)
+ROOTFS_TESTDATA_INPUTS := $(shell find rootfs/testdata -type f 2>/dev/null | sort)
 ROOTFS_SOURCEPKG_TAR := build/testdata/ristuxpkg-0.1.tar
 ROOTFS_SOURCEPKG_ARCHIVE := build/testdata/ristuxpkg-0.1.tar.gz
+ROOTFS_CARGO_GIT_FIXTURE_DIR := build/testdata/cargo-git-dependency
+ROOTFS_CARGO_GIT_FIXTURE_STAMP := build/testdata/cargo-git-dependency.stamp
+ROOTFS_CARGO_GIT_FIXTURE_TAR := build/testdata/cargo-git-dependency.tar
+ROOTFS_CARGO_GIT_FIXTURE_ARCHIVE := build/testdata/cargo-git-dependency.tar.gz
 RUST_SYSROOT_TREE := build/rustlib
 RUST_SYSROOT_LIBDIR := $(RUST_SYSROOT_TREE)/x86_64-unknown-ristux/lib
 RUST_SYSROOT_STAMP := build/rustlib.stamp
@@ -147,13 +152,14 @@ RUST_STD_SYSROOT_STAMP := build/rust-std-sysroot.stamp
 RUST_PANIC_RUNTIME_SRC := toolchain/ristux-panic-runtime.rs
 RUST_PANIC_RUNTIME_RLIB := $(RUST_STD_SYSROOT_TREE)/x86_64-unknown-ristux/lib/libristux_panic.rlib
 RUST_OFFICIAL_RUSTC := build/official-rust/bin/rustc
+RUST_OFFICIAL_CARGO := build/official-rust/bin/cargo
 RUST_OFFICIAL_SYSROOT_TREE := build/official-rust/rustlib
 RUST_OFFICIAL_SYSROOT_STAMP := build/official-rust/rustlib.stamp
 RUST_OVERLAY_TREE := toolchain/rust-overlays/rust-1.96.0
 RUST_OVERLAY_INPUTS := $(shell find $(RUST_OVERLAY_TREE) -type f 2>/dev/null)
-ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml rootfs/testdata/ristuxpkg.patch targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(RUST_OFFICIAL_RUSTC) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
+ROOTFS_INPUTS := $(ROOTFS_MANIFEST) rootfs/etc/os-release rootfs/etc/resolv.conf rootfs/usr/lib/pkgconfig/ristux.pc rootfs/usr/lib/rustlib/rust-1.96.0-manifest.toml $(ROOTFS_TESTDATA_INPUTS) targets/x86_64-unknown-ristux.json $(ROOTFS_BASE_PACKAGE_ARCHIVE) $(ROOTFS_GZIP_TESTDATA_ARCHIVE) $(ROOTFS_SOURCEPKG_ARCHIVE) $(ROOTFS_CARGO_GIT_FIXTURE_ARCHIVE) $(RUST_OFFICIAL_RUSTC) $(RUST_OFFICIAL_CARGO) $(RUST_STD_PROBE_ELF) $(RUST_STD_SYSROOT_STAMP) $(RUST_OVERLAY_INPUTS)
 
-.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% rust-std-probe rust-std-probe-current rust-std-probe-current-blocker rust-std-probe-binary rust-std-sysroot rust-official-rustc rust-official-target-probe rust-official-bootstrap-std rust-official-bootstrap-stage2 rust-official-std-probe debug test clean
+.PHONY: all build rootfs disk check-multiboot iso installer-iso vm-blank vm-image vm-qcow2 run run-headless run-ssh smoke quick quick-% rust-std-probe rust-std-probe-current rust-std-probe-current-blocker rust-std-probe-binary rust-std-sysroot rust-official-rustc rust-official-cargo rust-official-target-probe rust-official-bootstrap-std rust-official-bootstrap-stage2 rust-official-std-probe debug test clean
 
 all: build
 
@@ -192,6 +198,11 @@ $(RUST_OFFICIAL_RUSTC): scripts/probe_rust_bootstrap_stage2.sh scripts/probe_rus
 	RISTUX_RUSTC_OUTPUT=$@ scripts/probe_rust_bootstrap_stage2.sh
 
 rust-official-rustc: $(RUST_OFFICIAL_RUSTC)
+
+$(RUST_OFFICIAL_CARGO): scripts/probe_rust_bootstrap_stage2.sh scripts/probe_rust_target.sh userland/src/bin/ristux_ld.rs $(RUST_OVERLAY_INPUTS)
+	RISTUX_RUSTC_OUTPUT=$(RUST_OFFICIAL_RUSTC) RISTUX_CARGO_OUTPUT=$@ scripts/probe_rust_bootstrap_stage2.sh
+
+rust-official-cargo: $(RUST_OFFICIAL_CARGO)
 
 $(USER_INIT_ELF): $(USERLAND_RS_STAMP)
 $(USER_SH_ELF): $(USERLAND_RS_STAMP)
@@ -299,6 +310,17 @@ $(ROOTFS_SOURCEPKG_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_SOURCEPKG_INPUTS)
 	$(PACKAGE_TAR_BUILDER) $@ $(ROOTFS_SOURCEPKG_DIR)
 
 $(ROOTFS_SOURCEPKG_ARCHIVE): $(ROOTFS_SOURCEPKG_TAR)
+	gzip -n -c $< > $@
+
+$(ROOTFS_CARGO_GIT_FIXTURE_STAMP): scripts/build_cargo_git_fixture.sh rootfs/testdata/cargo-git-dependency/Cargo.toml rootfs/testdata/cargo-git-dependency/src/lib.rs
+	mkdir -p build/testdata
+	scripts/build_cargo_git_fixture.sh $(ROOTFS_CARGO_GIT_FIXTURE_DIR)
+	touch $@
+
+$(ROOTFS_CARGO_GIT_FIXTURE_TAR): $(PACKAGE_TAR_BUILDER) $(ROOTFS_CARGO_GIT_FIXTURE_STAMP)
+	$(PACKAGE_TAR_BUILDER) $@ $(ROOTFS_CARGO_GIT_FIXTURE_DIR)
+
+$(ROOTFS_CARGO_GIT_FIXTURE_ARCHIVE): $(ROOTFS_CARGO_GIT_FIXTURE_TAR)
 	gzip -n -c $< > $@
 
 $(ISO_INITRD): $(USERLAND_RS_STAMP) $(RUST_SYSROOT_STAMP) $(ROOTFS_BUILDER) $(ROOTFS_INPUTS)

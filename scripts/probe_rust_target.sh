@@ -282,7 +282,9 @@ patch_ristux_std() {
   perl -0pi -e 's/    target_os = "linux",\n    target_os = "cygwin",/    target_os = "linux",\n    target_os = "ristux",\n    target_os = "cygwin",/' "$std_dir/sys/paths/unix.rs"
   perl -0pi -e 's/        target_os = "nto",\n    \) => \{/        target_os = "nto",\n        target_os = "ristux",\n    ) => {/' "$std_dir/sys/random/mod.rs"
   perl -0pi -e 's/            target_os = "redox",\n            target_os = "hurd",/            target_os = "redox",\n            target_os = "ristux",\n            target_os = "hurd",/g' "$std_dir/sys/thread/mod.rs"
+  perl -0pi -e 's/            target_os = "linux",\n            target_os = "aix",/            target_os = "linux",\n            target_os = "ristux",\n            target_os = "aix",/' "$std_dir/sys/thread/unix.rs"
   perl -0pi -e 's/    target_os = "redox",\n    target_os = "solaris",/    target_os = "redox",\n    target_os = "ristux",\n    target_os = "solaris",/g; s/    target_os = "redox",\n    target_os = "rtems",/    target_os = "redox",\n    target_os = "ristux",\n    target_os = "rtems",/g; s/        target_os = "redox",\n        target_os = "solaris",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "solaris",/g; s/        target_os = "redox",\n        target_os = "rtems",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "rtems",/g; s/        target_os = "redox",\n        target_os = "aix",/        target_os = "redox",\n        target_os = "ristux",\n        target_os = "aix",/g' "$std_dir/sys/fs/unix.rs"
+  perl -0pi -e 's/        target_os = "linux",\n        target_os = "netbsd",/        target_os = "linux",\n        target_os = "ristux",\n        target_os = "netbsd",/g' "$std_dir/sys/fs/unix.rs"
   perl -0pi -e 's/        target_os = "linux",\n        target_os = "android",/        target_os = "linux",\n        target_os = "ristux",\n        target_os = "android",/' "$std_dir/sys/sync/mutex/mod.rs" "$std_dir/sys/sync/condvar/mod.rs" "$std_dir/sys/sync/once/mod.rs" "$std_dir/sys/sync/thread_parking/mod.rs" "$std_dir/sys/sync/rwlock/mod.rs"
   perl -0pi -e 's/        \|\| target_os == "vexos"\n/        || target_os == "vexos"\n        || target_os == "ristux"\n/' "$work_source/library/std/build.rs"
   mv "$std_dir/sys/pal/unix/futex.rs" "$std_dir/sys/pal/unix/futex_upstream.rs"
@@ -293,7 +295,7 @@ patch_ristux_std() {
   perl -0pi -e 's/compiler-builtins-c = \["compiler_builtins\/c"\]/compiler-builtins-c = ["compiler_builtins\/c"]\ncompiler-builtins-no-asm = ["compiler_builtins\/no-asm"]/' "$work_source/library/alloc/Cargo.toml"
   perl -0pi -e 's/compiler-builtins-mem = \["alloc\/compiler-builtins-mem"\]/compiler-builtins-mem = ["alloc\/compiler-builtins-mem"]\ncompiler-builtins-no-asm = ["alloc\/compiler-builtins-no-asm"]/' "$work_source/library/std/Cargo.toml"
   perl -0pi -e 's/compiler-builtins-mem = \["std\/compiler-builtins-mem"\]/compiler-builtins-mem = ["std\/compiler-builtins-mem"]\ncompiler-builtins-no-asm = ["std\/compiler-builtins-no-asm"]/' "$work_source/library/sysroot/Cargo.toml"
-  perl -0pi -e 's/#\[cfg\(not\(target_os = "espidf"\)\)\]\n/#[cfg(target_os = "ristux")]\npub unsafe fn init(argc: isize, argv: *const *const u8, _sigpipe: u8) {\n    crate::sys::args::init(argc, argv);\n}\n\n#[cfg(not(any(target_os = "espidf", target_os = "ristux")))]\n/' "$std_dir/sys/pal/unix/mod.rs"
+  perl -0pi -e 's/#\[cfg\(not\(target_os = "espidf"\)\)\]\n/#[cfg(target_os = "ristux")]\npub unsafe fn init(argc: isize, argv: *const *const u8, _sigpipe: u8) {\n    unsafe extern "C" {\n        static mut environ: *const *const libc::c_char;\n    }\n    environ = argv.add(argc as usize + 1) as *const *const libc::c_char;\n    crate::sys::args::init(argc, argv);\n}\n\n#[cfg(not(any(target_os = "espidf", target_os = "ristux")))]\n/' "$std_dir/sys/pal/unix/mod.rs"
   perl -0pi -e 's/pub unsafe fn cleanup\(\) \{\n    stack_overflow::cleanup\(\);\n\}/#[cfg(target_os = "ristux")]\npub unsafe fn cleanup() {}\n\n#[cfg(not(target_os = "ristux"))]\npub unsafe fn cleanup() {\n    stack_overflow::cleanup();\n}/' "$std_dir/sys/pal/unix/mod.rs"
 
   grep -q 'pub mod ristux' "$std_dir/os/mod.rs" || {
@@ -445,6 +447,7 @@ download-ci-llvm = false
 build = "$host_triple"
 host = ["$host_triple", "x86_64-unknown-ristux"]
 target = ["$host_triple", "x86_64-unknown-ristux"]
+jobs = 4
 extended = true
 tools = ["cargo", "rustdoc", "src"]
 build-dir = "$PROBE_DIR/bootstrap-build"

@@ -1,0 +1,9 @@
+[package]
+name = "git2-curl"
+version = "0.21.0"
+edition = "2024"
+[dependencies]
+curl = { path = "../ristux-stub-curl" }
+git2 = { path = "../ristux-stub-git2" }
+[lib]
+path = "lib.rs"

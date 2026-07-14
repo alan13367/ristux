@@ -109,6 +109,7 @@ pub const NR_getpgrp: u64 = 111;
 pub const NR_setsid: u64 = 112;
 pub const NR_getgroups: u64 = 115;
 pub const NR_setgroups: u64 = 116;
+pub const NR_flock: u64 = 73;
 pub const NR_setresuid: u64 = 117;
 pub const NR_getresuid: u64 = 118;
 pub const NR_setresgid: u64 = 119;
@@ -345,6 +346,7 @@ pub extern "C" fn linux_syscall_dispatch_frame(frame: &mut SyscallInterruptFrame
         NR_access => linux_access(a0 as usize, a1 as i32),
         NR_pipe => linux_pipe(a0 as usize),
         NR_pipe2 => linux_pipe2(a0 as usize, a1 as u32),
+        NR_flock => linux_flock(a0 as usize, a1 as i32),
         NR_select => linux_select(
             frame,
             a0 as i32,
@@ -1347,6 +1349,23 @@ fn linux_fcntl(fd: usize, cmd: i32, arg: u64) -> Result<u64, i64> {
         }
         _ => Err(EINVAL),
     }
+}
+
+fn linux_flock(fd: usize, operation: i32) -> Result<u64, i64> {
+    const LOCK_SH: i32 = 1;
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    const LOCK_UN: i32 = 8;
+    if operation & !(LOCK_SH | LOCK_EX | LOCK_NB | LOCK_UN) != 0
+        || operation & (LOCK_SH | LOCK_EX | LOCK_UN) == 0
+    {
+        return Err(EINVAL);
+    }
+    process::user_vfs_fd(fd).ok_or(EBADF)?;
+    // Ristux currently has a single system-wide VFS instance. Accept advisory
+    // locks so Rust/Cargo can coordinate their lock files; mandatory locking
+    // and cross-machine semantics are intentionally out of scope.
+    Ok(0)
 }
 
 fn linux_fsync(fd: usize) -> Result<u64, i64> {
@@ -4302,6 +4321,7 @@ fn linux_stat_mode(kind: fs::vfs::StatKind, mode: u16) -> u32 {
     const S_IFREG: u32 = 0o100000;
     const S_IFDIR: u32 = 0o040000;
     const S_IFCHR: u32 = 0o020000;
+    const S_IFIFO: u32 = 0o010000;
     const S_IFLNK: u32 = 0o120000;
 
     let file_type = match kind {
@@ -4309,6 +4329,7 @@ fn linux_stat_mode(kind: fs::vfs::StatKind, mode: u16) -> u32 {
         fs::vfs::StatKind::Directory => S_IFDIR,
         fs::vfs::StatKind::Symlink => S_IFLNK,
         fs::vfs::StatKind::CharDevice => S_IFCHR,
+        fs::vfs::StatKind::Fifo => S_IFIFO,
     };
     file_type | u32::from(mode & 0o7777)
 }

@@ -1,0 +1,13 @@
+[package]
+name = "git2"
+version = "0.20.4"
+edition = "2024"
+[lib]
+path = "lib.rs"
+
+[features]
+default = []
+vendored-libgit2 = []
+
+[dependencies]
+gix = { workspace = true, features = ["blocking-network-client", "revision", "worktree-mutation", "worktree-stream"] }

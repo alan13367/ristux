@@ -9,6 +9,7 @@ SERIAL_LOG="${RISTUX_SERIAL_LOG:-/tmp/ristux-smoke-serial.log}"
 REBOOT_SERIAL_LOG="${RISTUX_REBOOT_SERIAL_LOG:-/tmp/ristux-smoke-reboot-serial.log}"
 QEMU_FLAGS="${QEMU_FLAGS:-}"
 REBUILD="${RISTUX_SMOKE_REBUILD:-1}"
+TOOLCHAIN_ONLY="${RISTUX_SMOKE_TOOLCHAIN_ONLY:-0}"
 SLEEP_SCALE="${RISTUX_SMOKE_SLEEP_SCALE:-1}"
 if [[ -z "$QEMU_FLAGS" ]]; then
   QEMU_FLAGS="-m 2048M -smp 4"
@@ -75,7 +76,7 @@ send_text() {
       '~') printf 'sendkey alt-n\n' ;;
       *) echo "smoke_test: unsupported key '$ch'" >&2; exit 1 ;;
     esac
-    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.01}"
+    sleep "${RISTUX_SMOKE_KEY_DELAY:-0.12}"
   done
 }
 
@@ -88,11 +89,23 @@ normalize_serial_noise() {
 
 set +e
 (
-  sleep "${RISTUX_SMOKE_BOOT_WAIT:-20}"
+  set -e
+  trap 'printf "quit\\n"' EXIT
+  wait_for_serial 'login: ' "${RISTUX_SMOKE_BOOT_WAIT:-180}"
+  sleep 2
   send_text "root"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
+    send_text "tc q"
+    sleep 1
+    printf 'sendkey ret\n'
+    wait_for_serial 'toolchain-smoke: done' "${RISTUX_SMOKE_CARGO_WORKSPACE_WAIT:-3600}"
+    printf 'quit\n'
+    trap - EXIT
+    exit 0
+  fi
   send_text "stty -a"
   sleep 1
   printf 'sendkey ret\n'
@@ -164,94 +177,6 @@ set +e
   printf 'sendkey ret\n'
   sleep 3
   send_text "cat /pkg/packages.txt"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rustc --version"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'rustc 1\.96\.0' "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
-  send_text "rustc --print target-list"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'x86_64-unknown-ristux' "${RISTUX_SMOKE_RUSTC_INFO_WAIT:-90}"
-  send_text "cargo --version"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rustdoc --version"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "ristux-ld --self-test"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "ristux-ld --self-test-archive"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "rust_host_probe"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'rust_host_probe: done' "${RISTUX_SMOKE_RUST_HOST_PROBE_WAIT:-75}"
-  send_text "rustc_metadata_probe --direct"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'rustc_metadata_probe: direct binary run ok' "${RISTUX_SMOKE_RUSTC_DIRECT_WAIT:-900}"
-  send_text "rustc_metadata_probe --hosted"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'rustc_metadata_probe: hosted binary run ok' "${RISTUX_SMOKE_RUSTC_HOSTED_WAIT:-1900}"
-  send_text "cargo new /tmp/cargo-smoke"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "cat /tmp/cargo-smoke/*argo.toml"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "grep 'extern crate ristux_panic' /tmp/cargo-smoke/src/main.rs"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg files rust-std-libs"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "cd /tmp/cargo-smoke"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "cargo run"
-  sleep 1
-  printf 'sendkey ret\n'
-  wait_for_serial 'Running `target/debug/cargo-smoke`' "${RISTUX_SMOKE_CARGO_LOCAL_WAIT:-900}"
-  send_text "echo cargo-smoke-ok"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info rustc"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info cargo"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info rustdoc"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info rust-host-probe"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info rustc-metadata-probe"
-  sleep 1
-  printf 'sendkey ret\n'
-  sleep 3
-  send_text "pkg info rust-core-libs"
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
@@ -473,7 +398,12 @@ set +e
   sleep 1
   printf 'sendkey ret\n'
   sleep 3
+  send_text "tc"
+  sleep 1
+  printf 'sendkey ret\n'
+  wait_for_serial 'toolchain-smoke: done' "${RISTUX_SMOKE_CARGO_WORKSPACE_WAIT:-3600}"
   printf 'quit\n'
+  trap - EXIT
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-monitor.log
 qemu_status=$?
@@ -482,9 +412,25 @@ if [[ $qemu_status -ne 0 ]]; then
   echo "smoke_test: first QEMU run exited with status $qemu_status; checking serial assertions" >&2
 fi
 
+if [[ "$TOOLCHAIN_ONLY" == "1" ]]; then
+  normalize_serial_noise "$SERIAL_LOG"
+  grep -q "TTY canonical line ready: tc" "$SERIAL_LOG"
+  grep -q "rustc 1.96.0" "$SERIAL_LOG"
+  grep -Eq "cargo 1\.96\.0 \([0-9a-f]+ 2026-05-25\)" "$SERIAL_LOG"
+  grep -q "cargo-smoke-ok" "$SERIAL_LOG"
+  grep -q "workspace-build-script: build-script-ok" "$SERIAL_LOG"
+  grep -q "toolchain-smoke: done" "$SERIAL_LOG"
+  ! grep -q "kernel panic" "$SERIAL_LOG"
+  echo "Ristux toolchain smoke test passed"
+  exit 0
+fi
+
 set +e
 (
-  sleep "${RISTUX_SMOKE_BOOT_WAIT:-20}"
+  set -e
+  trap 'printf "quit\\n"' EXIT
+  wait_for_serial 'login: ' "${RISTUX_SMOKE_BOOT_WAIT:-180}"
+  sleep 2
   send_text "alice"
   sleep 1
   printf 'sendkey ret\n'
@@ -502,6 +448,7 @@ set +e
   printf 'sendkey ret\n'
   sleep 3
   printf 'quit\n'
+  trap - EXIT
 ) | "$QEMU_BIN" "${QEMU_ARGS[@]}" -display none -no-reboot \
   -serial "file:$REBOOT_SERIAL_LOG" -monitor stdio >/tmp/ristux-smoke-reboot-monitor.log
 qemu_status=$?
@@ -564,19 +511,13 @@ grep -q "TTY canonical line ready: cat /etc/motd" "$SERIAL_LOG"
 grep -q "ristux package archive path online" "$SERIAL_LOG"
 grep -q "TTY canonical line ready: cat /pkg/packages.txt" "$SERIAL_LOG"
 grep -q "base-files 0.1.0 /etc/motd" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --version" "$SERIAL_LOG"
+grep -q "TTY canonical line ready: tc" "$SERIAL_LOG"
 grep -q "rustc 1.96.0" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc --print target-list" "$SERIAL_LOG"
 grep -q "^x86_64-unknown-ristux$" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: cargo --version" "$SERIAL_LOG"
-grep -q "cargo 1.96.0 (ristux native-local)" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustdoc --version" "$SERIAL_LOG"
+grep -Eq "cargo 1\.96\.0 \([0-9a-f]+ 2026-05-25\)" "$SERIAL_LOG"
 grep -q "rustdoc 1.96.0 (ristux official-bootstrap stage0)" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: ristux-ld --self-test" "$SERIAL_LOG"
 grep -q "ristux-ld: self-test linked static ELF64 ET_EXEC" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: ristux-ld --self-test-archive" "$SERIAL_LOG"
 grep -q "ristux-ld: self-test linked archive/rlib input" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rust_host_probe" "$SERIAL_LOG"
 grep -q "rust_host_probe: toolchain files ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: manifest ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: target spec ok" "$SERIAL_LOG"
@@ -599,46 +540,34 @@ grep -q "rust_host_probe: clear child tid wake ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: exit group threads ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: synchronization ok" "$SERIAL_LOG"
 grep -q "rust_host_probe: done" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc_metadata_probe --direct" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct status 0" "$SERIAL_LOG"
 grep -Eq "rustc_metadata_probe: direct binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: direct binary run ok" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: rustc_metadata_probe --hosted" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: hosted status 0" "$SERIAL_LOG"
 grep -Eq "rustc_metadata_probe: hosted binary-bytes [1-9][0-9]*" "$SERIAL_LOG"
 grep -q "rustc_metadata_probe: hosted binary run ok" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: cargo new /tmp/cargo-smoke" "$SERIAL_LOG"
-grep -q 'Created binary package `cargo-smoke`' "$SERIAL_LOG"
-grep -q "TTY canonical line ready: cat /tmp/cargo-smoke/\\*argo.toml" "$SERIAL_LOG"
+grep -Eq 'Creating binary .*`cargo-smoke` package' "$SERIAL_LOG"
 grep -q '^edition = "2024"$' "$SERIAL_LOG"
-grep -q "TTY canonical line ready: grep 'extern crate ristux_panic' /tmp/cargo-smoke/src/main.rs" "$SERIAL_LOG"
-grep -q "^extern crate ristux_panic;$" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg files rust-std-libs" "$SERIAL_LOG"
 grep -q "^/usr/lib/rustlib/x86_64-unknown-ristux/lib/libristux_panic.rlib$" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: cd /tmp/cargo-smoke" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: cargo run" "$SERIAL_LOG"
 grep -q "Compiling cargo-smoke v0.1.0" "$SERIAL_LOG"
 grep -q "Finished debug profile" "$SERIAL_LOG"
 grep -q 'Running `target/debug/cargo-smoke`' "$SERIAL_LOG"
 grep -q "^cargo-smoke-ok$" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info rustc" "$SERIAL_LOG"
+grep -q "Compiling workspace-app v0.1.0" "$SERIAL_LOG"
+grep -q "workspace-build-script: build-script-ok" "$SERIAL_LOG"
 grep -q "name: rustc" "$SERIAL_LOG"
 grep -q "  ristux-ld" "$SERIAL_LOG"
 grep -q "  /bin/rustc" "$SERIAL_LOG"
 grep -q "  /usr/lib/rustlib/rust-1.96.0-manifest.toml" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info cargo" "$SERIAL_LOG"
 grep -q "name: cargo" "$SERIAL_LOG"
 grep -q "  /bin/cargo" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info rustdoc" "$SERIAL_LOG"
 grep -q "name: rustdoc" "$SERIAL_LOG"
 grep -q "  /bin/rustdoc" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info rust-host-probe" "$SERIAL_LOG"
 grep -q "name: rust-host-probe" "$SERIAL_LOG"
 grep -q "  /bin/rust_host_probe" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info rustc-metadata-probe" "$SERIAL_LOG"
 grep -q "name: rustc-metadata-probe" "$SERIAL_LOG"
 grep -q "  /bin/rustc_metadata_probe" "$SERIAL_LOG"
-grep -q "TTY canonical line ready: pkg info rust-core-libs" "$SERIAL_LOG"
+grep -q "toolchain-smoke: done" "$SERIAL_LOG"
 grep -q "name: rust-core-libs" "$SERIAL_LOG"
 grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/libcore-.*\\.rlib" "$SERIAL_LOG"
 grep -q "/usr/lib/rustlib/x86_64-unknown-ristux/lib/liballoc-.*\\.rlib" "$SERIAL_LOG"

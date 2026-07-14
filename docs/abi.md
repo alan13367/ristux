@@ -319,12 +319,12 @@ toolchain bootstrap:
   `make rust-official-rustc` copies that compiler into
   `build/official-rust/bin/rustc`, and the default rootfs and installer use it
   as `/bin/rustc`. The same probe then runs the real stage2 Ristux-hosted
-  Cargo bootstrap path. That path now gets past the previous `rustc_driver`
-  dylib-output and Cranelift component-format blockers and reaches Cargo
-  C-backed dependency blockers: `curl-sys`, `libgit2-sys`, `libssh2-sys`, and
-  `libz-sys` still enter the build and try to compile C for Ristux. These need
-  target-gating or pure Rust replacements for registry transport, Git,
-  compression, and package database support.
+  Cargo bootstrap path. That path gets past the previous `rustc_driver`
+  dylib-output and Cranelift component-format blockers and removes Cargo's
+  C-backed curl/libgit2/libssh2/zlib graph. The Ristux compatibility layer uses
+  gix for repository discovery, object/ref access, pure-Rust fetches, and
+  checkout. Local `file://` Git dependencies are supported; authenticated SSH,
+  HTTPS Git, sparse registry HTTPS, and proc macros remain separate boundaries.
   `make rust-official-std-probe` separately verifies the current official
   Rust 1.96.0 source boundary: direct standalone `build-std` against the
   official source reaches the expected stage1-bootstrap blocker, so the real
@@ -355,9 +355,10 @@ toolchain bootstrap:
   hosted template whose native `cargo run` path is boot-verified. Native local
   builds support editions 2015, 2018, 2021, and 2024. Explicit workspaces with
   inline `members = ["path", ...]` lists support `--workspace` builds and
-  `--package` selection. Registry, Git, build-script, proc-macro, wildcard
-  workspace members, and general dependency resolution remain future Cargo
-  boundaries.
+  `--package` selection, and build scripts execute through the native process
+  path. Local `file://` Git dependencies resolve and checkout through gix.
+  Registry HTTPS, authenticated network Git transports, proc macros, and
+  wildcard workspace members remain future Cargo boundaries.
   `/bin/rust_host_probe` is the
   packaged acceptance probe for the host surface and exercises toolchain
   metadata, package visibility, environment vectors, file I/O, fd flags,

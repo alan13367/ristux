@@ -9,6 +9,7 @@ LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_LOG:-$PROBE_DIR/bootstrap-stage2-build.log}"
 RUSTC_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_RUSTC_LOG:-$PROBE_DIR/bootstrap-stage2-rustc-build.log}"
 STAGE1_CODEGEN_LOG="${RISTUX_RUST_BOOTSTRAP_STAGE2_CODEGEN_LOG:-$PROBE_DIR/bootstrap-stage1-codegen.log}"
 RUSTC_OUTPUT="${RISTUX_RUSTC_OUTPUT:-}"
+CARGO_OUTPUT="${RISTUX_CARGO_OUTPUT:-}"
 HOST_RISTUX_LD_DIR="$PROBE_DIR/host-tools"
 RUSTC_HOST="${RISTUX_HOST_RUSTC:-rustc +nightly}"
 CARGO_STAGE0="${RISTUX_STAGE0_CARGO:-cargo +1.96.0}"
@@ -39,6 +40,7 @@ import pathlib
 import sys
 import hashlib
 import json
+import shutil
 
 root = pathlib.Path(sys.argv[1])
 
@@ -115,6 +117,14 @@ fn main() -> ExitCode {
 }
 ''',
     "rustc-main static Cranelift entrypoint",
+)
+
+cranelift_global_asm = root / "compiler/rustc_codegen_cranelift/src/global_asm.rs"
+replace(
+    cranelift_global_asm,
+    '    if option_env!("CG_CLIF_FORCE_GNU_AS").is_some() {',
+    "    if true {",
+    "Cranelift external assembler selection",
 )
 
 filesearch_rs = root / "compiler/rustc_session/src/filesearch.rs"
@@ -274,6 +284,7 @@ for crate_dir in sorted((root / "vendor").glob("crc32fast-*")):
 ''',
         '''    } else if #[cfg(all(
         not(target_os = "ristux"),
+        not(target_arch = "aarch64"),
         stable_arm_crc32_intrinsics,
         target_arch = "aarch64"
     ))] {
@@ -283,6 +294,7 @@ for crate_dir in sorted((root / "vendor").glob("crc32fast-*")):
 ''',
         '''    } else if #[cfg(all(
         not(target_os = "ristux"),
+        not(target_arch = "aarch64"),
         feature = "nightly",
         target_arch = "aarch64"
     ))] {
@@ -484,6 +496,28 @@ for crate_dir in sorted((root / "vendor").glob("constant_time_eq-*")):
     )),
     miri,
 ))]''',
+        ).replace(
+            '''#[cfg(not(any(
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2",
+        not(miri)
+    ),
+    all(target_arch = "aarch64", target_feature = "neon", not(miri))
+)))]
+use generic as simd;''',
+            '''#[cfg(any(
+    target_os = "ristux",
+    not(any(
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2",
+            not(miri)
+        ),
+        all(target_arch = "aarch64", target_feature = "neon", not(miri))
+    ))
+))]
+use generic as simd;''',
         )
         if new_text != text:
             path.write_text(new_text)
@@ -841,6 +875,181 @@ for crate_dir in sorted((root / "vendor").glob("rustix-*")):
 
 if patched_rustix == 0:
     raise SystemExit("failed to patch vendored rustix ioctl opcode type for Ristux")
+
+patched_filetime = 0
+for crate_dir in sorted((root / "vendor").glob("filetime-*")):
+    unix_rs = crate_dir / "src/unix/mod.rs"
+    if not unix_rs.exists():
+        continue
+    text = unix_rs.read_text()
+    new_text = text.replace(
+        '                        target_os = "haiku"))] {',
+        '                        target_os = "haiku",\n                        target_os = "ristux"))] {',
+    )
+    if new_text != text:
+        unix_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "src/unix/mod.rs")
+        patched_filetime += 1
+
+if patched_filetime == 0:
+    raise SystemExit("failed to patch vendored filetime crate for Ristux utimensat support")
+
+patched_heapless = 0
+for crate_dir in sorted((root / "vendor").glob("heapless-*")):
+    build_rs = crate_dir / "build.rs"
+    if not build_rs.exists():
+        continue
+    text = build_rs.read_text()
+    new_text = text.replace(
+        '    if !target.starts_with("aarch64") {',
+        '    if target != "x86_64-unknown-ristux" && !target.starts_with("aarch64") {',
+    )
+    if new_text != text:
+        build_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "build.rs")
+        patched_heapless += 1
+
+if patched_heapless == 0:
+    raise SystemExit("failed to gate vendored heapless ARM assembly probe for Ristux")
+
+patched_zmij = 0
+for crate_dir in sorted((root / "vendor").glob("zmij-*")):
+    lib_rs = crate_dir / "src/lib.rs"
+    if not lib_rs.exists():
+        continue
+    text = lib_rs.read_text()
+    new_text = text.replace(
+        "not(miri)",
+        'not(any(miri, target_os = "ristux"))',
+    )
+    if new_text != text:
+        lib_rs.write_text(new_text)
+        refresh_vendor_checksum(crate_dir, "src/lib.rs")
+        patched_zmij += 1
+
+if patched_zmij == 0:
+    raise SystemExit("failed to select vendored zmij portable paths for Ristux")
+
+cargo_root = root / "src/tools/cargo"
+stub_root = pathlib.Path.cwd() / "toolchain/rust-overlays/rust-1.96.0/cargo-offline-stubs"
+for name in ("curl", "curl-sys", "git2", "git2-curl", "libgit2-sys"):
+    source = stub_root / name
+    destination = cargo_root / "crates" / f"ristux-stub-{name}"
+    if not source.is_dir():
+        raise SystemExit(f"missing Ristux Cargo offline stub: {source}")
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+
+offline_overlay_root = pathlib.Path.cwd() / "toolchain/rust-overlays/rust-1.96.0/cargo-offline-overlays"
+cache_tracker_overlay = offline_overlay_root / "global_cache_tracker_ristux.rs"
+if not cache_tracker_overlay.is_file():
+    raise SystemExit(f"missing Ristux Cargo cache tracker overlay: {cache_tracker_overlay}")
+shutil.copy2(
+    cache_tracker_overlay,
+    cargo_root / "src/cargo/core/global_cache_tracker_ristux.rs",
+)
+
+core_mod = cargo_root / "src/cargo/core/mod.rs"
+replace(
+    core_mod,
+    "pub mod global_cache_tracker;",
+    '#[cfg_attr(target_os = "ristux", path = "global_cache_tracker_ristux.rs")]\npub mod global_cache_tracker;',
+    "Cargo Ristux no-SQLite cache tracker",
+)
+
+util_mod = cargo_root / "src/cargo/util/mod.rs"
+replace(
+    util_mod,
+    "pub mod sqlite;",
+    '#[cfg(not(target_os = "ristux"))]\npub mod sqlite;',
+    "Cargo Ristux SQLite utility gating",
+)
+
+cargo_new = cargo_root / "src/cargo/ops/cargo_new.rs"
+replace(
+    cargo_new,
+    "            (None, false) => VersionControl::Git,",
+    '            (None, false) => {\n'
+    '                if cfg!(target_os = "ristux") {\n'
+    '                    VersionControl::NoVcs\n'
+    '                } else {\n'
+    '                    VersionControl::Git\n'
+    '                }\n'
+    '            },',
+    "Cargo Ristux offline default VCS",
+)
+
+cargo_features = cargo_root / "src/cargo/core/features.rs"
+replace(
+    cargo_features,
+    'fn cargo_use_gitoxide_instead_of_git2() -> bool {\n'
+    '    std::env::var_os("__CARGO_USE_GITOXIDE_INSTEAD_OF_GIT2").map_or(false, |value| value == "1")\n'
+    '}',
+    'fn cargo_use_gitoxide_instead_of_git2() -> bool {\n'
+    '    cfg!(target_os = "ristux")\n'
+    '        || std::env::var_os("__CARGO_USE_GITOXIDE_INSTEAD_OF_GIT2")\n'
+    '            .map_or(false, |value| value == "1")\n'
+    '}',
+    "Cargo Ristux pure-Rust Git backend default",
+)
+
+cargo_git_utils = cargo_root / "src/cargo/sources/git/utils.rs"
+replace(
+    cargo_git_utils,
+    '    } else if gctx.cli_unstable().gitoxide.map_or(false, |git| git.fetch) {',
+    '    } else if cfg!(target_os = "ristux")\n'
+    '        || std::env::var_os("__CARGO_USE_GITOXIDE_INSTEAD_OF_GIT2")\n'
+    '            .map_or(false, |value| value == "1")\n'
+    '        || gctx.cli_unstable().gitoxide.map_or(false, |git| git.fetch)\n'
+    '    {',
+    "Cargo Ristux gix fetch selection",
+)
+
+cargo_util_paths = cargo_root / "crates/cargo-util/src/paths.rs"
+text = cargo_util_paths.read_text()
+old_mode_mask = "u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO)"
+new_mode_mask = "(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO) as u32"
+if old_mode_mask not in text:
+    raise SystemExit("failed to locate Cargo permission masks for Ristux mode_t")
+cargo_util_paths.write_text(text.replace(old_mode_mask, new_mode_mask))
+
+cargo_toml = cargo_root / "Cargo.toml"
+text = cargo_toml.read_text()
+patch_section = '''[patch.crates-io]
+curl = { path = "crates/ristux-stub-curl" }
+curl-sys = { path = "crates/ristux-stub-curl-sys" }
+git2 = { path = "crates/ristux-stub-git2" }
+git2-curl = { path = "crates/ristux-stub-git2-curl" }
+libgit2-sys = { path = "crates/ristux-stub-libgit2-sys" }
+
+'''
+if patch_section not in text:
+    marker = "[workspace.lints.rust]\n"
+    if marker not in text:
+        raise SystemExit("failed to locate Cargo workspace lint section for offline patches")
+    text = text.replace(marker, patch_section + marker, 1)
+if 'ristux-offline = ["gix/blocking-network-client"]' not in text:
+    marker = 'default = ["http-transport-curl"]\n'
+    if marker not in text:
+        raise SystemExit("failed to locate Cargo default HTTP transport feature")
+    text = text.replace(
+        marker,
+        'default = ["ristux-offline"]\nristux-offline = ["gix/blocking-network-client"]\n',
+        1,
+    )
+ristux_sqlite_dependency = '''[target.'cfg(not(target_os = "ristux"))'.dependencies]
+rusqlite = { workspace = true, features = ["fallible_uint"] }
+
+'''
+if ristux_sqlite_dependency not in text:
+    dependency = 'rusqlite = { workspace = true, features = ["fallible_uint"] }\n'
+    if dependency not in text:
+        raise SystemExit("failed to locate Cargo rusqlite dependency")
+    text = text.replace(dependency, "", 1)
+    marker = "[target.'cfg(target_has_atomic = \"64\")'.dependencies]\n"
+    if marker not in text:
+        raise SystemExit("failed to locate Cargo target dependency section")
+    text = text.replace(marker, ristux_sqlite_dependency + marker, 1)
+cargo_toml.write_text(text)
 PY
 
   (
@@ -850,6 +1059,7 @@ PY
   (
     cd "$source_dir/src/tools/cargo"
     "${CARGO_STAGE0_CMD[@]}" update --offline -p flate2
+    "${CARGO_STAGE0_CMD[@]}" check --offline -p cargo --no-default-features --features ristux-offline
   ) >/dev/null
 
   grep -q 'rustc_codegen_cranelift = { path = "../rustc_codegen_cranelift" }' "$source_dir/compiler/rustc/Cargo.toml" || {
@@ -866,7 +1076,15 @@ PY
   }
 }
 
+if [[ "${RISTUX_RUST_BOOTSTRAP_PATCH_ONLY:-0}" == "1" ]]; then
+  patch_static_cranelift_compiler "$source_dir"
+  echo "official Rust $RUST_VERSION Ristux bootstrap sources patched and Cargo checked"
+  exit 0
+fi
+
 mkdir -p "$HOST_RISTUX_LD_DIR"
+cp "$PWD/toolchain/host-tools/ristux-as" "$HOST_RISTUX_LD_DIR/ristux-as"
+chmod 755 "$HOST_RISTUX_LD_DIR/ristux-as"
 "${RUSTC_HOST_CMD[@]}" \
   --edition=2024 \
   --cfg ristux_ld_host \
@@ -880,6 +1098,7 @@ set +e
 (
   cd "$source_dir"
   PATH="$HOST_RISTUX_LD_DIR:$PATH" \
+    CG_CLIF_FORCE_GNU_AS=1 \
     BOOTSTRAP_SKIP_TARGET_SANITY=1 \
     python3 x.py \
       --config "$config" \
@@ -904,6 +1123,7 @@ set +e
 (
   cd "$source_dir"
   PATH="$HOST_RISTUX_LD_DIR:$PATH" \
+    CG_CLIF_FORCE_GNU_AS=1 \
     BOOTSTRAP_SKIP_TARGET_SANITY=1 \
     python3 x.py \
       --config "$config" \
@@ -982,6 +1202,11 @@ if [[ $status -eq 0 ]]; then
     echo "official Rust $RUST_VERSION stage2 Cargo build succeeded but did not produce expected Ristux Cargo binary" >&2
     echo "log: $LOG" >&2
     exit 1
+  fi
+  if [[ -n "$CARGO_OUTPUT" ]]; then
+    mkdir -p "$(dirname "$CARGO_OUTPUT")"
+    cp "${cargo_bins[0]}" "$CARGO_OUTPUT"
+    chmod 755 "$CARGO_OUTPUT"
   fi
   echo "official Rust $RUST_VERSION stage2 Ristux rustc/Cargo bootstrap build passed: $RUSTC_LOG ; $LOG"
   exit 0

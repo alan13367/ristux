@@ -408,7 +408,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"official_stage2_static_driver_probe = \"reaches Cargo C-backed dependency blockers\"",
+            b"official_stage2_static_driver_probe = \"builds static upstream Cargo with the pure-Rust Ristux-offline feature graph\"",
         )
         || !contains(
             &manifest,
@@ -416,7 +416,7 @@ fn check_manifest() -> bool {
         )
         || !contains(
             &manifest,
-            b"cargo_build_execution = \"dependency-free local build, check, and run supported; registry and Git pending\"",
+            b"cargo_build_execution = \"upstream Cargo binary/library build, check, and run supported for editions 2015/2018/2021/2024 with recursive path dependencies, local file Git dependencies through gix, workspaces, and build scripts; network Git, registry HTTPS, and proc macros pending\"",
         )
     {
         return fail(b"manifest");

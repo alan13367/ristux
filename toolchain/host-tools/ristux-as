@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${RISTUX_LLVM_MC:-}" ]; then
+    llvm_mc="$RISTUX_LLVM_MC"
+elif command -v llvm-mc >/dev/null 2>&1; then
+    llvm_mc="$(command -v llvm-mc)"
+elif [ -x /opt/homebrew/opt/llvm/bin/llvm-mc ]; then
+    llvm_mc=/opt/homebrew/opt/llvm/bin/llvm-mc
+else
+    echo "ristux-as: llvm-mc is required for host-side Ristux assembly" >&2
+    exit 127
+fi
+
+exec "$llvm_mc" -triple=x86_64-unknown-linux-gnu -filetype=obj "$@"

@@ -2235,7 +2235,15 @@ impl Vfs {
                 nlink: 1,
                 mtime: crate::time::filesystem_timestamp(),
             }),
-            OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => Err(VfsError::BadFd),
+            OpenHandle::PipeRead { .. } | OpenHandle::PipeWrite { .. } => Ok(Stat {
+                kind: StatKind::Fifo,
+                owner: 0,
+                group: 0,
+                mode: 0o600,
+                size: 0,
+                nlink: 1,
+                mtime: crate::time::filesystem_timestamp(),
+            }),
         }
     }
 
@@ -2901,6 +2909,7 @@ pub enum StatKind {
     Directory,
     Symlink,
     CharDevice,
+    Fifo,
 }
 
 fn stat_kind_from_node(kind: NodeKind) -> StatKind {

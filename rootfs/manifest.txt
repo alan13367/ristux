@@ -11,7 +11,8 @@ file /bin/chmod ../build/userland/chmod.elf
 file /bin/chown ../build/userland/chown.elf
 file /bin/cmp ../build/userland/cmp.elf
 file /bin/cp ../build/userland/cp.elf
-file /bin/cargo ../build/userland/cargo.elf
+file /bin/cargo ../build/official-rust/bin/cargo
+file /bin/tc testdata/toolchain-smoke.sh
 file /bin/cut ../build/userland/cut.elf
 file /bin/cc_cred ../build/userland/cc_cred.elf
 file /bin/cc_cow ../build/userland/cc_cow.elf
@@ -139,6 +140,13 @@ package-tree rust-ristux-overlays 1.96.0 ../toolchain/rust-overlays/rust-1.96.0 
 file /usr/share/testdata/gzip-dynamic.txt.gz ../build/testdata/gzip-dynamic.txt.gz
 file /usr/share/testdata/ristuxpkg-0.1.tar.gz ../build/testdata/ristuxpkg-0.1.tar.gz
 file /usr/share/testdata/ristuxpkg.patch testdata/ristuxpkg.patch
+file /usr/share/testdata/cargo-workspace/Cargo.toml testdata/cargo-workspace/Cargo.toml
+file /usr/share/testdata/cargo-workspace/app/Cargo.toml testdata/cargo-workspace/app/Cargo.toml
+file /usr/share/testdata/cargo-workspace/app/build.rs testdata/cargo-workspace/app/build.rs
+file /usr/share/testdata/cargo-workspace/app/src/main.rs testdata/cargo-workspace/app/src/main.rs
+file /usr/share/testdata/cargo-git-dependency.tar.gz ../build/testdata/cargo-git-dependency.tar.gz
+file /usr/share/testdata/cargo-git-consumer/Cargo.toml testdata/cargo-git-consumer/Cargo.toml
+file /usr/share/testdata/cargo-git-consumer/src/main.rs testdata/cargo-git-consumer/src/main.rs
 package-archive base-files 0.1.0 ../build/packages/base-files.tar.gz /
 package ansi_demo 0.1.0 /bin/ansi_demo
 package ar 0.1.0 /bin/ar

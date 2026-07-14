@@ -127,6 +127,7 @@ unsafe extern "C" {
     pub fn fallocate(fd: c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
     pub fn fdatasync(fd: c_int) -> c_int;
     pub fn fstatfs(fd: c_int, buf: *mut statfs) -> c_int;
+    pub fn flock(fd: c_int, operation: c_int) -> c_int;
     pub fn mknodat(dirfd: c_int, pathname: *const c_char, mode: crate::mode_t, dev: crate::dev_t) -> c_int;
     pub fn posix_fadvise(fd: c_int, offset: off_t, len: off_t, advise: c_int) -> c_int;
     pub fn posix_fallocate(fd: c_int, offset: off_t, len: off_t) -> c_int;
